@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { parseBlocks, inlineText } from "./utils/markdown";
+import { useEditor, EditorContent } from "@tiptap/react";
+import StarterKit from "@tiptap/starter-kit";
+import { Markdown } from "@tiptap/markdown";
 
 interface Entry {
   name: string;
@@ -14,6 +16,13 @@ interface TreeNode {
   path: string;
   kind: string;
   children: TreeNode[];
+}
+
+interface CtxMenu {
+  x: number;
+  y: number;
+  path: string;
+  kind: string;
 }
 
 function buildTree(entries: Entry[], vault: string): TreeNode[] {
@@ -42,55 +51,66 @@ function buildTree(entries: Entry[], vault: string): TreeNode[] {
   return roots;
 }
 
-interface TreeNodeViewProps {
-  node: TreeNode;
-  depth: number;
-  selectedPath: string;
-  onSelect: (p: string) => void;
-}
-
-function TreeNodeView({ node, depth, selectedPath, onSelect }: TreeNodeViewProps) {
-  const isFolder = node.kind === "folder";
-  const isSelected = node.path === selectedPath;
-  const indent = "  ".repeat(depth);
-  return (
-    <>
-      <div
-        className={isSelected ? "comet-tree-item comet-tree-selected" : "comet-tree-item"}
-        onClick={() => onSelect(node.path)}
-        style={{ paddingLeft: `${depth * 14 + 6}px` }}
-      >
-        <span className="comet-tree-glyph">{isFolder ? "+" : " "}</span>
-        {indent}
-        {node.name}
-      </div>
-      {isFolder &&
-        node.children.map((child) => (
-          <TreeNodeView
-            key={child.path}
-            node={child}
-            depth={depth + 1}
-            selectedPath={selectedPath}
-            onSelect={onSelect}
-          />
-        ))}
-    </>
-  );
-}
 function App() {
   const [vaultPath, setVaultPath] = useState("");
   const [entries, setEntries] = useState<Entry[]>([]);
   const [selectedPath, setSelectedPath] = useState("");
-  const [content, setContent] = useState("");
-  const [preview, setPreview] = useState(false);
-  const [status, setStatus] = useState("ready");
-
-  const tree = useMemo(() => buildTree(entries, vaultPath), [entries, vaultPath]);
-  const blocks = useMemo(() => parseBlocks(content), [content]);
-  const selectedBlocks = useMemo(() => blocks.filter((b) => b.kind !== "blank"), [blocks]);
-
+  const [explorerOpen, setExplorerOpen] = useState(true);
+  const [captureOpen, setCaptureOpen] = useState(false);
+  const [captureType, setCaptureType] = useState<"text" | "link" | "image">("text");
+  const [captureText, setCaptureText] = useState("");
+  const [captureStatus, setCaptureStatus] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<{ path: string; name: string; snippet: string }[]>([]);
+  const [ctx, setCtx] = useState<CtxMenu | null>(null);
+  const [status, setStatus] = useState("ready");
+
+  const loadingRef = useRef(false);
+  const saveTimer = useRef<number | null>(null);
+
+  const tree = useMemo(() => buildTree(entries, vaultPath), [entries, vaultPath]);
+  const selectedName = selectedPath ? selectedPath.split(/[\\/]+/).pop() ?? "" : "";
+
+  const editor = useEditor({
+    extensions: [StarterKit, Markdown],
+    content: "",
+    contentType: "markdown",
+    editorProps: {
+      attributes: {
+        class: "comet-editor-prose",
+        spellcheck: "false",
+      },
+    },
+    onUpdate: ({ editor }) => {
+      if (loadingRef.current) return;
+      const md = (editor.storage as { markdown?: { getMarkdown?: () => string } }).markdown?.getMarkdown?.() ?? "";
+      if (saveTimer.current) window.clearTimeout(saveTimer.current);
+      saveTimer.current = window.setTimeout(() => {
+        if (selectedPath) void invoke("write_note", { path: selectedPath, content: md });
+      }, 300);
+    },
+  });
+
+  const refresh = useCallback(async (vault: string) => {
+    const e = await invoke<Entry[]>("list_vault", { path: vault });
+    setEntries(e);
+  }, []);
+
+  useEffect(() => {
+    if (vaultPath) void refresh(vaultPath);
+  }, [vaultPath, refresh]);
+
+  useEffect(() => {
+    if (!selectedPath || !editor) return;
+    loadingRef.current = true;
+    invoke<string>("read_note", { path: selectedPath }).then((c) => {
+      editor.commands.setContent(c, { contentType: "markdown" });
+      // allow update handler after load settles
+      requestAnimationFrame(() => {
+        loadingRef.current = false;
+      });
+    });
+  }, [selectedPath, editor]);
 
   useEffect(() => {
     if (!vaultPath || !searchQuery.trim()) {
@@ -112,50 +132,6 @@ function App() {
     };
   }, [vaultPath, searchQuery]);
 
-  const selectedName = selectedPath ? selectedPath.split(/[\\/]+/).pop() ?? "" : "";
-
-  const refresh = useCallback(async (vault: string) => {
-    const e = await invoke<Entry[]>("list_vault", { path: vault });
-    setEntries(e);
-  }, []);
-
-  useEffect(() => {
-    if (vaultPath) void refresh(vaultPath);
-  }, [vaultPath, refresh]);
-
-  useEffect(() => {
-    if (!selectedPath) {
-      setContent("");
-      return;
-    }
-    let live = true;
-    invoke<string>("read_note", { path: selectedPath }).then((c) => {
-      if (live) setContent(c);
-    });
-    return () => {
-      live = false;
-    };
-  }, [selectedPath]);
-
-  useEffect(() => {
-    if (!selectedPath) return;
-    void invoke("write_note", { path: selectedPath, content });
-  }, [content, selectedPath]);
-
-  const openVault = async () => {
-    const p = await open({ directory: true });
-    if (p) {
-      setVaultPath(p);
-      setSelectedPath(p);
-      setStatus(`vault: ${p}`);
-    }
-  };
-
-  const [captureOpen, setCaptureOpen] = useState(false);
-  const [captureType, setCaptureType] = useState<"text" | "link" | "image">("text");
-  const [captureText, setCaptureText] = useState("");
-  const [captureStatus, setCaptureStatus] = useState("");
-
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
@@ -163,19 +139,28 @@ function App() {
         openCapture();
         return;
       }
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "p") {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "b") {
         e.preventDefault();
-        setPreview((p) => !p);
+        setExplorerOpen((o) => !o);
         return;
       }
-      if (e.key === "Escape" && captureOpen) {
-        closeCapture();
+      if (e.key === "Escape") {
+        if (captureOpen) closeCapture();
+        if (ctx) setCtx(null);
         return;
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [captureOpen]);
+  }, [captureOpen, ctx]);
+
+  const openVault = async () => {
+    const p = await open({ directory: true });
+    if (p) {
+      setVaultPath(p);
+      setStatus(`vault: ${p}`);
+    }
+  };
 
   const openCapture = () => {
     setCaptureText("");
@@ -195,9 +180,6 @@ function App() {
     const path = `${folder}/${stamp}.md`;
     let body = captureText.trim();
     if (captureType === "link") body = `[link](${body})`;
-    if (captureType === "image") {
-      // image path is already embedded in captureText by pickImage
-    }
     await invoke("create_note", { path, content: body });
     await refresh(vaultPath);
     setCaptureStatus("saved");
@@ -215,11 +197,26 @@ function App() {
     setCaptureType("image");
   };
 
+  const newNote = async (folder: string) => {
+    const name = window.prompt("note name", "untitled.md");
+    if (!name) return;
+    const path = `${folder.replace(/[\\/]+$/, "")}/${name.endsWith(".md") ? name : name + ".md"}`;
+    await invoke("create_note", { path, content: "" });
+    await refresh(vaultPath);
+    setSelectedPath(path);
+  };
+
+  const newFolder = async (folder: string) => {
+    const name = window.prompt("folder name", "new folder");
+    if (!name) return;
+    await invoke("create_dir", { path: `${folder.replace(/[\\/]+$/, "")}/${name}` });
+    await refresh(vaultPath);
+  };
+
   return (
-    <div className="comet-root">
+    <div className="comet-root" onClick={() => setCtx(null)}>
       <header className="comet-topbar">
         <div className="comet-brand">[ * ] COMET</div>
-        <div className="comet-vault">{vaultPath || "no vault"}</div>
         <input
           className="comet-search"
           value={searchQuery}
@@ -227,106 +224,97 @@ function App() {
           placeholder="search notes..."
           spellCheck={false}
         />
+        <div className="comet-vault">{vaultPath || "no vault"}</div>
         <div className="comet-actions">
           <button className="comet-btn" onClick={() => void openVault()}>[ open vault ]</button>
           <button className="comet-btn" onClick={openCapture}>[ capture ]</button>
-          <button className="comet-btn" disabled={!selectedPath} onClick={() => setPreview((p) => !p)}>
-            [ preview ]
-          </button>
+          <button className="comet-btn" onClick={() => setExplorerOpen((o) => !o)}>[ explorer ]</button>
         </div>
       </header>
       <div className="comet-main">
-        <aside className="comet-pane comet-explorer">
-          <div className="comet-pane-title">explorer</div>
-          <div className="comet-tree">
-            {tree.length === 0 && <div className="comet-empty">empty vault</div>}
-            {tree.map((node) => (
-              <TreeNodeView
-                key={node.path}
-                node={node}
-                depth={0}
-                selectedPath={selectedPath}
-                onSelect={setSelectedPath}
-              />
-            ))}
-            {searchResults.length > 0 && (
-              <div className="comet-search-results">
-                <div className="comet-pane-title">results</div>
-                {searchResults.map((r) => (
-                  <div
-                    key={r.path}
-                    className="comet-search-hit"
-                    onClick={() => {
-                      setSelectedPath(r.path);
-                      setSearchQuery("");
-                    }}
-                  >
-                    <div className="comet-search-name">{r.name}</div>
-                    <div className="comet-search-snippet">{r.snippet}</div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </aside>
-        <section className="comet-pane comet-editor">
-          <div className="comet-pane-title">{selectedName || "untitled.md"}</div>
-          {selectedName.endsWith(".md") ? (
-            <textarea
-              className="comet-editor-area"
-              value={content}
-              onChange={(e) => setContent(e.target.value)}
-              placeholder={"# heading\n\n- [ ] task\n\n> quote\n"}
-              spellCheck={false}
-            />
-          ) : (
-            <div className="comet-preview-note">not a markdown note</div>
-          )}
-        </section>
-        {preview && (
-          <section className="comet-pane comet-preview">
-            <div className="comet-pane-title">preview</div>
-            <div className="comet-preview-body">
-              {selectedBlocks.map((block, i) => {
-                if (block.kind === "h") {
-                  const level = block.level === 1 ? "comet-h1" : block.level === 2 ? "comet-h2" : "comet-h3";
-                  const text = inlineText(block.inlines);
-                  return <div key={i} className={level}>{text}</div>;
-                }
-                if (block.kind === "p") {
-                  return (
-                    <div key={i}>
-                      {block.inlines.map((x, j) =>
-                        x.kind === "br" ? <br key={j} /> : x.kind === "text" ? <span key={j}>{x.text}</span> : <strong key={j}>{x.text}</strong>
-                      )}
+        {explorerOpen && (
+          <aside className="comet-pane comet-explorer">
+            <div className="comet-pane-title">explorer</div>
+            <div className="comet-tree">
+              {tree.length === 0 && <div className="comet-empty">empty vault</div>}
+              {tree.map((node) => (
+                <TreeNodeView
+                  key={node.path}
+                  node={node}
+                  depth={0}
+                  selectedPath={selectedPath}
+                  onSelect={setSelectedPath}
+                  onContext={(e, n) => {
+                    e.preventDefault();
+                    setCtx({ x: e.clientX, y: e.clientY, path: n.path, kind: n.kind });
+                  }}
+                />
+              ))}
+              {searchResults.length > 0 && (
+                <div className="comet-search-results">
+                  <div className="comet-pane-title">results</div>
+                  {searchResults.map((r) => (
+                    <div
+                      key={r.path}
+                      className="comet-search-hit"
+                      onClick={() => {
+                        setSelectedPath(r.path);
+                        setSearchQuery("");
+                      }}
+                    >
+                      <div className="comet-search-name">{r.name}</div>
+                      <div className="comet-search-snippet">{r.snippet}</div>
                     </div>
-                  );
-                }
-                if (block.kind === "ul") {
-                  return (
-                    <div key={i}>
-                      {block.items.map((item, j) => (
-                        <div key={j}>
-                          {item.box ? (item.done ? "[x] " : "[ ] ") : "- "}
-                          {item.inlines.map((x, k) => (x.kind === "br" ? <br key={k} /> : x.kind === "text" ? <span key={k}>{x.text}</span> : <strong key={k}>{x.text}</strong>))}
-                        </div>
-                      ))}
-                    </div>
-                  );
-                }
-                if (block.kind === "code") {
-                  return <pre key={i} className="comet-code">{block.text}</pre>;
-                }
-                return <div key={i} className="comet-padding" />;
-              })}
+                  ))}
+                </div>
+              )}
             </div>
-          </section>
+          </aside>
         )}
+        <section className="comet-pane comet-editor">
+          <div className="comet-pane-title">{selectedName || "untitled"}</div>
+          <div className="comet-editor-area">
+            <EditorContent editor={editor} />
+          </div>
+        </section>
       </div>
       <footer className="comet-statusbar">
         <span>{status}</span>
         <span>{selectedPath ? selectedPath : "no note open"}</span>
       </footer>
+      {ctx && (
+        <div className="comet-ctx" style={{ left: ctx.x, top: ctx.y }}>
+          <div
+            className="comet-ctx-item"
+            onClick={() => {
+              const base = ctx.kind === "folder" ? ctx.path : ctx.path.replace(/[\\/]+[^\\/]+$/, "");
+              void newNote(base || vaultPath);
+              setCtx(null);
+            }}
+          >
+            new note
+          </div>
+          <div
+            className="comet-ctx-item"
+            onClick={() => {
+              const base = ctx.kind === "folder" ? ctx.path : ctx.path.replace(/[\\/]+[^\\/]+$/, "");
+              void newFolder(base || vaultPath);
+              setCtx(null);
+            }}
+          >
+            new folder
+          </div>
+          <div
+            className="comet-ctx-item"
+            onClick={() => {
+              setCaptureOpen(true);
+              setCtx(null);
+            }}
+          >
+            capture
+          </div>
+        </div>
+      )}
       {captureOpen && (
         <div className="comet-modal-backdrop" onClick={closeCapture}>
           <div className="comet-modal" onClick={(e) => e.stopPropagation()}>
@@ -352,9 +340,7 @@ function App() {
               className="comet-modal-area"
               value={captureText}
               onChange={(e) => setCaptureText(e.target.value)}
-              placeholder={
-                captureType === "link" ? "https://..." : "write something worth keeping"
-              }
+              placeholder={captureType === "link" ? "https://..." : "write something worth keeping"}
               spellCheck={false}
             />
             <div className="comet-modal-row">
@@ -370,6 +356,43 @@ function App() {
         </div>
       )}
     </div>
+  );
+}
+
+interface TreeNodeViewProps {
+  node: TreeNode;
+  depth: number;
+  selectedPath: string;
+  onSelect: (p: string) => void;
+  onContext: (e: React.MouseEvent, n: TreeNode) => void;
+}
+
+function TreeNodeView({ node, depth, selectedPath, onSelect, onContext }: TreeNodeViewProps) {
+  const isFolder = node.kind === "folder";
+  const isSelected = node.path === selectedPath;
+  return (
+    <>
+      <div
+        className={isSelected ? "comet-tree-item comet-tree-selected" : "comet-tree-item"}
+        style={{ paddingLeft: `${depth * 14 + 6}px` }}
+        onClick={() => onSelect(node.path)}
+        onContextMenu={(e) => onContext(e, node)}
+      >
+        <span className="comet-tree-glyph">{isFolder ? "+" : " "}</span>
+        {node.name}
+      </div>
+      {isFolder &&
+        node.children.map((child) => (
+          <TreeNodeView
+            key={child.path}
+            node={child}
+            depth={depth + 1}
+            selectedPath={selectedPath}
+            onSelect={onSelect}
+            onContext={onContext}
+          />
+        ))}
+    </>
   );
 }
 

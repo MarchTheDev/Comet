@@ -321,6 +321,99 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.comet-ctx {
+  position: fixed;
+  z-index: 60;
+  background-color: #0d0b14;
+  border: 1px solid #26232e;
+  min-width: 140px;
+}
+
+.comet-ctx-item {
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.comet-ctx-item:hover {
+  background-color: #16131f;
+  color: #b9a07e;
+}
+
+.comet-editor-prose {
+  flex: 1;
+  outline: none;
+  padding: 16px 20px;
+  font-family: var(--font-mono);
+  font-size: 15px;
+  line-height: 1.7;
+  color: #e6e6e6;
+  overflow: auto;
+}
+
+.comet-editor-prose h1 {
+  font-size: 24px;
+  color: #b9a07e;
+  margin: 12px 0 6px;
+}
+
+.comet-editor-prose h2 {
+  font-size: 20px;
+  color: #b9a07e;
+  margin: 12px 0 6px;
+}
+
+.comet-editor-prose h3 {
+  font-size: 16px;
+  color: #b9a07e;
+  margin: 10px 0 4px;
+}
+
+.comet-editor-prose p {
+  margin: 6px 0;
+}
+
+.comet-editor-prose code {
+  background-color: #12101a;
+  border: 1px solid #26232e;
+  padding: 1px 4px;
+  font-size: 13px;
+}
+
+.comet-editor-prose pre {
+  background-color: #12101a;
+  border: 1px solid #26232e;
+  padding: 10px;
+  overflow: auto;
+}
+
+.comet-editor-prose blockquote {
+  border-left: 2px solid #b9a07e;
+  padding-left: 12px;
+  color: #8b8577;
+  margin: 8px 0;
+}
+
+.comet-editor-prose ul,
+.comet-editor-prose ol {
+  padding-left: 20px;
+  margin: 6px 0;
+}
+
+.comet-editor-prose li {
+  margin: 2px 0;
+}
+
+.comet-editor-prose a {
+  color: #b9a07e;
+  text-decoration: underline;
+}
+
+.comet-editor-prose hr {
+  border: none;
+  border-top: 1px solid #26232e;
+  margin: 12px 0;
+}
 .comet-statusbar {
   display: flex;
   justify-content: space-between;

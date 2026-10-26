@@ -87,7 +87,26 @@ function App() {
 
   const tree = useMemo(() => buildTree(entries, vaultPath), [entries, vaultPath]);
   const blocks = useMemo(() => parseBlocks(content), [content]);
-  const selectedBlocks = useMemo(() => blocks.filter((b) => b.kind !== "blank"), [blocks]);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        openCapture();
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "p") {
+        e.preventDefault();
+        setPreview((p) => !p);
+        return;
+      }
+      if (e.key === "Escape" && captureOpen) {
+        closeCapture();
+        return;
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [captureOpen]);
   const selectedName = selectedPath ? selectedPath.split(/[\\/]+/).pop() ?? "" : "";
 
   const refresh = useCallback(async (vault: string) => {

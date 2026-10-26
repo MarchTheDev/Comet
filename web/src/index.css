@@ -22,6 +22,25 @@ body {
   flex-direction: column;
   height: 100%;
   background-color: #0b0a16;
+  background-image: url("/matterhorn.jpg");
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  position: relative;
+}
+
+.comet-root::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-color: rgba(11, 10, 22, 0.86);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.comet-root > * {
+  position: relative;
+  z-index: 1;
 }
 
 .comet-topbar {

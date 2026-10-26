@@ -44,6 +44,27 @@ export function isMarkdown(path: string): boolean {
   return /\.md$/i.test(path);
 }
 
+/** A friendly label while the actual filename remains unchanged on disk. */
+export function noteTitle(name: string): string {
+  return name.replace(/\.md$/i, "");
+}
+
+export function isPathInside(path: string, parent: string): boolean {
+  if (!path || !parent) return false;
+  const normalized = normalizePath(path);
+  const root = normalizePath(parent);
+  if (normalized.split("/").includes("..") || root.split("/").includes("..")) return false;
+  return normalized === root || normalized.startsWith(`${root}/`);
+}
+
+/** Update an open note's path when its containing folder is renamed. */
+export function remapPath(path: string, from: string, to: string): string {
+  if (!isPathInside(path, from)) return path;
+  const suffix = normalizePath(path).slice(normalizePath(from).length);
+  const next = `${normalizePath(to)}${suffix}`;
+  return path.includes("\\") && !path.includes("/") ? next.replace(/\//g, "\\") : next;
+}
+
 /** Resolve a relative Markdown image without allowing it to escape the vault. */
 export function resolveVaultAsset(vault: string, notePath: string, source: string): string | null {
   const root = normalizePath(vault);
@@ -102,7 +123,7 @@ export function buildTree(entries: Entry[], vault: string): TreeNode[] {
   return roots;
 }
 
-export function validEntryName(value: string, kind: "note" | "folder"): { name: string; error: string } {
+export function validEntryName(value: string, kind: "note" | "folder" | "file"): { name: string; error: string } {
   const name = value.trim();
   if (!name) return { name: "", error: `Enter a ${kind} name.` };
   if (name === "." || name === ".." || /[\\/:*?"<>|\u0000-\u001f]/.test(name)) {

@@ -1,9 +1,9 @@
-import { fileName, joinPath, parentPath, type Entry, type SearchHit } from "./vault";
+import { fileName, isPathInside, joinPath, parentPath, remapPath, type Entry, type SearchHit } from "./vault";
 
 // A deliberately separate, clearly labelled workspace for trying the interface.
 // Real vaults always use the Tauri filesystem commands instead.
 export const SAMPLE_ROOT = "comet-sample://vault";
-export const SAMPLE_WELCOME = joinPath(joinPath(SAMPLE_ROOT, "00 - Start here"), "Welcome.md");
+export const SAMPLE_WELCOME = joinPath(joinPath(SAMPLE_ROOT, "Getting started"), "Welcome.md");
 const STORAGE_KEY = "comet:sample-vault:v1";
 
 interface SampleData {
@@ -14,9 +14,9 @@ interface SampleData {
 type SampleStorage = Pick<Storage, "getItem" | "setItem">;
 
 function initialData(): SampleData {
-  const start = joinPath(SAMPLE_ROOT, "00 - Start here");
-  const notes = joinPath(SAMPLE_ROOT, "01 - Notes");
-  const projects = joinPath(SAMPLE_ROOT, "02 - Projects");
+  const start = joinPath(SAMPLE_ROOT, "Getting started");
+  const notes = joinPath(SAMPLE_ROOT, "Notes");
+  const projects = joinPath(SAMPLE_ROOT, "Projects");
   const inbox = joinPath(SAMPLE_ROOT, "Inbox");
   return {
     folders: [start, notes, projects, inbox],
@@ -29,7 +29,7 @@ Your thoughts deserve a place to land. Comet is a quiet corner for your notes, i
 
 - **Capture the moment.** Save a thought before it floats away.
 - **Find your flow.** Organize ideas in folders that make sense to you.
-- **Keep it yours.** Your notes are plain Markdown files, stored locally.
+- **Keep it yours.** In the desktop app, your notes are plain Markdown files on your device. This sample is saved in your browser.
 
 > Less noise. More room to think.
 
@@ -47,7 +47,7 @@ Comet keeps your notes as plain text. Use the toolbar, or type Markdown as you g
 - Start a line with - to make a list.
 - Use > to make a quote.
 
-Switch to SOURCE to see the Markdown behind any note.`,
+Select Markdown above a note to see and edit its plain-text source.`,
       [joinPath(notes, "Small thoughts.md")]: `# Small thoughts
 
 A place for the things that don't need to be big to be worth keeping.
@@ -87,7 +87,6 @@ export function createSampleVault(storage?: SampleStorage) {
         Array.isArray(parsed.folders) &&
         parsed.folders.every((folder) => typeof folder === "string" && folder.startsWith(`${SAMPLE_ROOT}/`)) &&
         parsed.files && typeof parsed.files === "object" && !Array.isArray(parsed.files) &&
-        typeof parsed.files[SAMPLE_WELCOME] === "string" &&
         Object.entries(parsed.files).every(([path, content]) => path.startsWith(`${SAMPLE_ROOT}/`) && typeof content === "string")
       ) {
         data = parsed;
@@ -148,6 +147,39 @@ export function createSampleVault(storage?: SampleStorage) {
       }
       ensureParents(path);
       data.folders.push(path);
+      save();
+    },
+    rename: (path: string, destination: string) => {
+      if (path === SAMPLE_ROOT || !isPathInside(path, SAMPLE_ROOT) || parentPath(path) !== parentPath(destination)) {
+        throw new Error("Choose a name in the same folder.");
+      }
+      if (path === destination) return;
+      const folder = data.folders.includes(path);
+      const file = Object.prototype.hasOwnProperty.call(data.files, path);
+      if (!folder && !file) throw new Error("This item could not be found.");
+      if (data.folders.includes(destination) || Object.prototype.hasOwnProperty.call(data.files, destination)) {
+        throw new Error("An item with that name already exists.");
+      }
+      if (folder) {
+        data.folders = data.folders.map((item) => remapPath(item, path, destination));
+        data.files = Object.fromEntries(Object.entries(data.files).map(([item, content]) => [remapPath(item, path, destination), content]));
+      } else {
+        data.files[destination] = data.files[path];
+        delete data.files[path];
+      }
+      save();
+    },
+    remove: (path: string) => {
+      if (path === SAMPLE_ROOT || !isPathInside(path, SAMPLE_ROOT)) throw new Error("The workspace itself cannot be deleted.");
+      const folder = data.folders.includes(path);
+      const file = Object.prototype.hasOwnProperty.call(data.files, path);
+      if (!folder && !file) throw new Error("This item could not be found.");
+      if (folder) {
+        data.folders = data.folders.filter((item) => !isPathInside(item, path));
+        data.files = Object.fromEntries(Object.entries(data.files).filter(([item]) => !isPathInside(item, path)));
+      } else {
+        delete data.files[path];
+      }
       save();
     },
     search: (query: string): SearchHit[] => {

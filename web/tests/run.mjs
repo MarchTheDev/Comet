@@ -16,6 +16,8 @@ mkdirSync(dir, { recursive: true });
 const checks = [
   'tests/markdown.test.mjs',
   'tests/vault.test.mjs',
+  'tests/session.test.mjs',
+  'tests/editor.test.mjs',
   'tests/saveQueue.test.mjs',
 ];
 try {

@@ -1,15 +1,12 @@
-# Comet Icon
+# Comet icon
 
-The Comet app icon. A comet over a mountain silhouette, in the ASCII luxury
-palette: black background, bronze accent, off white highlight.
-
-Files:
-- `comet.svg` - vector source (edit this).
-- Generated raster sizes live in `web/src-tauri/icons/` (produced by
-  `npm run tauri icon assets/icon/comet.svg`).
+The blue spark icon matches the Comet interface. `comet.svg` is the editable
+vector source, and `web/public/comet.svg` is its browser favicon copy. Generated
+desktop icon sizes live in `web/src-tauri/icons/`.
 
 To regenerate the Tauri icon set after editing the SVG:
 
 ```sh
-npm run tauri icon assets/icon/comet.svg
+cd web
+npm run tauri icon ../assets/icon/comet.svg
 ```

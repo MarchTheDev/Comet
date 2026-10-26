@@ -10,11 +10,6 @@ It is built the way a note taking app should be built: the vault is the file
 system, the editor is a text file, and the preview is a rendering of the same
 text. There is no database, no sync engine, no account.
 
-## Status
-
-Early. The first milestone is a working vault: open a folder, see the notes in
-it, write one, preview it.
-
 ## Features
 
 - **Local vault.** Pick a folder. Comet reads and writes Markdown files

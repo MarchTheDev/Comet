@@ -1,9 +1,18 @@
 <!doctype html>
-<html lang="en" style="color-scheme: light">
+<html lang="en" data-theme="dark" style="color-scheme: dark">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#f5f7f8" />
+    <meta name="theme-color" content="#11171d" />
+    <script>
+      // Apply the remembered appearance before React paints; dark is the default.
+      try {
+        const theme = JSON.parse(localStorage.getItem("comet:settings:v1") || "{}").theme;
+        const resolved = theme === "light" || (theme === "system" && !matchMedia("(prefers-color-scheme: dark)").matches) ? "light" : "dark";
+        document.documentElement.dataset.theme = resolved;
+        document.documentElement.style.colorScheme = resolved;
+      } catch {}
+    </script>
     <title>Comet - A space to think</title>
     <link rel="icon" type="image/svg+xml" href="/comet.svg" />
     <style>
@@ -11,6 +20,10 @@
       body {
         margin: 0;
         height: 100%;
+        background: #10161c;
+      }
+      html[data-theme="light"],
+      html[data-theme="light"] body {
         background: #f5f7f8;
       }
     </style>

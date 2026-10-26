@@ -112,6 +112,7 @@ export function createSampleVault(storage?: SampleStorage) {
     const missing: string[] = [];
     let parent = parentPath(path);
     while (parent.startsWith(`${SAMPLE_ROOT}/`) && !data.folders.includes(parent)) {
+      if (Object.prototype.hasOwnProperty.call(data.files, parent)) throw new Error("A parent is a file, not a folder.");
       missing.push(parent);
       parent = parentPath(parent);
     }
@@ -134,6 +135,7 @@ export function createSampleVault(storage?: SampleStorage) {
       save();
     },
     createNote: (path: string, content: string) => {
+      if (path === SAMPLE_ROOT || !isPathInside(path, SAMPLE_ROOT)) throw new Error("Choose a path inside the workspace.");
       if (Object.prototype.hasOwnProperty.call(data.files, path) || data.folders.includes(path)) {
         throw new Error("An item with that name already exists.");
       }
@@ -142,6 +144,7 @@ export function createSampleVault(storage?: SampleStorage) {
       save();
     },
     createFolder: (path: string) => {
+      if (path === SAMPLE_ROOT || !isPathInside(path, SAMPLE_ROOT)) throw new Error("Choose a path inside the workspace.");
       if (Object.prototype.hasOwnProperty.call(data.files, path) || data.folders.includes(path)) {
         throw new Error("An item with that name already exists.");
       }

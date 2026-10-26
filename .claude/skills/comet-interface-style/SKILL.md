@@ -6,16 +6,16 @@ description: "Design and accessibility guidance for the Comet local-first note a
 # Comet Interface Style
 
 Comet should feel calm, modern, and easy to understand. Put the user's notes and
-folders first, with a light, spacious interface and a prominent but unobtrusive
-photograph of the Matterhorn.
+folders first, with a spacious, dark-by-default interface, an optional light
+appearance, and a prominent but unobtrusive photograph of the Matterhorn.
 
 ## Design principles
 
 - Use the bundled Manrope typeface for interface and note text. Keep source code
   and Markdown source comfortably monospaced.
-- Use the existing soft blue, slate, and white palette, subtle borders, rounded
-  surfaces, and generous whitespace. Keep the mountain photograph static and
-  preserve readable contrast over it.
+- Use the existing slate and soft blue palette, subtle borders, rounded
+  surfaces, and generous whitespace in both themes. Keep the mountain photograph
+  static and preserve readable contrast over it; respect the cover preference.
 - Prefer clear labels and familiar Lucide icons. Icon-only controls need an
   accessible name, a tooltip, and a visible keyboard focus state.
 - Make primary actions obvious. Keep everyday actions such as new note, search,
@@ -34,11 +34,12 @@ photograph of the Matterhorn.
 - Clearly confirm permanent deletion, including folder contents. Do not imply
   that an item goes to the trash if it does not.
 - Keep relative Markdown links portable and prevent filesystem operations from
-  escaping the workspace.
+  escaping the workspace. The editable path bar uses `Comet` as a workspace
+  alias, accepts either separator, and confirms creation of missing notes/folders.
 
 ## Before shipping
 
 - Check desktop and mobile layouts, keyboard focus, and screen-reader labels.
 - Verify the editor, search, create, rename, delete, quick capture, and failed-save
   flows in both the sample and desktop bridge when relevant.
-- Keep the Matterhorn visible without compromising the editor's readability.
+- Keep the Matterhorn visible by default without compromising the editor's readability.

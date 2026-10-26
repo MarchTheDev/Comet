@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type MouseEvent } from "react";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -10,7 +10,7 @@ import {
   FolderOpen, FolderPlus, Image as ImageIcon, Inbox, Italic, Link2, List,
   ListChecks, LoaderCircle, LockKeyhole, MapPin, Maximize2, Minimize2,
   MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pencil, Plus, Quote, Redo2,
-  Search, Sparkles, Trash2, Undo2, X, type LucideIcon,
+  Search, Settings2, Sparkles, Trash2, Undo2, X, type LucideIcon,
 } from "lucide-react";
 import type { EditorProps } from "@tiptap/pm/view";
 import Image from "@tiptap/extension-image";
@@ -18,7 +18,10 @@ import { TaskItem, TaskList } from "@tiptap/extension-list";
 import StarterKit from "@tiptap/starter-kit";
 import { Markdown } from "@tiptap/markdown";
 import { APP_VERSION } from "virtual:comet-version";
+import { SettingsPage } from "./SettingsPage";
 import { countWords } from "./utils/markdown";
+import { displayWorkspacePath, planWorkspacePath, type PathPlan } from "./utils/pathNavigation";
+import { readSettings, saveSettings, type Settings } from "./utils/settings";
 import { loadMarkdownNote } from "./utils/editor";
 import { SAMPLE_ROOT, SAMPLE_WELCOME, sampleVault } from "./utils/sampleVault";
 import { SaveQueue, type SaveState } from "./utils/saveQueue";
@@ -29,6 +32,7 @@ import {
   isMarkdown,
   isPathInside,
   joinPath,
+  normalizePath,
   noteTitle,
   parentPath,
   relativePath,
@@ -54,9 +58,10 @@ import {
 } from "./utils/vaultBridge";
 
 type ViewMode = "write" | "source" | "read";
-type WorkspaceView = "note" | "all" | "inbox";
+type WorkspaceView = "note" | "all" | "inbox" | "folder" | "settings";
 type CaptureType = "text" | "link" | "image";
 type CreateDialog = { kind: "note" | "folder"; folder: string };
+type PathCreateDialog = Extract<PathPlan, { kind: "create" }> & { vault: string };
 type ContextMenu = { x: number; y: number; node: TreeNode };
 
 function initialSample() {
@@ -73,14 +78,20 @@ function errorMessage(error: unknown): string {
 }
 
 function App() {
+  const [settings, setSettings] = useState(readSettings);
+  const [settingsPersisted, setSettingsPersisted] = useState(true);
   const [sampleStart] = useState(initialSample);
-  const [lastSession] = useState(() => desktopAvailable ? readSession() : null);
+  const [lastSession] = useState(() => desktopAvailable && settings.reopenWorkspace ? readSession() : null);
   const [restoring, setRestoring] = useState(Boolean(lastSession));
   const [vaultPath, setVaultPath] = useState(SAMPLE_ROOT);
   const [entries, setEntries] = useState<Entry[]>(sampleStart.entries);
   const [selectedPath, setSelectedPath] = useState(sampleStart.path);
   const [content, setContent] = useState(sampleStart.content);
   const [workspaceView, setWorkspaceView] = useState<WorkspaceView>(sampleStart.path ? "note" : "all");
+  const [folderPath, setFolderPath] = useState("");
+  const [pathDraft, setPathDraft] = useState("");
+  const [pathEditing, setPathEditing] = useState(false);
+  const [pathCreateDialog, setPathCreateDialog] = useState<PathCreateDialog | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>("write");
   const [focusMode, setFocusMode] = useState(false);
   const [saveState, setSaveState] = useState<SaveState>("saved");
@@ -110,6 +121,8 @@ function App() {
   const [contextMenu, setContextMenu] = useState<ContextMenu | null>(null);
   const [notice, setNotice] = useState("");
 
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
   const selectedRef = useRef(selectedPath);
   const vaultRef = useRef(vaultPath);
   const contentRef = useRef(content);
@@ -117,8 +130,11 @@ function App() {
   const modeRef = useRef(viewMode);
   const loadingRef = useRef(false);
   const searchRef = useRef<HTMLInputElement>(null);
+  const pathInputRef = useRef<HTMLInputElement>(null);
   const sourceRef = useRef<HTMLTextAreaElement>(null);
+  const workspaceScrollRef = useRef<HTMLDivElement>(null);
   const previousExplorerOpen = useRef(explorerOpen);
+  const previousWorkspaceView = useRef<WorkspaceView>(workspaceView);
   const saveQueue = useRef<SaveQueue | null>(null);
   if (!saveQueue.current) {
     saveQueue.current = new SaveQueue((path, value) => writeNote(vaultRef.current, path, value), setSaveState, () => setNotice("Couldn't save this note. Your changes are still here; use Retry to try again."));
@@ -137,6 +153,45 @@ function App() {
   const vaultName = isSample ? "Sample workspace" : fileName(vaultPath);
   const selectedName = selectedPath ? fileName(selectedPath) : "";
   const modifier = typeof navigator !== "undefined" && /Mac|iPhone|iPad/i.test(navigator.userAgent) ? "⌘" : "Ctrl";
+  const inboxPath = joinPath(vaultPath, "Inbox");
+  const currentLocation = workspaceView === "note" ? selectedPath : workspaceView === "folder" ? folderPath : workspaceView === "inbox" && entries.some((entry) => entry.path === inboxPath && entry.kind === "folder") ? inboxPath : vaultPath;
+  const displayedPath = displayWorkspacePath(currentLocation, vaultPath);
+  const pathPlan = useMemo(() => planWorkspacePath(pathDraft, vaultPath, entries), [pathDraft, vaultPath, entries]);
+  const folderEntries = useMemo(() => entries.filter((entry) => parentPath(entry.path) === folderPath)
+    .sort((a, b) => a.kind === b.kind ? a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }) : a.kind === "folder" ? -1 : 1), [entries, folderPath]);
+  const folderParent = parentPath(folderPath);
+  const folderParentIsRoot = normalizePath(folderParent) === normalizePath(vaultPath);
+
+  useEffect(() => {
+    if (workspaceScrollRef.current) workspaceScrollRef.current.scrollTop = 0;
+  }, [workspaceView, selectedPath, folderPath, vaultPath]);
+
+  useEffect(() => {
+    setSettingsPersisted(saveSettings(settings));
+  }, [settings]);
+
+  useEffect(() => {
+    const media = window.matchMedia?.("(prefers-color-scheme: dark)");
+    const applyTheme = () => {
+      const resolved = settings.theme === "system" ? (!media || media.matches ? "dark" : "light") : settings.theme;
+      document.documentElement.dataset.theme = resolved;
+      document.documentElement.style.colorScheme = resolved;
+      document.querySelector('meta[name="theme-color"]')?.setAttribute("content", resolved === "dark" ? "#11171d" : "#f5f7f8");
+    };
+    applyTheme();
+    if (settings.theme === "system") media?.addEventListener?.("change", applyTheme);
+    return () => media?.removeEventListener?.("change", applyTheme);
+  }, [settings.theme]);
+
+  useEffect(() => {
+    if (!settings.reopenWorkspace) clearSession();
+    else if (desktopAvailable && !isSamplePath(vaultRef.current)) saveSession({ vault: vaultRef.current, note: selectedRef.current });
+  }, [settings.reopenWorkspace]);
+
+  const persistSession = useCallback((vault: string, note: string) => {
+    if (settingsRef.current.reopenWorkspace) saveSession({ vault, note });
+  }, []);
+  const updateSettings = useCallback((patch: Partial<Settings>) => setSettings((previous) => ({ ...previous, ...patch })), []);
 
   // Markdown keeps relative image paths portable. Only the rendered image is
   // converted to a Tauri asset URL, and only when it resolves inside the vault.
@@ -182,8 +237,8 @@ function App() {
         role: "textbox",
         "aria-label": "Note editor",
         "aria-multiline": "true",
-        "aria-readonly": "false",
-        spellcheck: "true",
+        "aria-readonly": String(viewMode !== "write"),
+        spellcheck: String(settings.spellcheck),
       },
       handleClick: (_view, _position, event) => {
         const link = event.target instanceof Element ? event.target.closest("a") : null;
@@ -206,7 +261,7 @@ function App() {
         }
         return true;
       },
-  }), []);
+  }), [settings.spellcheck, viewMode]);
 
   const editor = useEditor({
     extensions,
@@ -271,6 +326,7 @@ function App() {
       return;
     }
     if (path === selectedRef.current && !loadingRef.current) {
+      ++loadRequest.current;
       setWorkspaceView("note");
       if (window.innerWidth <= 760) setExplorerOpen(false);
       return;
@@ -290,7 +346,7 @@ function App() {
       setWorkspaceView("note");
       loadMarkdownNote(editorRef.current, next);
       if (isSamplePath(vaultRef.current)) saveSampleSelection(path);
-      else saveSession({ vault: vaultRef.current, note: path });
+      else persistSession(vaultRef.current, path);
       setSaveState("saved");
       expandParents(path, vaultRef.current);
       if (window.innerWidth <= 760) setExplorerOpen(false);
@@ -302,7 +358,7 @@ function App() {
         setLoading(false);
       }
     }
-  }, [expandParents, flushAll]);
+  }, [expandParents, flushAll, persistSession]);
   selectNoteRef.current = (path) => { void selectNote(path); };
 
   useEffect(() => {
@@ -333,7 +389,7 @@ function App() {
         setExpanded(new Set());
         if (nextPath) expandParents(nextPath, lastSession.vault);
         loadMarkdownNote(editorRef.current, nextContent);
-        saveSession({ vault: lastSession.vault, note: nextPath });
+        persistSession(lastSession.vault, nextPath);
       } catch {
         if (!active || request !== loadRequest.current) return;
         clearSession();
@@ -347,7 +403,7 @@ function App() {
       }
     })();
     return () => { active = false; };
-  }, [lastSession, expandParents]);
+  }, [lastSession, expandParents, persistSession]);
 
   const changeMode = useCallback((mode: ViewMode) => {
     if (modeRef.current === "source" && mode !== "source") {
@@ -387,11 +443,12 @@ function App() {
       setSelectedPath("");
       setContent("");
       setWorkspaceView("all");
+      setFolderPath("");
       setExpanded(new Set());
       setSearchQuery("");
       setSaveState("saved");
       loadMarkdownNote(editorRef.current, "");
-      saveSession({ vault: path, note: "" });
+      persistSession(path, "");
       setNotice("Workspace opened. Choose a note or create one to get started.");
     } catch (error) {
       setNotice(`Couldn't open vault: ${errorMessage(error)}`);
@@ -401,7 +458,7 @@ function App() {
         setLoading(false);
       }
     }
-  }, [flushAll]);
+  }, [flushAll, persistSession]);
 
   const openCreate = useCallback((kind: "note" | "folder", folder: string) => {
     setEntryName("");
@@ -443,15 +500,118 @@ function App() {
   };
 
   const showOverview = useCallback(async (view: "all" | "inbox") => {
+    const request = ++loadRequest.current;
     try {
       await flushAll();
+      if (request !== loadRequest.current) return;
+      loadingRef.current = false;
+      setLoading(false);
       setWorkspaceView(view);
       setSearchQuery("");
       if (window.innerWidth <= 760) setExplorerOpen(false);
     } catch {
-      setNotice("Couldn't save this note. Retry the save before leaving it.");
+      if (request === loadRequest.current) {
+        loadingRef.current = false;
+        setLoading(false);
+        setNotice("Couldn't save this note. Retry the save before leaving it.");
+      }
     }
   }, [flushAll]);
+
+  const showFolder = useCallback(async (path: string) => {
+    const request = ++loadRequest.current;
+    try {
+      await flushAll();
+      if (request !== loadRequest.current) return;
+      loadingRef.current = false;
+      setLoading(false);
+      setFolderPath(path);
+      setWorkspaceView("folder");
+      setExpanded((previous) => new Set([...previous, path]));
+      expandParents(path, vaultRef.current);
+      setSearchQuery("");
+      if (window.innerWidth <= 760) setExplorerOpen(false);
+    } catch {
+      if (request === loadRequest.current) {
+        loadingRef.current = false;
+        setLoading(false);
+        setNotice("Couldn't save this note. Retry the save before leaving it.");
+      }
+    }
+  }, [expandParents, flushAll]);
+
+  const showSettings = useCallback(async () => {
+    if (workspaceView === "settings") return;
+    const request = ++loadRequest.current;
+    try {
+      await flushAll();
+      if (request !== loadRequest.current) return;
+      loadingRef.current = false;
+      setLoading(false);
+      previousWorkspaceView.current = workspaceView;
+      setWorkspaceView("settings");
+      setContextMenu(null);
+      if (window.innerWidth <= 760) setExplorerOpen(false);
+    } catch {
+      if (request === loadRequest.current) {
+        loadingRef.current = false;
+        setLoading(false);
+        setNotice("Couldn't save this note. Retry the save before opening settings.");
+      }
+    }
+  }, [flushAll, workspaceView]);
+
+  const goToPath = (plan: PathPlan) => {
+    if (plan.kind === "error") return;
+    setPathEditing(false);
+    pathInputRef.current?.blur();
+    setSearchQuery("");
+    if (plan.kind === "root") void showOverview("all");
+    else if (plan.kind === "folder") void showFolder(plan.path);
+    else if (plan.kind === "note") void selectNote(plan.path);
+    else if (plan.kind === "create") {
+      ++loadRequest.current;
+      loadingRef.current = false;
+      setLoading(false);
+      setDialogError("");
+      setDialogBusy(false);
+      setPathCreateDialog({ ...plan, vault: vaultRef.current });
+    }
+  };
+
+  const submitPath = (event: FormEvent) => {
+    event.preventDefault();
+    goToPath(planWorkspacePath(pathEditing ? pathDraft : displayedPath, vaultRef.current, entries));
+  };
+
+  const confirmPathCreate = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!pathCreateDialog || dialogBusy) return;
+    setDialogBusy(true);
+    setDialogError("");
+    try {
+      await flushAll();
+      if (vaultRef.current !== pathCreateDialog.vault) throw new Error("The workspace changed. Please enter the path again.");
+      // The bridge creates missing parents and uses exclusive creation; it never overwrites a file.
+      await createNote(pathCreateDialog.vault, pathCreateDialog.path, "");
+      try {
+        await refresh(pathCreateDialog.vault);
+      } catch {
+        setNotice("The note was created, but the folder list couldn't refresh.");
+      }
+      expandParents(pathCreateDialog.path, pathCreateDialog.vault);
+      setPathCreateDialog(null);
+      changeMode("write");
+      await selectNote(pathCreateDialog.path);
+      window.setTimeout(() => editorRef.current?.commands.focus(), 0);
+    } catch (error) {
+      // Refresh the listing after a collision or partial parent creation.
+      void refresh(pathCreateDialog.vault).catch(() => undefined);
+      setDialogError(errorMessage(error));
+    } finally {
+      setDialogBusy(false);
+    }
+  };
 
   const toggleFocus = () => {
     if (focusMode) {
@@ -492,8 +652,9 @@ function App() {
         // Relative image URLs are resolved from the note's current location.
         loadMarkdownNote(editorRef.current, contentRef.current);
         if (isSamplePath(vaultRef.current)) saveSampleSelection(nextPath);
-        else saveSession({ vault: vaultRef.current, note: nextPath });
+        else persistSession(vaultRef.current, nextPath);
       }
+      setFolderPath((previous) => previous ? remapPath(previous, renameNode.path, destination) : previous);
       setExpanded((previous) => new Set([...previous].map((path) => remapPath(path, renameNode.path, destination))));
       setSearchQuery("");
       await refresh(vaultRef.current);
@@ -528,7 +689,12 @@ function App() {
         setWorkspaceView("all");
         loadMarkdownNote(editorRef.current, "");
         if (isSamplePath(vaultRef.current)) saveSampleSelection("");
-        else saveSession({ vault: vaultRef.current, note: "" });
+        else persistSession(vaultRef.current, "");
+      }
+      if (folderPath && isPathInside(folderPath, deleteNode.path)) {
+        setFolderPath("");
+        if (workspaceView === "folder") setWorkspaceView("all");
+        else if (workspaceView === "settings" && previousWorkspaceView.current === "folder") previousWorkspaceView.current = "all";
       }
       setExpanded((previous) => new Set([...previous].filter((path) => !isPathInside(path, deleteNode.path))));
       setSearchQuery("");
@@ -712,7 +878,7 @@ function App() {
     };
   }, [flushAll]);
 
-  const modalOpen = Boolean(createDialog || renameNode || deleteNode || linkOpen || captureOpen || desktopInfoOpen);
+  const modalOpen = Boolean(createDialog || pathCreateDialog || renameNode || deleteNode || linkOpen || captureOpen || desktopInfoOpen);
   useEffect(() => {
     if (!modalOpen) return;
     const dialog = document.querySelector<HTMLElement>('[role="dialog"][aria-modal="true"]');
@@ -740,6 +906,7 @@ function App() {
         setContextMenu(null);
         if (!dialogBusy) {
           setCreateDialog(null);
+          setPathCreateDialog(null);
           setRenameNode(null);
           setDeleteNode(null);
           setLinkOpen(false);
@@ -748,7 +915,7 @@ function App() {
         }
         return;
       }
-      if (createDialog || renameNode || deleteNode || linkOpen || captureOpen || desktopInfoOpen || restoring) return;
+      if (createDialog || pathCreateDialog || renameNode || deleteNode || linkOpen || captureOpen || desktopInfoOpen || restoring) return;
       const command = event.metaKey || event.ctrlKey;
       const key = event.key.toLowerCase();
       if (command && key === "k" && !event.shiftKey) {
@@ -758,6 +925,10 @@ function App() {
       } else if (command && key === "k" && event.shiftKey) {
         event.preventDefault();
         openCapture();
+      } else if (command && key === "l") {
+        event.preventDefault();
+        pathInputRef.current?.focus();
+        pathInputRef.current?.select();
       } else if (command && key === "n") {
         event.preventDefault();
         openCreate("note", vaultRef.current);
@@ -776,7 +947,7 @@ function App() {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("pagehide", onPageHide);
     };
-  }, [captureOpen, createDialog, renameNode, deleteNode, linkOpen, desktopInfoOpen, dialogBusy, restoring, flushAll, flushPending, openCapture, openCreate]);
+  }, [captureOpen, createDialog, pathCreateDialog, renameNode, deleteNode, linkOpen, desktopInfoOpen, dialogBusy, restoring, flushAll, flushPending, openCapture, openCreate]);
 
   const focusSearch = () => {
     setExplorerOpen(true);
@@ -793,6 +964,7 @@ function App() {
   }, []);
 
   const handleTreeSelect = useCallback((path: string) => { void selectNote(path); }, [selectNote]);
+  const handleTreeFolder = useCallback((path: string) => { void showFolder(path); }, [showFolder]);
   const handleTreeContext = useCallback((event: MouseEvent, item: TreeNode) => {
     event.preventDefault();
     event.stopPropagation();
@@ -805,7 +977,7 @@ function App() {
   const saveLabel = saveState === "error" ? "Save failed" : saveState === "saving" ? "Saving…" : saveState === "unsaved" ? "Unsaved changes" : "Saved";
 
   return (
-    <div className={`comet-root${focusMode ? " focus-mode" : ""}`} onClick={() => contextMenu && setContextMenu(null)}>
+    <div className={`comet-root${focusMode ? " focus-mode" : ""}`} style={{ "--editor-font-size": `${settings.editorFontSize}px` } as CSSProperties} onClick={() => contextMenu && setContextMenu(null)}>
       <div className="app-shell">
         {explorerOpen && <button className="sidebar-scrim" type="button" aria-label="Close sidebar" onClick={() => setExplorerOpen(false)} />}
         {explorerOpen && <aside className="sidebar" aria-label="Workspace navigation">
@@ -848,11 +1020,12 @@ function App() {
               </button>)}
             </div> : <>
               {tree.length === 0 && <div className="tree-message">Nothing here yet.<br /><span>Create a note to get started.</span></div>}
-              <div className="tree-list">{tree.map((node) => <TreeNodeView key={node.path} node={node} depth={0} selectedPath={workspaceView === "note" ? selectedPath : ""} expanded={expanded} onToggle={toggleFolder} onSelect={handleTreeSelect} onContext={handleTreeContext} />)}</div>
+              <div className="tree-list">{tree.map((node) => <TreeNodeView key={node.path} node={node} depth={0} selectedPath={workspaceView === "note" ? selectedPath : workspaceView === "folder" ? folderPath : ""} expanded={expanded} onToggle={toggleFolder} onSelect={handleTreeSelect} onOpenFolder={handleTreeFolder} onContext={handleTreeContext} />)}</div>
             </>}
           </div>
 
           <div className="sidebar-bottom">
+            <button className={workspaceView === "settings" ? "nav-item settings-nav active" : "nav-item settings-nav"} type="button" aria-current={workspaceView === "settings" ? "page" : undefined} onClick={() => void showSettings()}><Settings2 size={17} /><span>Settings</span><ChevronRight size={14} className="settings-nav-arrow" /></button>
             <div className="privacy-card">
               <div className="privacy-icon"><LockKeyhole size={15} /></div>
               <div><strong>{isSample ? "You're in a sample" : "Your notes stay yours"}</strong><p>{isSample ? (sampleVault.isPersisted() ? (desktopAvailable ? "Changes stay in this app." : "Changes stay in this browser.") : "Changes last for this session.") : "Just Markdown files, right on your device."}</p></div>
@@ -867,21 +1040,34 @@ function App() {
             <div className="topbar-left">
               <button className="icon-button sidebar-toggle" type="button" onClick={() => { setExplorerOpen((value) => !value); if (focusMode) setFocusMode(false); }} aria-label={explorerOpen ? "Hide sidebar" : "Show sidebar"} aria-expanded={explorerOpen} title={`Toggle sidebar (${modifier}+\\)`}>{explorerOpen ? <PanelLeftClose size={19} /> : <PanelLeftOpen size={19} />}</button>
               <span className="topbar-divider" />
-              <nav className="breadcrumbs" aria-label="Current location">
-                <button type="button" onClick={() => void showOverview("all")}>My workspace</button>
-                <ChevronRight size={14} aria-hidden="true" />
-                <span className="breadcrumb-current">{workspaceView === "note" && selectedName ? noteTitle(selectedName) : workspaceView === "inbox" ? "Inbox" : "All notes"}</span>
-              </nav>
+              <form className="pathbar" onSubmit={submitPath} onBlur={(event) => { if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) setPathEditing(false); }}>
+                <div className="pathbar-field">
+                  <FolderOpen size={16} aria-hidden="true" />
+                  <input ref={pathInputRef} aria-label="Workspace path" aria-describedby={pathEditing ? "path-hint" : undefined} autoComplete="off" spellCheck={false} value={pathEditing ? pathDraft : displayedPath} placeholder={"Comet\\Folder\\note.md"} onFocus={(event) => { setPathDraft(event.currentTarget.value); setPathEditing(true); }} onChange={(event) => setPathDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); setPathEditing(false); event.currentTarget.blur(); } }} />
+                  <kbd className="path-shortcut">{modifier} L</kbd>
+                  <button type="submit" className="path-go" aria-label="Go to path" title="Open or create this path"><ArrowRight size={15} /></button>
+                </div>
+                {pathEditing && <div className="path-popover" id="path-hint" aria-live="polite">
+                  <div className="path-popover-heading"><span>GO TO A PATH</span><span>IN THIS WORKSPACE</span></div>
+                  <p>Type a folder or note path, then press Enter.</p>
+                  {pathPlan.kind === "error" ? <div className="path-feedback error"><AlertCircle size={16} /><span>{pathPlan.message}</span></div> : <button className="path-feedback" type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => goToPath(pathPlan)}>
+                    <span className="path-feedback-icon">{pathPlan.kind === "folder" || pathPlan.kind === "root" ? <FolderOpen size={16} /> : pathPlan.kind === "create" ? <FilePlus2 size={16} /> : <FileText size={16} />}</span>
+                    <span><strong>{pathPlan.kind === "root" ? "Open all notes" : pathPlan.kind === "folder" ? "Open folder" : pathPlan.kind === "note" ? "Open note" : "Create a new note"}</strong><small>{pathPlan.kind === "root" ? "Comet" : displayWorkspacePath(pathPlan.path, vaultPath)}</small></span>
+                    <kbd>↵</kbd>
+                  </button>}
+                  <div className="path-popover-foot">Use / or {"\\"} · New folders are created with your note.</div>
+                </div>}
+              </form>
             </div>
             <div className="topbar-actions">
-              {isSample && <span className="sample-badge"><span /> Sample</span>}
+              {isSample && <span className="sample-badge" aria-label={desktopAvailable ? "Sample workspace" : "Interactive browser sample"} title={desktopAvailable ? "Sample workspace" : "Interactive browser sample, not local files"}><span /> Sample</span>}
               <button className="icon-button top-search-button" type="button" onClick={focusSearch} aria-label="Search notes" title={`Search (${modifier}+K)`}><Search size={18} /></button>
               <button className="capture-button" type="button" onClick={openCapture} title={`${modifier}+Shift+K`}><Sparkles size={15} /><span>Quick capture</span></button>
             </div>
           </header>
 
-          <div className="workspace-scroll">
-            {!focusMode && <section className="cover-card" aria-label="The Matterhorn">
+          <div ref={workspaceScrollRef} className={`workspace-scroll${focusMode || !settings.showCover || workspaceView === "settings" ? " without-cover" : ""}`}>
+            {!focusMode && settings.showCover && workspaceView !== "settings" && <section className="cover-card" aria-label="The Matterhorn">
               <div className="cover-copy">
                 <span className="cover-eyebrow"><Sparkles size={13} /> A LITTLE SPACE TO THINK</span>
                 <h1>Make space for<br />what matters.</h1>
@@ -890,7 +1076,7 @@ function App() {
               <div className="cover-location"><MapPin size={13} /> The Matterhorn, Switzerland</div>
             </section>}
 
-            {workspaceView === "note" && selectedPath ? <section className="note-card" aria-label={`Note: ${noteTitle(selectedName)}`}>
+            {workspaceView === "settings" ? <SettingsPage settings={settings} persisted={settingsPersisted} isSample={isSample} modifier={modifier} onChange={updateSettings} onBack={() => setWorkspaceView(previousWorkspaceView.current)} onOpenVault={() => void openVault()} /> : workspaceView === "note" && selectedPath ? <section className="note-card" aria-label={`Note: ${noteTitle(selectedName)}`}>
               <div className="document-header">
                 <div className="document-heading">
                   <div className="document-icon"><FileText size={20} /></div>
@@ -924,7 +1110,7 @@ function App() {
                 </> : <span className="mode-hint">{viewMode === "source" ? <><FileCode2 size={15} /> You're editing the plain Markdown file</> : <><BookOpen size={15} /> Reading view · select Write to make changes</>}</span>}
               </div>
               <div className="document-body">
-                {loading ? <div className="document-loading"><LoaderCircle size={18} className="spin" /> Opening your note…</div> : viewMode === "source" ? <textarea ref={sourceRef} className="source-editor" aria-label="Markdown source" spellCheck={false} value={content} placeholder="Start writing in Markdown…" onChange={(event) => {
+                {loading ? <div className="document-loading"><LoaderCircle size={18} className="spin" /> Opening your note…</div> : viewMode === "source" ? <textarea ref={sourceRef} className="source-editor" aria-label="Markdown source" spellCheck={settings.spellcheck} value={content} placeholder="Start writing in Markdown…" onChange={(event) => {
                   const next = event.target.value;
                   contentRef.current = next;
                   setContent(next);
@@ -936,6 +1122,19 @@ function App() {
                 </div>}
               </div>
               <div className="document-footer"><div><span>{words} {words === 1 ? "word" : "words"}</span><span className="footer-dot" /> <span>Markdown</span></div><span>{isSample ? (sampleVault.isPersisted() ? (desktopAvailable ? "Sample saved in this app" : "Sample saved in this browser") : "Temporary sample") : "Saved locally"}</span></div>
+            </section> : workspaceView === "folder" ? <section className="overview-card folder-card" aria-label={`Folder: ${fileName(folderPath)}`}>
+              <button className="folder-parent" type="button" onClick={() => folderParentIsRoot ? void showOverview("all") : void showFolder(folderParent)}><ArrowRight size={14} /> {folderParentIsRoot ? "All notes" : fileName(folderParent)}</button>
+              <div className="overview-heading">
+                <div><span className="section-eyebrow">YOUR FOLDER</span><h2>{fileName(folderPath)}</h2><p>{folderEntries.length} {folderEntries.length === 1 ? "item" : "items"} in this folder.</p></div>
+                <button className="primary-button overview-create" type="button" onClick={() => openCreate("note", folderPath)}><Plus size={16} /> New note here</button>
+              </div>
+              {folderEntries.length ? <div className="overview-list">
+                <div className="overview-list-heading"><span>Name</span><span>Type</span></div>
+                {folderEntries.map((entry) => <button className="overview-row" type="button" key={entry.path} onClick={() => entry.kind === "folder" ? void showFolder(entry.path) : void selectNote(entry.path)}>
+                  <span className="overview-row-name"><span className="overview-file-icon">{entry.kind === "folder" ? <Folder size={17} /> : <FileText size={17} />}</span><strong>{entry.kind === "file" && isMarkdown(entry.name) ? noteTitle(entry.name) : entry.name}</strong></span>
+                  <span className="overview-row-location">{entry.kind === "folder" ? "Folder" : isMarkdown(entry.name) ? "Markdown note" : "File"}</span><ArrowRight size={16} className="overview-row-arrow" />
+                </button>)}
+              </div> : <div className="overview-empty"><div className="overview-empty-icon"><FolderOpen size={24} /></div><h3>A little space to fill</h3><p>There’s nothing in this folder yet. Start with a note.</p><button type="button" className="secondary-button" onClick={() => openCreate("note", folderPath)}>Create a note <ArrowRight size={15} /></button></div>}
             </section> : <section className="overview-card">
               <div className="overview-heading">
                 <div><span className="section-eyebrow">YOUR WORKSPACE</span><h2>{workspaceView === "inbox" ? "Inbox" : "All notes"}</h2><p>{workspaceView === "inbox" ? "A landing spot for everything you want to remember." : "All your ideas, together in one place."}</p></div>
@@ -949,7 +1148,7 @@ function App() {
                 </button>)}
               </div> : <div className="overview-empty"><div className="overview-empty-icon">{workspaceView === "inbox" ? <Inbox size={24} /> : <FilePlus2 size={24} />}</div><h3>{workspaceView === "inbox" ? "Your inbox is clear" : "A fresh start"}</h3><p>{workspaceView === "inbox" ? "Quick captures will appear here when you save them." : "Create your first note and let the ideas flow."}</p><button type="button" className="secondary-button" onClick={() => workspaceView === "inbox" ? openCapture() : openCreate("note", vaultPath)}>{workspaceView === "inbox" ? "Make a quick capture" : "Create a note"} <ArrowRight size={15} /></button></div>}
             </section>}
-            <div className="workspace-endnote"><Sparkles size={13} /> A little room for your best ideas.</div>
+            {workspaceView !== "settings" && <div className="workspace-endnote"><Sparkles size={13} /> A little room for your best ideas.</div>}
           </div>
         </main>
       </div>
@@ -963,6 +1162,17 @@ function App() {
         <div className="context-divider" />
         <button role="menuitem" type="button" onClick={() => openRename(contextMenu.node)}><Pencil size={16} /> Rename</button>
         <button role="menuitem" type="button" className="danger" onClick={() => openDelete(contextMenu.node)}><Trash2 size={16} /> Delete</button>
+      </div>}
+
+      {pathCreateDialog && <div className="modal-backdrop" onMouseDown={() => !dialogBusy && setPathCreateDialog(null)}>
+        <form className="modal" role="dialog" aria-modal="true" aria-labelledby="path-create-title" onSubmit={(event) => void confirmPathCreate(event)} onMouseDown={(event) => event.stopPropagation()}>
+          <div className="modal-icon"><FilePlus2 size={20} /></div><button className="modal-close icon-button" type="button" onClick={() => setPathCreateDialog(null)} aria-label="Close dialog" disabled={dialogBusy}><X size={18} /></button>
+          <h2 id="path-create-title">Create this note?</h2><p>We'll create a new Markdown note at this path. Existing files are never overwritten.</p>
+          <div className="path-create-location"><FileText size={16} /><span>{displayWorkspacePath(pathCreateDialog.path, pathCreateDialog.vault)}</span></div>
+          {pathCreateDialog.missingFolders.length > 0 && <p className="path-create-folders"><FolderPlus size={15} /> {pathCreateDialog.missingFolders.length === 1 ? "1 new folder will be created" : `${pathCreateDialog.missingFolders.length} new folders will be created`} along the way.</p>}
+          {dialogError && <div className="dialog-error" role="alert"><AlertCircle size={15} /> {dialogError}</div>}
+          <div className="modal-actions"><button type="button" className="secondary-button" autoFocus onClick={() => setPathCreateDialog(null)} disabled={dialogBusy}>Cancel</button><button type="submit" className="primary-button" disabled={dialogBusy}>{dialogBusy ? "Creating…" : "Create note"}</button></div>
+        </form>
       </div>}
 
       {createDialog && <div className="modal-backdrop" onMouseDown={() => !dialogBusy && setCreateDialog(null)}>
@@ -1055,23 +1265,24 @@ interface TreeNodeViewProps {
   expanded: Set<string>;
   onToggle: (path: string) => void;
   onSelect: (path: string) => void;
+  onOpenFolder: (path: string) => void;
   onContext: (event: MouseEvent, node: TreeNode) => void;
 }
 
-const TreeNodeView = memo(function TreeBranch({ node, depth, selectedPath, expanded, onToggle, onSelect, onContext }: TreeNodeViewProps) {
+const TreeNodeView = memo(function TreeBranch({ node, depth, selectedPath, expanded, onToggle, onSelect, onOpenFolder, onContext }: TreeNodeViewProps) {
   const folder = node.kind === "folder";
   const openFolder = expanded.has(node.path);
   const selected = node.path === selectedPath;
   return <div className="tree-branch">
-    <div className={selected ? "tree-row selected" : "tree-row"}>
-      <button type="button" className="tree-item" style={{ paddingLeft: `${8 + depth * 14}px` }} onClick={() => folder ? onToggle(node.path) : onSelect(node.path)} onContextMenu={(event) => onContext(event, node)} aria-expanded={folder ? openFolder : undefined} aria-current={selected ? "page" : undefined} title={node.name}>
-        <span className="tree-disclosure" aria-hidden="true">{folder ? (openFolder ? <ChevronDown size={14} /> : <ChevronRight size={14} />) : null}</span>
+    <div className={selected ? "tree-row selected" : "tree-row"} style={{ paddingLeft: `${8 + depth * 14}px` }}>
+      {folder ? <button type="button" className="tree-disclosure" aria-label={`${openFolder ? "Collapse" : "Expand"} ${node.name}`} aria-expanded={openFolder} onClick={() => onToggle(node.path)}>{openFolder ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</button> : <span className="tree-disclosure" aria-hidden="true" />}
+      <button type="button" className="tree-item" onClick={() => folder ? onOpenFolder(node.path) : onSelect(node.path)} onContextMenu={(event) => onContext(event, node)} aria-current={selected ? "page" : undefined} title={node.name}>
         {folder ? (openFolder ? <FolderOpen className="tree-icon folder" size={16} /> : <Folder className="tree-icon folder" size={16} />) : <FileText className="tree-icon" size={16} />}
         <span className="tree-name">{!folder && isMarkdown(node.name) ? noteTitle(node.name) : node.name}</span>
       </button>
       <button type="button" className="tree-action" aria-label={`More options for ${node.name}`} title={`More options for ${node.name}`} onClick={(event) => onContext(event, node)}><MoreHorizontal size={16} /></button>
     </div>
-    {folder && openFolder && node.children.map((child) => <TreeNodeView key={child.path} node={child} depth={depth + 1} selectedPath={selectedPath} expanded={expanded} onToggle={onToggle} onSelect={onSelect} onContext={onContext} />)}
+    {folder && openFolder && node.children.map((child) => <TreeNodeView key={child.path} node={child} depth={depth + 1} selectedPath={selectedPath} expanded={expanded} onToggle={onToggle} onSelect={onSelect} onOpenFolder={onOpenFolder} onContext={onContext} />)}
   </div>;
 });
 

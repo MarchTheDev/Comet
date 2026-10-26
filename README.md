@@ -8,9 +8,11 @@ files. There is no account, database, or built-in sync service.
 
 - **A calm workspace.** A photographic Matterhorn cover, a searchable folder
   sidebar, an all-notes view, and a distraction-free focus mode.
+- **Make it yours.** Dark appearance by default, with light and system themes,
+  editor text size, spell check, and other preferences in Settings.
 - **Local Markdown.** Create, edit, rename, and delete notes and folders directly
-  in your chosen workspace. Your last workspace and open note are reopened when
-  available.
+  in your chosen workspace. You can choose whether your last workspace and note
+  are reopened when available.
 - **Flexible editing.** Write with the formatting toolbar, edit plain Markdown,
   or switch to a read-only view. Changes save automatically.
 - **Quick capture.** Send a thought, link, or image to your Inbox for later.
@@ -24,6 +26,18 @@ with **New note**. Use a folder's or file's `…` menu (or right-click it) to
 create items inside a folder, rename, or delete. Deletion is permanent and does
 not move files to the system trash; Comet asks for confirmation first. Renaming
 or deleting files does not rewrite links in other notes.
+
+The top path bar is editable. Enter a workspace-relative path such as
+`Comet\Folder\text.md` (or `Comet/Folder/text.md`) and press Enter to open an
+existing note or folder. For a new note, Comet asks for confirmation and creates
+any missing parent folders; it never overwrites an existing file. You can omit
+`.md` from a new note name. `Comet` is an alias for the current workspace, not
+an absolute filesystem path; paths containing `..` or pointing outside the
+workspace are rejected.
+
+Open **Settings** in the sidebar to change the theme, Matterhorn cover, editor
+size, spell check, or workspace reopening. Preferences are stored on this device
+when local storage is available; resetting them does not delete notes.
 
 Edits are saved automatically. If a save fails, the edit remains in the app and
 can be retried. Comet also waits for pending saves before switching notes,
@@ -41,6 +55,7 @@ an actual folder in the desktop app to work with files on disk.
 | Shortcut | Action |
 | --- | --- |
 | Ctrl/Cmd + K | Search notes |
+| Ctrl/Cmd + L | Focus the workspace path bar |
 | Ctrl/Cmd + Shift + K | Quick capture |
 | Ctrl/Cmd + N | New note |
 | Ctrl/Cmd + \\ | Toggle sidebar |

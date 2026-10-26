@@ -82,6 +82,69 @@ async fn copy_asset(src: String, dest: String) -> Result<(), String> {
     std::fs::copy(&src, &dest).map(|_| ()).map_err(|e| e.to_string())
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchHit {
+    pub path: String,
+    pub name: String,
+    pub snippet: String,
+}
+
+#[tauri::command]
+async fn search_vault(vault: String, query: String) -> Vec<SearchHit> {
+    let mut hits = Vec::new();
+    let q = query.to_lowercase();
+    if q.trim().is_empty() {
+        return hits;
+    }
+    let mut stack = vec![std::path::PathBuf::from(&vault)];
+    while let Some(current) = stack.pop() {
+        let read = match std::fs::read_dir(&current) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        for entry in read.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if !path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.eq_ignore_ascii_case("md"))
+                .unwrap_or(false)
+            {
+                continue;
+            }
+            let content = match std::fs::read_to_string(&path) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+            if !content.to_lowercase().contains(&q) {
+                continue;
+            }
+            let snippet = content
+                .lines()
+                .find(|l| l.to_lowercase().contains(&q))
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_string();
+            hits.push(SearchHit {
+                path: path.to_string_lossy().to_string(),
+                name,
+                snippet,
+            });
+        }
+    }
+    hits
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -94,7 +157,8 @@ pub fn run() {
             open_vault,
             create_dir,
             create_note,
-            copy_asset
+            copy_asset,
+            search_vault
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

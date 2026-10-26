@@ -87,26 +87,31 @@ function App() {
 
   const tree = useMemo(() => buildTree(entries, vaultPath), [entries, vaultPath]);
   const blocks = useMemo(() => parseBlocks(content), [content]);
+  const selectedBlocks = useMemo(() => blocks.filter((b) => b.kind !== "blank"), [blocks]);
+
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<{ path: string; name: string; snippet: string }[]>([]);
+
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
-        e.preventDefault();
-        openCapture();
-        return;
-      }
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "p") {
-        e.preventDefault();
-        setPreview((p) => !p);
-        return;
-      }
-      if (e.key === "Escape" && captureOpen) {
-        closeCapture();
-        return;
-      }
+    if (!vaultPath || !searchQuery.trim()) {
+      setSearchResults([]);
+      return;
+    }
+    let live = true;
+    const t = setTimeout(() => {
+      invoke<{ path: string; name: string; snippet: string }[]>("search_vault", {
+        vault: vaultPath,
+        query: searchQuery,
+      }).then((r) => {
+        if (live) setSearchResults(r);
+      });
+    }, 200);
+    return () => {
+      live = false;
+      clearTimeout(t);
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [captureOpen]);
+  }, [vaultPath, searchQuery]);
+
   const selectedName = selectedPath ? selectedPath.split(/[\\/]+/).pop() ?? "" : "";
 
   const refresh = useCallback(async (vault: string) => {
@@ -151,6 +156,27 @@ function App() {
   const [captureText, setCaptureText] = useState("");
   const [captureStatus, setCaptureStatus] = useState("");
 
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        openCapture();
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "p") {
+        e.preventDefault();
+        setPreview((p) => !p);
+        return;
+      }
+      if (e.key === "Escape" && captureOpen) {
+        closeCapture();
+        return;
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [captureOpen]);
+
   const openCapture = () => {
     setCaptureText("");
     setCaptureStatus("");
@@ -194,6 +220,13 @@ function App() {
       <header className="comet-topbar">
         <div className="comet-brand">[ * ] COMET</div>
         <div className="comet-vault">{vaultPath || "no vault"}</div>
+        <input
+          className="comet-search"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          placeholder="search notes..."
+          spellCheck={false}
+        />
         <div className="comet-actions">
           <button className="comet-btn" onClick={() => void openVault()}>[ open vault ]</button>
           <button className="comet-btn" onClick={openCapture}>[ capture ]</button>
@@ -216,6 +249,24 @@ function App() {
                 onSelect={setSelectedPath}
               />
             ))}
+            {searchResults.length > 0 && (
+              <div className="comet-search-results">
+                <div className="comet-pane-title">results</div>
+                {searchResults.map((r) => (
+                  <div
+                    key={r.path}
+                    className="comet-search-hit"
+                    onClick={() => {
+                      setSelectedPath(r.path);
+                      setSearchQuery("");
+                    }}
+                  >
+                    <div className="comet-search-name">{r.name}</div>
+                    <div className="comet-search-snippet">{r.snippet}</div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </aside>
         <section className="comet-pane comet-editor">

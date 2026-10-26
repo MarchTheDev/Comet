@@ -278,6 +278,49 @@ body {
   color: #8b8577;
   font-size: 11px;
 }
+.comet-search {
+  flex: 1;
+  max-width: 320px;
+  background-color: transparent;
+  border: 1px solid #3a3646;
+  color: #e6e6e6;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 4px 8px;
+  outline: none;
+}
+
+.comet-search:focus {
+  border-color: #b9a07e;
+}
+
+.comet-search-results {
+  border-top: 1px solid #26232e;
+  padding-top: 6px;
+}
+
+.comet-search-hit {
+  padding: 6px 8px;
+  cursor: pointer;
+  border-bottom: 1px solid #1d1a26;
+}
+
+.comet-search-hit:hover {
+  background-color: #16131f;
+}
+
+.comet-search-name {
+  color: #b9a07e;
+  font-size: 12px;
+}
+
+.comet-search-snippet {
+  color: #8b8577;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .comet-statusbar {
   display: flex;
   justify-content: space-between;

@@ -202,6 +202,63 @@ body {
   display: inline-block;
   width: 12px;
 }
+.comet-btn-active {
+  border-color: #b9a07e;
+  color: #b9a07e;
+}
+
+.comet-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background-color: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+
+.comet-modal {
+  width: 520px;
+  max-width: 90vw;
+  background-color: #0d0b14;
+  border: 1px solid #26232e;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.comet-modal-title {
+  color: #b9a07e;
+  font-size: 12px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+}
+
+.comet-modal-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.comet-modal-area {
+  width: 100%;
+  min-height: 120px;
+  resize: vertical;
+  border: 1px solid #26232e;
+  background-color: transparent;
+  color: #e6e6e6;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.6;
+  padding: 8px;
+  outline: none;
+}
+
+.comet-modal-status {
+  color: #8b8577;
+  font-size: 11px;
+}
 .comet-statusbar {
   display: flex;
   justify-content: space-between;

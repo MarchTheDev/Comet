@@ -87,6 +87,7 @@ function App() {
 
   const tree = useMemo(() => buildTree(entries, vaultPath), [entries, vaultPath]);
   const blocks = useMemo(() => parseBlocks(content), [content]);
+  const selectedBlocks = useMemo(() => blocks.filter((b) => b.kind !== "blank"), [blocks]);
   const selectedName = selectedPath ? selectedPath.split(/[\\/]+/).pop() ?? "" : "";
 
   const refresh = useCallback(async (vault: string) => {
@@ -126,7 +127,48 @@ function App() {
     }
   };
 
-  const selectedBlocks = useMemo(() => blocks.filter((b) => b.kind !== "blank"), [blocks]);
+  const [captureOpen, setCaptureOpen] = useState(false);
+  const [captureType, setCaptureType] = useState<"text" | "link" | "image">("text");
+  const [captureText, setCaptureText] = useState("");
+  const [captureStatus, setCaptureStatus] = useState("");
+
+  const openCapture = () => {
+    setCaptureText("");
+    setCaptureStatus("");
+    setCaptureOpen(true);
+  };
+
+  const closeCapture = () => setCaptureOpen(false);
+
+  const saveCapture = async () => {
+    if (!vaultPath) {
+      setCaptureStatus("open a vault first");
+      return;
+    }
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const folder = `${vaultPath.replace(/[\\/]+$/, "")}/Inbox`;
+    const path = `${folder}/${stamp}.md`;
+    let body = captureText.trim();
+    if (captureType === "link") body = `[link](${body})`;
+    if (captureType === "image") {
+      // image path is already embedded in captureText by pickImage
+    }
+    await invoke("create_note", { path, content: body });
+    await refresh(vaultPath);
+    setCaptureStatus("saved");
+    setTimeout(() => setCaptureOpen(false), 600);
+  };
+
+  const pickImage = async () => {
+    const src = await open({ multiple: false });
+    if (!src || Array.isArray(src)) return;
+    const name = src.split(/[\\/]+/).pop() ?? "image.png";
+    const dest = `${vaultPath.replace(/[\\/]+$/, "")}/assets/${name}`;
+    await invoke("copy_asset", { src, dest });
+    const rel = `./assets/${name}`;
+    setCaptureText((t) => (t ? `${t}\n\n![](${rel})` : `![](${rel})`));
+    setCaptureType("image");
+  };
 
   return (
     <div className="comet-root">
@@ -135,6 +177,7 @@ function App() {
         <div className="comet-vault">{vaultPath || "no vault"}</div>
         <div className="comet-actions">
           <button className="comet-btn" onClick={() => void openVault()}>[ open vault ]</button>
+          <button className="comet-btn" onClick={openCapture}>[ capture ]</button>
           <button className="comet-btn" disabled={!selectedPath} onClick={() => setPreview((p) => !p)}>
             [ preview ]
           </button>
@@ -214,6 +257,48 @@ function App() {
         <span>{status}</span>
         <span>{selectedPath ? selectedPath : "no note open"}</span>
       </footer>
+      {captureOpen && (
+        <div className="comet-modal-backdrop" onClick={closeCapture}>
+          <div className="comet-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="comet-modal-title">capture</div>
+            <div className="comet-modal-row">
+              <button
+                className={captureType === "text" ? "comet-btn comet-btn-active" : "comet-btn"}
+                onClick={() => setCaptureType("text")}
+              >
+                [ text ]
+              </button>
+              <button
+                className={captureType === "link" ? "comet-btn comet-btn-active" : "comet-btn"}
+                onClick={() => setCaptureType("link")}
+              >
+                [ link ]
+              </button>
+              <button className="comet-btn" onClick={() => void pickImage()}>
+                [ image ]
+              </button>
+            </div>
+            <textarea
+              className="comet-modal-area"
+              value={captureText}
+              onChange={(e) => setCaptureText(e.target.value)}
+              placeholder={
+                captureType === "link" ? "https://..." : "write something worth keeping"
+              }
+              spellCheck={false}
+            />
+            <div className="comet-modal-row">
+              <button className="comet-btn" onClick={() => void saveCapture()}>
+                [ save ]
+              </button>
+              <button className="comet-btn" onClick={closeCapture}>
+                [ cancel ]
+              </button>
+              {captureStatus && <span className="comet-modal-status">{captureStatus}</span>}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

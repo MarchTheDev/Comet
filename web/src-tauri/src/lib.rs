@@ -62,8 +62,24 @@ async fn open_vault(app: tauri::AppHandle) -> Option<String> {
 }
 
 #[tauri::command]
-async fn save_vault_file(path: String, content: String) -> Result<(), String> {
+async fn create_dir(path: String) -> Result<(), String> {
+    std::fs::create_dir_all(&path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn create_note(path: String, content: String) -> Result<(), String> {
+    if let Some(parent) = std::path::Path::new(&path).parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
     std::fs::write(&path, content).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn copy_asset(src: String, dest: String) -> Result<(), String> {
+    if let Some(parent) = std::path::Path::new(&dest).parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    std::fs::copy(&src, &dest).map(|_| ()).map_err(|e| e.to_string())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -76,7 +92,9 @@ pub fn run() {
             read_note,
             write_note,
             open_vault,
-            save_vault_file
+            create_dir,
+            create_note,
+            copy_asset
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

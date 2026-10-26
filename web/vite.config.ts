@@ -52,6 +52,8 @@ export default defineConfig({
     // same network) can open the interface. The desktop app never uses this;
     // it loads the built file.
     host: true,
+    port: 1420,
+    strictPort: true,
     allowedHosts: true,
   },
 });

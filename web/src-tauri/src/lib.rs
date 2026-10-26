@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use serde::{Deserialize, Serialize};
+use std::io::Write;
 use tauri_plugin_dialog::DialogExt;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -63,7 +64,7 @@ async fn open_vault(app: tauri::AppHandle) -> Option<String> {
 
 #[tauri::command]
 async fn create_dir(path: String) -> Result<(), String> {
-    std::fs::create_dir_all(&path).map_err(|e| e.to_string())
+    std::fs::create_dir(&path).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -71,7 +72,13 @@ async fn create_note(path: String, content: String) -> Result<(), String> {
     if let Some(parent) = std::path::Path::new(&path).parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    std::fs::write(&path, content).map_err(|e| e.to_string())
+    // Creating a note must never silently replace an existing file.
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .map_err(|e| e.to_string())?;
+    file.write_all(content.as_bytes()).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -79,7 +86,15 @@ async fn copy_asset(src: String, dest: String) -> Result<(), String> {
     if let Some(parent) = std::path::Path::new(&dest).parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    std::fs::copy(&src, &dest).map(|_| ()).map_err(|e| e.to_string())
+    let mut source = std::fs::File::open(&src).map_err(|e| e.to_string())?;
+    let mut destination = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&dest)
+        .map_err(|e| e.to_string())?;
+    std::io::copy(&mut source, &mut destination)
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -117,23 +132,23 @@ async fn search_vault(vault: String, query: String) -> Vec<SearchHit> {
             {
                 continue;
             }
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_string();
             let content = match std::fs::read_to_string(&path) {
                 Ok(c) => c,
                 Err(_) => continue,
             };
-            if !content.to_lowercase().contains(&q) {
+            if !name.to_lowercase().contains(&q) && !content.to_lowercase().contains(&q) {
                 continue;
             }
             let snippet = content
                 .lines()
                 .find(|l| l.to_lowercase().contains(&q))
-                .unwrap_or("")
+                .unwrap_or("Matching filename")
                 .trim()
-                .to_string();
-            let name = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("")
                 .to_string();
             hits.push(SearchHit {
                 path: path.to_string_lossy().to_string(),
@@ -142,6 +157,7 @@ async fn search_vault(vault: String, query: String) -> Vec<SearchHit> {
             });
         }
     }
+    hits.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
     hits
 }
 

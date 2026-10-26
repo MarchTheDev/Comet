@@ -19,6 +19,28 @@ text. There is no database, no sync engine, no account.
 - **Toggleable preview.** Edit and preview are the same text, rendered by the
   same parser.
 - **Quick capture.** Save a link, a snippet, an important text, an image.
+- **A quieter workspace.** An ASCII-inspired interface with an offline Matterhorn
+  backdrop, collapsible folders, search, and write, source, and read views.
+
+## Using the workspace
+
+Open a local vault in the desktop app, then select or create a Markdown note.
+Edits save automatically. The browser development preview starts in a clearly
+labelled sample workspace instead; its sample notes are stored in browser
+storage, not in a folder. Open a real folder from the desktop app to work with
+files on disk.
+
+| Shortcut | Action |
+| --- | --- |
+| Ctrl/Cmd + K | Search notes |
+| Ctrl/Cmd + Shift + K | Quick capture |
+| Ctrl/Cmd + N | New note |
+| Ctrl/Cmd + \\ | Toggle explorer |
+| Ctrl/Cmd + S | Save immediately |
+
+Use the `+` beside a folder (or its context menu) to create items inside it.
+Quick captures go into `Inbox`; captured images are copied into the vault's
+`assets` folder and linked with a relative Markdown path.
 
 ## Development
 

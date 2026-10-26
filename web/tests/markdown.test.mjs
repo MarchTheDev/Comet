@@ -1,5 +1,5 @@
 /** The Markdown subset Comet can parse for notes. */
-import { parseBlocks, parseInline } from '../src/utils/markdown.ts';
+import { countWords, parseBlocks, parseInline } from '../src/utils/markdown.ts';
 
 let failures = 0;
 
@@ -60,5 +60,7 @@ check('links keep both label and URL', inline.some((piece) => piece.kind === 'li
 check('angle-bracket URLs become clickable links', inline.some((piece) => piece.kind === 'link' && piece.href === 'https://example.org'));
 check('plain URLs become links without their trailing punctuation', inline.some((piece) => piece.kind === 'link' && piece.href === 'https://example.net') && inline.some((piece) => piece.kind === 'text' && piece.text === '.'));
 check('incomplete markers remain ordinary text', parseInline('**unclosed').every((piece) => piece.kind === 'text'));
+check('word count ignores Markdown syntax and link targets', countWords('# Hello world\n- [x] Do the thing\n[link](https://example.com)\n```ts\nconst answer = 42\n```') === 9);
+check('word count handles Unicode and empty notes', countWords('') === 0 && countWords('Caffè e montagna') === 3);
 
 globalThis.__cometFailures = (globalThis.__cometFailures ?? 0) + failures;

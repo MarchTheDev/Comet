@@ -15,6 +15,8 @@ const dir = path.join('.test-build');
 mkdirSync(dir, { recursive: true });
 const checks = [
   'tests/markdown.test.mjs',
+  'tests/vault.test.mjs',
+  'tests/saveQueue.test.mjs',
 ];
 try {
   for (const file of checks) {

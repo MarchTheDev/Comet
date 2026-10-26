@@ -179,6 +179,29 @@ body {
   height: 10px;
 }
 
+.comet-tree-item {
+  padding: 2px 8px 2px 6px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.comet-tree-item:hover {
+  background-color: #16131f;
+}
+
+.comet-tree-selected {
+  color: #b9a07e;
+  background-color: #1a1724;
+}
+
+.comet-tree-glyph {
+  color: #8b8577;
+  margin-right: 6px;
+  display: inline-block;
+  width: 12px;
+}
 .comet-statusbar {
   display: flex;
   justify-content: space-between;

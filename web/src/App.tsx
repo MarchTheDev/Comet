@@ -42,6 +42,41 @@ function buildTree(entries: Entry[], vault: string): TreeNode[] {
   return roots;
 }
 
+interface TreeNodeViewProps {
+  node: TreeNode;
+  depth: number;
+  selectedPath: string;
+  onSelect: (p: string) => void;
+}
+
+function TreeNodeView({ node, depth, selectedPath, onSelect }: TreeNodeViewProps) {
+  const isFolder = node.kind === "folder";
+  const isSelected = node.path === selectedPath;
+  const indent = "  ".repeat(depth);
+  return (
+    <>
+      <div
+        className={isSelected ? "comet-tree-item comet-tree-selected" : "comet-tree-item"}
+        onClick={() => onSelect(node.path)}
+        style={{ paddingLeft: `${depth * 14 + 6}px` }}
+      >
+        <span className="comet-tree-glyph">{isFolder ? "+" : " "}</span>
+        {indent}
+        {node.name}
+      </div>
+      {isFolder &&
+        node.children.map((child) => (
+          <TreeNodeView
+            key={child.path}
+            node={child}
+            depth={depth + 1}
+            selectedPath={selectedPath}
+            onSelect={onSelect}
+          />
+        ))}
+    </>
+  );
+}
 function App() {
   const [vaultPath, setVaultPath] = useState("");
   const [entries, setEntries] = useState<Entry[]>([]);
@@ -110,6 +145,15 @@ function App() {
           <div className="comet-pane-title">explorer</div>
           <div className="comet-tree">
             {tree.length === 0 && <div className="comet-empty">empty vault</div>}
+            {tree.map((node) => (
+              <TreeNodeView
+                key={node.path}
+                node={node}
+                depth={0}
+                selectedPath={selectedPath}
+                onSelect={setSelectedPath}
+              />
+            ))}
           </div>
         </aside>
         <section className="comet-pane comet-editor">

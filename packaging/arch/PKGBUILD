@@ -1,0 +1,27 @@
+# Maintainer: Marco <marco@example.com>
+pkgname=comet
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="A local first note taking app"
+arch=any
+license=GPL-3.0
+depends=(libwebkit2gtk-4.1-0 gtk3-libsoup3.0 libayatana-appindicator3-1 librsvg2-gdk-pixbuf2)
+makedepends=(base-devel rustup nodejs npm)
+provides=(comet)
+conflicts=(comet)
+
+source=(
+  "https://github.com/MarchTheDev/Comet/releases/download/v$pkgver/Comet-$pkgver-linux-portable.tar.gz"
+)
+
+sha256sums=('SKIP')
+
+package() {
+  install -Dm755 "$srcdir/comet" "$pkgdir/usr/bin/comet"
+  install -Dm644 "$srcdir/comet.desktop" "$pkgdir/usr/share/applications/comet.desktop"
+  install -Dm644 "$srcdir/comet-x11" "$pkgdir/usr/bin/comet-x11"
+  install -Dm644 "$srcdir/comet-x11.desktop" "$pkgdir/usr/share/applications/comet-x11.desktop"
+  install -Dm644 "$srcdir/comet.png" "$pkgdir/usr/share/icons/hicolor/128x128/apps/comet.png"
+  install -Dm644 "$srcdir/comet.png" "$pkgdir/usr/share/pixmaps/comet.png"
+  install -Dm644 "$srcdir/LICENSE" "$pkgdir/usr/share/licenses/comet/LICENSE"
+}

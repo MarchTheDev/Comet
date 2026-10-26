@@ -1,0 +1,5 @@
+# Input method rules for Comet.
+# Comet's interface is drawn in a monospace face that ships with the desktop,
+# so no input method override is needed. Kept as an empty rules file so that
+# package tooling that copies the directory finds the file it expects.
+1337:ControlOverride

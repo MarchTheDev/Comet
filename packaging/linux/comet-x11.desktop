@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Comet (X11)
+Comment=The same Comet, forced onto X11 for sessions where the native Wayland window misbehaves
+# Calls `env` rather than the comet-x11 wrapper so that this entry works even
+# if a package failed to keep the wrapper executable. Same variable, same
+# binary, no dependency on a file mode.
+Exec=env GDK_BACKEND=x11 comet
+Icon=comet
+Terminal=false
+Categories=Utility;NoteTaking;
+Keywords=notes;markdown;comet;x11;xwayland;
+StartupWMClass=com.comet.launcher

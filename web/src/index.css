@@ -1,0 +1,191 @@
+@import "tailwindcss";
+
+@theme {
+  --font-mono: "JetBrains Mono", "Fira Code", ui-monospace, SFMono-Regular, Menlo,
+    Consolas, "Liberation Mono", monospace;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background-color: #0b0a16;
+  color: #e6e6e6;
+  font-family: var(--font-mono);
+}
+
+.comet-root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background-color: #0b0a16;
+}
+
+.comet-topbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 8px 14px;
+  border-bottom: 1px solid #26232e;
+  background-color: #0d0b14;
+}
+
+.comet-brand {
+  color: #b9a07e;
+  font-weight: 700;
+  letter-spacing: 2px;
+}
+
+.comet-vault {
+  flex: 1;
+  color: #8b8577;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.comet-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.comet-btn {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: #e6e6e6;
+  background-color: transparent;
+  border: 1px solid #3a3646;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+
+.comet-btn:disabled {
+  color: #55504a;
+  cursor: default;
+}
+
+.comet-btn:not(:disabled):hover {
+  border-color: #b9a07e;
+  color: #b9a07e;
+}
+
+.comet-main {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.comet-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  background-color: #0b0a16;
+}
+
+.comet-explorer {
+  width: 260px;
+  border-right: 1px solid #26232e;
+}
+
+.comet-editor {
+  flex: 1;
+}
+
+.comet-preview {
+  flex: 1;
+}
+
+.comet-pane-title {
+  padding: 6px 10px;
+  font-size: 11px;
+  letter-spacing: 2px;
+  color: #8b8577;
+  border-bottom: 1px solid #1d1a26;
+  text-transform: uppercase;
+}
+
+.comet-tree {
+  flex: 1;
+  overflow: auto;
+  padding: 6px 0;
+  font-size: 13px;
+  line-height: 1.8;
+}
+
+.comet-empty {
+  padding: 12px;
+  color: #55504a;
+}
+
+.comet-editor-area {
+  flex: 1;
+  width: 100%;
+  resize: none;
+  border: none;
+  outline: none;
+  background-color: transparent;
+  color: #e6e6e6;
+  font-family: var(--font-mono);
+  font-size: 14px;
+  line-height: 1.7;
+  padding: 12px 14px;
+}
+
+.comet-preview-note {
+  padding: 12px;
+  color: #8b8577;
+}
+
+.comet-preview-body {
+  flex: 1;
+  overflow: auto;
+  padding: 12px 14px;
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.comet-h1 {
+  font-size: 22px;
+  color: #b9a07e;
+  margin: 8px 0 4px;
+}
+
+.comet-h2 {
+  font-size: 18px;
+  color: #b9a07e;
+  margin: 8px 0 4px;
+}
+
+.comet-h3 {
+  font-size: 15px;
+  color: #b9a07e;
+  margin: 8px 0 4px;
+}
+
+.comet-code {
+  background-color: #12101a;
+  border: 1px solid #26232e;
+  padding: 10px;
+  font-size: 12px;
+  overflow: auto;
+}
+
+.comet-padding {
+  height: 10px;
+}
+
+.comet-statusbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 5px 14px;
+  border-top: 1px solid #26232e;
+  background-color: #0d0b14;
+  color: #8b8577;
+  font-size: 11px;
+}

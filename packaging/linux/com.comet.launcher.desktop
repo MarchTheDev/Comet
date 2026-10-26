@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Comet (Launcher)
+Comment=Launch Comet through the AppImage
+Exec=AppRun
+Icon=comet
+Terminal=false
+Categories=Utility;NoteTaking;
+Keywords=notes;markdown;comet;launcher;
+StartupWMClass=com.comet.launcher

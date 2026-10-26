@@ -1,0 +1,13 @@
+{
+  "name": "comet",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Comet - a local first note taking app",
+  "type": "module",
+  "scripts": {
+    "postinstall": "npm --prefix web install",
+    "dev": "npm --prefix web run dev",
+    "build": "npm --prefix web run build",
+    "tauri": "npm --prefix web run tauri"
+  }
+}

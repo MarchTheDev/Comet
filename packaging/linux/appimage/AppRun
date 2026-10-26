@@ -1,0 +1,8 @@
+#!/bin/sh
+# AppImage entry point.
+# Resolves the binary relative to itself, because nothing inside a mounted
+# image is on the PATH.
+#!/bin/sh
+SELF="$(readlink -f "$0")"
+HERE="$(dirname "$SELF")"
+exec env GDK_BACKEND="${GDK_BACKEND:-}" comet "$@"

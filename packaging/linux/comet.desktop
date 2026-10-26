@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Comet
+Comment=A local first note taking app
+Exec=comet
+Icon=comet
+Terminal=false
+Categories=Utility;NoteTaking;
+Keywords=notes;markdown;comet;
+StartupWMClass=com.comet.launcher

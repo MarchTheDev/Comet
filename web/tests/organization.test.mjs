@@ -2,7 +2,7 @@ import { createSampleVault, SAMPLE_ROOT } from '../src/utils/sampleVault.ts';
 import { joinPath } from '../src/utils/vault.ts';
 import { fileKind, isTextFile, youtubeIds } from '../src/utils/fileTypes.ts';
 import { emptyWorkspaceMeta, itemMeta, updateItem, renameMeta, removeMeta, reorderChildren, readWorkspaceMeta, saveWorkspaceMeta } from '../src/utils/workspaceMeta.ts';
-import { readVaultList, saveVaultList } from '../src/utils/vaultList.ts';
+import { readVaultList, saveVaultList, reorderVaults } from '../src/utils/vaultList.ts';
 
 let failures = 0;
 function check(name, ok) { if (ok) console.log(`  ok   ${name}`); else { failures++; console.log(`  FAIL ${name}`); } }
@@ -25,6 +25,11 @@ check('persists workspace organization per vault', saveWorkspaceMeta('/vault', m
 meta = removeMeta(meta, '/vault/Ideas');
 check('removes a folder’s item and order metadata without deleting tag definitions', Object.keys(meta.items).length === 0 && Object.keys(meta.order).length === 0 && meta.tags.length === 1);
 check('remembers distinct vaults', saveVaultList(['/vault', '/vault', '/other'], store) && readVaultList(store).join('|') === '/vault|/other');
+check('workspaces including the sample can be reordered', reorderVaults([SAMPLE_ROOT, '/vault', '/other'], '/other', SAMPLE_ROOT, false).join('|') === `/other|${SAMPLE_ROOT}|/vault`);
+check('removing the sample from the list persists without deleting its data', saveVaultList(['/vault'], store) && !readVaultList(store).includes(SAMPLE_ROOT));
+const legacyVaults = new Map([['comet:vault-list:v1', JSON.stringify(['/legacy'])]]);
+const legacyStore = { getItem: (key) => legacyVaults.get(key) ?? null, setItem: (key, value) => legacyVaults.set(key, value) };
+check('migrates older workspace lists with the sample included', readVaultList(legacyStore).join('|') === `${SAMPLE_ROOT}|/legacy`);
 
 const sample = createSampleVault(store);
 const a = joinPath(SAMPLE_ROOT, 'MoveA'), b = joinPath(SAMPLE_ROOT, 'MoveB');

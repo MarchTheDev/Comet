@@ -24,6 +24,7 @@ const checks = [
   'tests/richText.test.mjs',
   'tests/saveQueue.test.mjs',
   'tests/newFeatures.test.mjs',
+  'tests/boardInteractions.test.mjs',
 ];
 try {
   for (const file of checks) {

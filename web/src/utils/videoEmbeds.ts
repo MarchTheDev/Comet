@@ -1,9 +1,13 @@
+import { createElement } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { VideoPlayer } from "../MediaPlayer";
 import { Extension } from "@tiptap/core";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
 import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
 import { videoLink, type VideoLink } from "./links";
 
+const roots = new WeakMap<Node, Root>();
 function player(video: VideoLink): HTMLElement {
   const wrap = document.createElement("span");
   wrap.className = "inline-video";
@@ -17,10 +21,8 @@ function player(video: VideoLink): HTMLElement {
     frame.referrerPolicy = "strict-origin-when-cross-origin";
     wrap.appendChild(frame);
   } else {
-    const element = document.createElement("video");
-    element.controls = true; element.preload = "metadata"; element.src = video.url;
-    element.textContent = "Your browser cannot play this video.";
-    wrap.appendChild(element);
+    const root = createRoot(wrap); roots.set(wrap, root);
+    root.render(createElement(VideoPlayer, { url: video.url, name: "Linked video" }));
   }
   return wrap;
 }
@@ -33,7 +35,7 @@ function decorations(doc: ProseMirrorNode): DecorationSet {
     const link = videoLink(url); if (!link) return;
     const identity = link.kind === "youtube" ? `youtube:${link.id}` : `video:${link.url}`;
     const occurrence = counts.get(identity) ?? 0; counts.set(identity, occurrence + 1);
-    widgets.push(Decoration.widget(pos, () => player(link), { key: `${identity}:${occurrence}`, side: 1, ignoreSelection: true }));
+    widgets.push(Decoration.widget(pos, () => player(link), { key: `${identity}:${occurrence}`, side: 1, ignoreSelection: true, destroy: (node) => { const root = roots.get(node); if (root) { roots.delete(node); queueMicrotask(() => root.unmount()); } } }));
   };
   doc.descendants((node, pos) => {
     if (!node.isTextblock) return;

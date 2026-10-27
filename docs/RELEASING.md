@@ -41,7 +41,7 @@ remove either.
    leaves an already-published release untouched.
 
 To build locally on Windows, install Rust with the MSVC toolchain, Visual Studio
-Build Tools with **Desktop development with C++**, Node.js 20.19+ or 22.12+, and
+Build Tools with **Desktop development with C++**, Node.js 22.13 or newer, and
 WebView2. Then run:
 
 ```powershell

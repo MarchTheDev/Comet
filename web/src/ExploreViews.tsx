@@ -1,37 +1,50 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, FileText, Folder, FolderOpen, GitBranch, Minus, Network, Plus } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { ChevronDown, ChevronRight, GitBranch, Minus, Network, Plus, RotateCcw } from "lucide-react";
+import { FileIcon } from "./FileIcon";
 import { graphEdges } from "./utils/graph";
-import { isMarkdown, normalizePath, noteTitle, type Entry, type TreeNode } from "./utils/vault";
+import { isMarkdown, isPathInside, normalizePath, noteTitle, type Entry, type TreeNode } from "./utils/vault";
 import { readNote } from "./utils/vaultBridge";
 
-interface Common { vault: string; name: string; onOpen: (entry: Entry) => void; selectedPaths: Set<string>; onActivate: (event: React.MouseEvent, entry: Entry, order: string[]) => void }
+interface Common { vault: string; name: string; onOpen: (entry: Entry) => void; selectedPaths: Set<string>; onActivate: (event: React.MouseEvent, entry: Entry, order: string[]) => void; onClearSelection: () => void }
+
+/** A branching workspace map: the root and folder dots reveal their children. */
 export function TreeExplore({ tree, name, selectedPaths, onActivate }: Common & { tree: TreeNode[] }) {
-  const [expanded, setExpanded] = useState<Set<string>>(() => new Set(tree.filter((node) => node.kind === "folder").map((node) => node.path)));
-  const ordered = useMemo(() => { const result: string[] = []; const walk = (nodes: TreeNode[]) => { for (const node of nodes) { result.push(node.path); if (node.kind === "folder" && expanded.has(node.path)) walk(node.children); } }; walk(tree); return result; }, [tree, expanded]);
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+  const [rootOpen, setRootOpen] = useState(false);
+  const ordered = useMemo(() => { const result: string[] = []; const walk = (nodes: TreeNode[]) => { for (const node of nodes) { result.push(node.path); if (node.kind === "folder" && expanded.has(node.path)) walk(node.children); } }; if (rootOpen) walk(tree); return result; }, [tree, expanded, rootOpen]);
   const toggle = (path: string) => setExpanded((previous) => { const next = new Set(previous); if (next.has(path)) next.delete(path); else next.add(path); return next; });
-  const branch = (nodes: TreeNode[], depth: number): React.ReactNode => nodes.map((node) => <div className="explore-branch" key={node.path}>
-    <div className={`explore-tree-row${selectedPaths.has(node.path) ? " multi-selected" : ""}`} style={{ paddingLeft: 14 + depth * 23 }}>
-      {node.kind === "folder" ? <button className="explore-disclosure" type="button" aria-label={`${expanded.has(node.path) ? "Collapse" : "Expand"} ${node.name}`} aria-expanded={expanded.has(node.path)} onClick={() => toggle(node.path)}>{expanded.has(node.path) ? <ChevronDown size={16} /> : <ChevronRight size={16} />}</button> : <span className="explore-disclosure" />}
-      <button className="explore-tree-open" type="button" aria-pressed={selectedPaths.has(node.path)} onClick={(event) => onActivate(event, node, ordered)}>{node.kind === "folder" ? expanded.has(node.path) ? <FolderOpen size={18} /> : <Folder size={18} /> : <FileText size={18} />}<span>{node.kind === "file" && isMarkdown(node.path) ? noteTitle(node.name) : node.name}</span><small>{node.kind === "folder" ? `${node.children.length} ${node.children.length === 1 ? "item" : "items"}` : "File"}</small><ChevronRight size={15} /></button>
-    </div>
-    {node.kind === "folder" && expanded.has(node.path) && branch(node.children, depth + 1)}
-  </div>);
-  return <section className="explore-card" aria-labelledby="tree-title"><div className="explore-heading"><span className="explore-heading-icon"><GitBranch size={20} /></span><div><span className="section-eyebrow">EXPLORE YOUR SPACE</span><h2 id="tree-title">Tree view</h2><p>{name}, laid out from the top down. Expand folders or open an item.</p></div></div><div className="explore-tree">{tree.length ? branch(tree, 0) : <p className="explore-empty">Your workspace is empty.</p>}</div></section>;
+  const branch = (nodes: TreeNode[]): React.ReactNode => <ul className="tree-map-children">{nodes.map((node) => <li className="tree-map-branch" key={node.path}>
+    <button type="button" className={`tree-map-node${selectedPaths.has(node.path) ? " multi-selected" : ""}`} aria-expanded={node.kind === "folder" ? expanded.has(node.path) : undefined} aria-pressed={node.kind === "file" ? selectedPaths.has(node.path) : undefined} onClick={(event) => { if (node.kind === "folder" && !event.ctrlKey && !event.metaKey && !event.shiftKey) toggle(node.path); else onActivate(event, node, ordered); }}>
+      <span className={`tree-map-dot ${node.kind}`} aria-hidden="true" /><span className={`tree-map-icon ${node.kind === "folder" ? "folder" : "file"}`}><FileIcon entry={node} size={17} expanded={expanded.has(node.path)} /></span><span className="tree-map-name">{node.kind === "file" && isMarkdown(node.path) ? noteTitle(node.name) : node.name}</span>{node.kind === "folder" && <><small>{node.children.length}</small>{expanded.has(node.path) ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</>}
+    </button>{node.kind === "folder" && expanded.has(node.path) && (node.children.length ? branch(node.children) : <p className="tree-map-empty">Empty folder</p>)}
+  </li>)}</ul>;
+  return <section className="explore-card tree-map-card" aria-labelledby="tree-title"><div className="explore-heading"><span className="explore-heading-icon"><GitBranch size={20} /></span><div><span className="section-eyebrow">EXPLORE YOUR SPACE</span><h2 id="tree-title">Tree view</h2><p>Start at the workspace, then open the dots to reveal folders and files.</p></div></div>
+    <div className="tree-map"><button type="button" className="tree-map-node tree-map-root" aria-expanded={rootOpen} onClick={() => setRootOpen((open) => !open)}><span className="tree-map-dot root" /><span className="tree-map-name">{name}</span><small>{tree.length} items</small>{rootOpen ? <ChevronDown size={15} /> : <ChevronRight size={15} />}</button>{rootOpen && (tree.length ? branch(tree) : <p className="tree-map-empty">Your workspace is empty.</p>)}</div>
+  </section>;
 }
 
-interface Positioned { entry: Entry; x: number; y: number }
-export function BrainExplore({ vault, name, entries, onOpen, onActivate, selectedPaths }: Common & { entries: Entry[] }) {
+type Point = { x: number; y: number };
+interface Positioned extends Point { entry: Entry }
+const graphKey = (vault: string) => `comet:graph-layout:v1:${encodeURIComponent(normalizePath(vault))}`;
+function readPositions(vault: string): Record<string, Point> {
+  try {
+    const value: unknown = JSON.parse(localStorage.getItem(graphKey(vault)) || "{}");
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+    return Object.fromEntries(Object.entries(value).filter(([path, point]) => isPathInside(path, vault) && point && typeof point === "object" && Number.isFinite((point as Point).x) && Number.isFinite((point as Point).y) && Math.abs((point as Point).x) < 100_000 && Math.abs((point as Point).y) < 100_000).slice(0, 1000)) as Record<string, Point>;
+  } catch { return {}; }
+}
+
+export function BrainExplore({ vault, name, entries, onOpen, onActivate, selectedPaths, onClearSelection }: Common & { entries: Entry[] }) {
   const [contents, setContents] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
-  const [zoom, setZoom] = useState(1);
+  const [zoom, setZoom] = useState(() => typeof window !== "undefined" && window.innerWidth <= 600 ? 1.3 : 1);
+  const [pan, setPan] = useState<Point>({ x: 0, y: 0 });
+  const [positions, setPositions] = useState<Record<string, Point>>(() => readPositions(vault));
+  const [dragging, setDragging] = useState(false);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<"all" | "notes">("all");
-  const stage = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const element = stage.current; if (!element) return;
-    element.scrollLeft = Math.max(0, (element.scrollWidth - element.clientWidth) / 2);
-    element.scrollTop = Math.max(0, (element.scrollHeight - element.clientHeight) / 2);
-  }, [zoom]);
+  const svg = useRef<SVGSVGElement>(null);
+  const suppressClick = useRef(false);
   const notes = useMemo(() => entries.filter((entry) => entry.kind === "file" && isMarkdown(entry.path)), [entries]);
   useEffect(() => {
     let cancelled = false;
@@ -50,21 +63,58 @@ export function BrainExplore({ vault, name, entries, onOpen, onActivate, selecte
   }, [notes, vault]);
   const filtered = useMemo(() => entries.filter((entry) => (filter === "all" || entry.kind === "file" && isMarkdown(entry.path)) && entry.name.toLowerCase().includes(query.toLowerCase().trim())).slice(0, 150), [entries, filter, query]);
   const positioned = useMemo<Positioned[]>(() => filtered.map((entry, index) => {
-    // A deterministic phyllotaxis layout spreads even large workspaces without
-    // a simulation that keeps the app busy or changes positions on each edit.
     const angle = index * 2.3999632297 - Math.PI / 2;
-    const radius = 75 + Math.sqrt(index / Math.max(1, filtered.length - 1)) * 410;
-    return { entry, x: 600 + Math.cos(angle) * radius, y: 520 + Math.sin(angle) * radius };
-  }), [filtered]);
+    // Keep labels inside a narrow viewport while using a larger, legible
+    // initial zoom there. Users can pan and arrange nodes independently.
+    const radius = 75 + Math.sqrt(index / Math.max(1, filtered.length - 1)) * (typeof window !== "undefined" && window.innerWidth <= 600 ? 330 : 410);
+    return { entry, ...(positions[normalizePath(entry.path)] ?? { x: 600 + Math.cos(angle) * radius, y: 520 + Math.sin(angle) * radius }) };
+  }), [filtered, positions]);
   const edges = useMemo(() => graphEdges(vault, entries, contents), [vault, entries, contents]);
-  const positions = useMemo(() => new Map([[normalizePath(vault), { x: 600, y: 520 }], ...positioned.map(({ entry, x, y }) => [normalizePath(entry.path), { x, y }] as const)]), [positioned, vault]);
-  const drawn = edges.filter((edge) => positions.has(normalizePath(edge.from)) && positions.has(normalizePath(edge.to)));
-  return <section className="explore-card brain-card" aria-labelledby="brain-title"><div className="explore-heading"><span className="explore-heading-icon"><Network size={20} /></span><div><span className="section-eyebrow">EXPLORE YOUR SPACE</span><h2 id="brain-title">Brain view</h2><p>See folders and notes as a network. Solid lines show folders; dotted lines show note links (first 256K characters per note).</p></div></div>
-    <div className="brain-controls"><label><span className="sr-only">Filter graph</span><input aria-label="Filter graph" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Find a node…" /></label><button type="button" aria-pressed={filter === "notes"} onClick={() => setFilter((value) => value === "all" ? "notes" : "all")}>Notes only</button><span className="brain-spacer" /><button type="button" aria-label="Zoom graph out" onClick={() => setZoom((value) => Math.max(.6, Math.round((value - .2) * 10) / 10))}><Minus size={15} /></button><span>{Math.round(zoom * 100)}%</span><button type="button" aria-label="Zoom graph in" onClick={() => setZoom((value) => Math.min(2, Math.round((value + .2) * 10) / 10))}><Plus size={15} /></button></div>
-    <div className="brain-stage" ref={stage}><svg viewBox="0 0 1200 1040" width={1200 * zoom} height={1040 * zoom} role="group" aria-label={`Workspace graph for ${name}`}>
-      <g className="brain-edges">{drawn.map((edge) => { const from = positions.get(normalizePath(edge.from))!, to = positions.get(normalizePath(edge.to))!; return <line key={`${edge.kind}:${edge.from}:${edge.to}`} className={edge.kind} x1={from.x} y1={from.y} x2={to.x} y2={to.y} />; })}</g>
-      <g className="brain-root" transform="translate(600 520)"><circle r="23" /><text textAnchor="middle" y="40">{name.slice(0, 22)}</text></g>
-      {positioned.map(({ entry, x, y }) => <g className={`brain-node ${entry.kind}${selectedPaths.has(entry.path) ? " multi-selected" : ""}`} key={entry.path} transform={`translate(${x} ${y})`} role="button" tabIndex={0} aria-label={`Open ${entry.name}`} aria-pressed={selectedPaths.has(entry.path)} onClick={(event) => onActivate(event, entry, positioned.map((node) => node.entry.path))} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onOpen(entry); } }}><title>{entry.path}</title><circle r={entry.kind === "folder" ? 15 : 11} /><text textAnchor="middle" y="27">{(entry.kind === "file" && isMarkdown(entry.path) ? noteTitle(entry.name) : entry.name).slice(0, 22)}</text></g>)}
+  const rootPosition = positions[normalizePath(vault)] ?? { x: 600, y: 520 };
+  const positionMap = useMemo(() => new Map([[normalizePath(vault), rootPosition], ...positioned.map(({ entry, x, y }) => [normalizePath(entry.path), { x, y }] as const)]), [positioned, vault, rootPosition.x, rootPosition.y]);
+  const drawn = edges.filter((edge) => positionMap.has(normalizePath(edge.from)) && positionMap.has(normalizePath(edge.to)));
+  const svgPoint = (clientX: number, clientY: number): Point => {
+    const element = svg.current; if (!element) return { x: clientX, y: clientY };
+    const point = element.createSVGPoint(); point.x = clientX; point.y = clientY;
+    const matrix = element.getScreenCTM(); if (!matrix) return { x: clientX, y: clientY };
+    const result = point.matrixTransform(matrix.inverse()); return { x: result.x, y: result.y };
+  };
+  const startDrag = (event: ReactPointerEvent, node?: Positioned) => {
+    if (event.button !== 0) return;
+    event.preventDefault(); event.stopPropagation();
+    const pointer = event.pointerId, start = svgPoint(event.clientX, event.clientY), startX = event.clientX, startY = event.clientY;
+    const initialPan = pan, key = node ? normalizePath(node.entry.path) : "";
+    let moved = false, nextPoint = node ? { x: node.x, y: node.y } : null;
+    const move = (e: PointerEvent) => {
+      if (e.pointerId !== pointer) return;
+      if (!moved && Math.hypot(e.clientX - startX, e.clientY - startY) < 4) return;
+      moved = true; setDragging(true); const current = svgPoint(e.clientX, e.clientY);
+      if (node) { nextPoint = { x: Math.max(-99_999, Math.min(99_999, node.x + (current.x - start.x) / zoom)), y: Math.max(-99_999, Math.min(99_999, node.y + (current.y - start.y) / zoom)) }; setPositions((previous) => ({ ...previous, [key]: nextPoint! })); }
+      else setPan({ x: initialPan.x + current.x - start.x, y: initialPan.y + current.y - start.y });
+    };
+    const cleanup = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", end); window.removeEventListener("pointercancel", cancel); setDragging(false); };
+    const end = (e: PointerEvent) => {
+      if (e.pointerId !== pointer) return; cleanup();
+      if (moved && node && nextPoint) {
+        suppressClick.current = true;
+        // Pointer-up can land outside the original node, in which case no
+        // click follows. Do not swallow the user's next intentional click.
+        window.setTimeout(() => { suppressClick.current = false; }, 0);
+        const saved = { ...positions, [key]: nextPoint };
+        try { localStorage.setItem(graphKey(vault), JSON.stringify(saved)); } catch { /* layout is optional */ }
+      } else if (!node && !moved) onClearSelection();
+    };
+    const cancel = (e: PointerEvent) => { if (e.pointerId === pointer) cleanup(); };
+    window.addEventListener("pointermove", move); window.addEventListener("pointerup", end); window.addEventListener("pointercancel", cancel);
+  };
+  return <section className="explore-card brain-card" aria-labelledby="brain-title"><div className="explore-heading"><span className="explore-heading-icon"><Network size={20} /></span><div><span className="section-eyebrow">EXPLORE YOUR SPACE</span><h2 id="brain-title">Brain view</h2><p>Drag the background to move around; drag a node to arrange it. Solid lines show folders, dotted lines show note links.</p></div></div>
+    <div className="brain-controls"><label><span className="sr-only">Filter graph</span><input aria-label="Filter graph" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Find a node…" /></label><button type="button" aria-pressed={filter === "notes"} onClick={() => setFilter((value) => value === "all" ? "notes" : "all")}>Notes only</button><span className="brain-spacer" /><button type="button" aria-label="Reset graph view" title="Reset view" onClick={() => { setZoom(window.innerWidth <= 600 ? 1.3 : 1); setPan({ x: 0, y: 0 }); }}><RotateCcw size={14} /></button><button type="button" aria-label="Zoom graph out" onClick={() => setZoom((value) => Math.max(.6, Math.round((value - .2) * 10) / 10))}><Minus size={15} /></button><span>{Math.round(zoom * 100)}%</span><button type="button" aria-label="Zoom graph in" onClick={() => setZoom((value) => Math.min(2, Math.round((value + .2) * 10) / 10))}><Plus size={15} /></button></div>
+    <div className={`brain-stage${dragging ? " dragging" : ""}`}><svg ref={svg} viewBox="0 0 1200 1040" preserveAspectRatio="xMidYMid meet" role="group" aria-label={`Workspace graph for ${name}`} onPointerDown={(event) => startDrag(event)}>
+      <g transform={`translate(${pan.x} ${pan.y}) translate(600 520) scale(${zoom}) translate(-600 -520)`}>
+        <g className="brain-edges">{drawn.map((edge) => { const from = positionMap.get(normalizePath(edge.from))!, to = positionMap.get(normalizePath(edge.to))!; return <line key={`${edge.kind}:${edge.from}:${edge.to}`} className={edge.kind} x1={from.x} y1={from.y} x2={to.x} y2={to.y} />; })}</g>
+        <g className="brain-root" data-graph-root transform={`translate(${rootPosition.x} ${rootPosition.y})`} aria-label={`Drag ${name} workspace node`} onPointerDown={(event) => startDrag(event, { entry: { path: vault, name, kind: "folder" }, ...rootPosition })}><circle r="35" /><text textAnchor="middle" y="57">{name.slice(0, 22)}</text></g>
+        {positioned.map((node) => { const { entry, x, y } = node; return <g className={`brain-node ${entry.kind}${selectedPaths.has(entry.path) ? " multi-selected" : ""}`} data-graph-path={entry.path} key={entry.path} transform={`translate(${x} ${y})`} role="button" tabIndex={0} aria-label={`Open ${entry.name}`} aria-pressed={selectedPaths.has(entry.path)} onPointerDown={(event) => startDrag(event, node)} onClick={(event) => { if (suppressClick.current) { suppressClick.current = false; return; } onActivate(event, entry, positioned.map((item) => item.entry.path)); }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onOpen(entry); } }}><title>{entry.path}</title><circle r={entry.kind === "folder" ? 25 : 20} /><text textAnchor="middle" y="45">{(entry.kind === "file" && isMarkdown(entry.path) ? noteTitle(entry.name) : entry.name).slice(0, 22)}</text></g>; })}
+      </g>
     </svg></div>
     <div className="brain-caption"><span>{loading ? "Reading note links…" : `${drawn.filter((edge) => edge.kind === "link").length} note links`} · {positioned.length} items shown</span><span>{entries.length > 150 ? "Graph displays up to 150 matching items. " : ""}{notes.length > 120 ? "Links are read from the first 120 notes." : ""}</span></div>
   </section>;

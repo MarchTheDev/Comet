@@ -5,6 +5,8 @@ import { parseTodo, serializeTodo, newTodoDocument } from '../src/utils/todo.ts'
 import { safeWebUrl, parseShortcut, serializeShortcut, videoLink, firstDroppedUrl } from '../src/utils/links.ts';
 import { graphEdges } from '../src/utils/graph.ts';
 import { fileKind } from '../src/utils/fileTypes.ts';
+import { entryIcon } from '../src/FileIcon.tsx';
+import { FileAudio, FileImage, FileVideo, FileType2, ListChecks, Folder } from 'lucide-react';
 import { readWorkspaceIdentities, saveWorkspaceIdentities, identityFor } from '../src/utils/workspaceIdentity.ts';
 
 let failures = 0;
@@ -19,16 +21,28 @@ check('modifier click toggles an item independently', !selected.selected.has('/v
 check('deduplicates descendants before deleting', selectionRoots(['/vault/a/x', '/vault/b', '/vault/a', '/vault/a/y']).join() === '/vault/b,/vault/a' || selectionRoots(['/vault/a/x', '/vault/b', '/vault/a', '/vault/a/y']).sort().join() === '/vault/a,/vault/b');
 check('editable text limits count UTF-8 bytes and reject NULs before writing', !editableTextError('plain text') && !!editableTextError('a\0b') && !editableTextError('a'.repeat(MAX_EDITABLE_BYTES)) && !!editableTextError('😀'.repeat(MAX_EDITABLE_BYTES / 4 + 1)));
 check('distinguishes PDF, link and dedicated board files', fileKind('a.PDF') === 'pdf' && fileKind('v.url') === 'link' && fileKind('plan.comet-todo') === 'todo');
+const iconEntry = (path, kind = 'file') => ({ name: path, path, kind });
+check('uses distinct icons for media, PDFs, to-do boards and folders wherever files are listed', entryIcon(iconEntry('song.mp3')) === FileAudio && entryIcon(iconEntry('pic.png')) === FileImage && entryIcon(iconEntry('clip.webm')) === FileVideo && entryIcon(iconEntry('paper.pdf')) === FileType2 && entryIcon(iconEntry('plan.comet-todo')) === ListChecks && entryIcon(iconEntry('notes', 'folder')) === Folder);
 check('round-trips standard web shortcut data', parseShortcut(serializeShortcut('https://youtu.be/dQw4w9WgXcQ')) === 'https://youtu.be/dQw4w9WgXcQ');
 check('rejects dangerous, malformed and credentialed links', ['javascript:alert(1)', 'file:///etc/passwd', 'https://user:secret@example.com/', 'https://'].every((url) => safeWebUrl(url) === null));
 check('extracts only a validated YouTube id or supported direct video link', videoLink('https://youtu.be/dQw4w9WgXcQ')?.kind === 'youtube' && videoLink('https://example.com/a.mp4?x=1')?.kind === 'video' && !videoLink('https://youtube.com.evil/watch?v=dQw4w9WgXcQ'));
 check('reads the first valid URI dropped from a browser', firstDroppedUrl('# source\nhttps://example.com/watch\n', 'ignore') === 'https://example.com/watch');
 const board = newTodoDocument();
-board.lists[0].tasks.push({ id: 'task', text: 'One', done: false, notes: 'Details' });
-check('to-do board round-trips tasks, notes and connections', JSON.stringify(parseTodo(serializeTodo(board))) === JSON.stringify(board));
+board.categories.push({ id: 'category', title: 'Work', color: '#123456' });
+board.tasks.push({ id: 'task', text: 'One', done: false, notes: 'Details', x: 20, y: 30, categoryId: 'category' }, { id: 'task2', text: 'Two', done: true, notes: '', x: 400, y: 50, categoryId: null });
+board.connections.push({ from: 'task', to: 'task2' });
+check('new to-do boards start as a blank canvas without default lines', newTodoDocument().tasks.length === 0 && newTodoDocument().connections.length === 0);
+check('to-do canvas round-trips tasks, positions, categories and task connections', JSON.stringify(parseTodo(serializeTodo(board))) === JSON.stringify(board));
+const legacy = { format: 'comet-todo', version: 1, lists: [
+  { id: 'a', title: 'Backlog', color: '#112233', tasks: [{ id: 'old-task', text: 'Keep', done: true, notes: 'Important detail' }] },
+  { id: 'b', title: 'Done', color: '#334455', tasks: [] },
+], connections: [{ from: 'a', to: 'b' }] };
+const migrated = parseTodo(JSON.stringify(legacy));
+check('legacy list tasks and connections survive in-memory migration without drawing default lines', migrated?.version === 2 && migrated.tasks[0].notes === 'Important detail' && migrated.tasks[0].done && migrated.tasks[0].categoryId === 'a' && migrated.categories[1].title === 'Done' && migrated.connections.length === 0 && migrated.legacyListConnections[0].to === 'b');
+check('migrated board remains valid after serialization', parseTodo(serializeTodo(migrated))?.legacyListConnections.length === 1);
 const invalid = { ...board, futureField: 'keep me' };
-check('unknown board fields and future versions are rejected without serialization', parseTodo(JSON.stringify(invalid)) === null && parseTodo(JSON.stringify({ ...board, version: 2 })) === null);
-check('corrupt or duplicate IDs and unknown connections cannot become editable boards', parseTodo('{bad') === null && parseTodo(JSON.stringify({ ...board, lists: [board.lists[0], board.lists[0]] })) === null && parseTodo(JSON.stringify({ ...board, connections: [{ from: board.lists[0].id, to: 'missing' }] })) === null);
+check('unknown board fields and future versions are rejected without serialization', parseTodo(JSON.stringify(invalid)) === null && parseTodo(JSON.stringify({ ...board, version: 3 })) === null);
+check('corrupt or duplicate IDs, invalid coordinates and unknown connections cannot become editable boards', parseTodo('{bad') === null && parseTodo(JSON.stringify({ ...board, tasks: [board.tasks[0], board.tasks[0]] })) === null && parseTodo(JSON.stringify({ ...board, tasks: [{ ...board.tasks[0], x: -1 }] })) === null && parseTodo(JSON.stringify({ ...board, connections: [{ from: board.tasks[0].id, to: 'missing' }] })) === null);
 const entries = [
   { path: '/vault/Notes', name: 'Notes', kind: 'folder' },
   { path: '/vault/Notes/One.md', name: 'One.md', kind: 'file' },

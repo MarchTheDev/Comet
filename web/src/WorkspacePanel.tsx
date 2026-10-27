@@ -1,4 +1,5 @@
-import { File, FileAudio, FileImage, FileText, FileVideo, FileType2, Link2, ListChecks, Folder, Grid2X2, List, MoreHorizontal, Pin, Plus, SlidersHorizontal, Star } from "lucide-react";
+import { Folder, Grid2X2, List, MoreHorizontal, Pin, Plus, SlidersHorizontal, Star } from "lucide-react";
+import { FileIcon } from "./FileIcon";
 import type { CSSProperties, DragEvent, MouseEvent } from "react";
 import { fileKind, fileKindLabel } from "./utils/fileTypes";
 import { itemMeta, type WorkspaceMeta } from "./utils/workspaceMeta";
@@ -27,12 +28,6 @@ interface Props {
   dropFolder: string;
 }
 
-function EntryIcon({ entry, size }: { entry: Entry; size: number }) {
-  const kind = entry.kind === "folder" ? "folder" : fileKind(entry.path);
-  const Icon = kind === "folder" ? Folder : kind === "image" ? FileImage : kind === "audio" ? FileAudio : kind === "video" ? FileVideo : kind === "pdf" ? FileType2 : kind === "link" ? Link2 : kind === "todo" ? ListChecks : kind === "other" ? File : FileText;
-  return <Icon size={size} strokeWidth={1.65} aria-hidden="true" />;
-}
-
 export function WorkspacePanel({ title, description, entries, vault, destination, metadata, layout, iconSize, onLayout, onIconSize, onOpen, selectedPaths, onMenu, onBackgroundMenu, onCreate, onDragStart, onDragOver, onDrop, dropFolder }: Props) {
   return <section className={`overview-card workspace-panel${dropFolder === destination ? " drop-target" : ""}`} aria-label={title} data-drop-folder={destination}
     onContextMenu={(event) => { if (!(event.target as Element).closest(".workspace-entry")) onBackgroundMenu(event, destination); }}
@@ -58,7 +53,7 @@ export function WorkspacePanel({ title, description, entries, vault, destination
           onDragOver={entry.kind === "folder" ? (event) => onDragOver(event, entry.path) : undefined}
           onDrop={entry.kind === "folder" ? (event) => { event.stopPropagation(); onDrop(event, entry.path); } : undefined}>
           <button className="workspace-entry-open" type="button" aria-pressed={selectedPaths.has(entry.path)} onClick={(event) => onOpen(event, entry)}>
-            <span className={`workspace-entry-icon ${entry.kind === "folder" ? "folder" : fileKind(entry.path)}`}><EntryIcon entry={entry} size={iconSize} /></span>
+            <span className={`workspace-entry-icon ${entry.kind === "folder" ? "folder" : fileKind(entry.path)}`}><FileIcon entry={entry} size={iconSize} /></span>
             <span className="workspace-entry-copy"><strong title={entry.name}>{label}</strong><small>{entry.kind === "folder" ? "Folder" : fileKindLabel(entry.path)}{layout === "list" && ` · ${parentPath(entry.path) === vault ? "Workspace" : relativePath(parentPath(entry.path), vault)}`}</small>{tags.length > 0 && <span className="entry-tags">{tags.slice(0, 3).map((tag) => <span className="entry-tag" key={tag.id} style={{ "--tag-color": tag.color } as CSSProperties}>{tag.name}</span>)}</span>}</span>
             <span className="entry-badges">{details.pinned && <Pin size={13} aria-label="Pinned" />}{details.favorite && <Star size={14} aria-label="Favorite" />}</span>
           </button>

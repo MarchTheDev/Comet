@@ -1,6 +1,6 @@
 import { fileName } from "./vault";
 
-export type FileKind = "markdown" | "text" | "image" | "audio" | "video" | "pdf" | "link" | "todo" | "other";
+export type FileKind = "markdown" | "text" | "image" | "audio" | "video" | "pdf" | "ebook" | "link" | "todo" | "whiteboard" | "other";
 const TEXT_EXTENSIONS = new Set(["txt", "text", "log", "csv", "tsv", "json", "jsonl", "xml", "yaml", "yml", "toml", "ini", "cfg", "conf", "html", "htm", "css", "js", "jsx", "ts", "tsx", "py", "rs", "sh", "sql", "tex", "rst"]);
 const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "avif"]);
 const AUDIO_EXTENSIONS = new Set(["mp3", "wav", "ogg", "opus", "m4a", "aac", "flac", "weba"]);
@@ -20,8 +20,10 @@ export function fileKind(path: string): FileKind {
   if (AUDIO_EXTENSIONS.has(extension)) return "audio";
   if (VIDEO_EXTENSIONS.has(extension)) return "video";
   if (extension === "pdf") return "pdf";
+  if (extension === "epub") return "ebook";
   if (extension === "url") return "link";
   if (extension === "comet-todo") return "todo";
+  if (extension === "comet-whiteboard") return "whiteboard";
   return "other";
 }
 
@@ -38,8 +40,10 @@ export function fileKindLabel(path: string): string {
   if (kind === "audio") return "Audio";
   if (kind === "video") return "Video";
   if (kind === "pdf") return "PDF document";
+  if (kind === "ebook") return "EPUB book";
   if (kind === "link") return "Web link";
   if (kind === "todo") return "To-do board";
+  if (kind === "whiteboard") return "Whiteboard";
   const extension = extensionOf(path);
   return extension ? `${extension.toUpperCase()} file` : "File";
 }

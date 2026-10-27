@@ -25,6 +25,7 @@
     "@tiptap/react": "^3.0.0",
     "@tiptap/starter-kit": "^3.0.0",
     "clsx": "2.1.1",
+    "epubjs": "^0.3.93",
     "lucide-react": "^1.52.0",
     "music-metadata": "^12.3.2",
     "pdfjs-dist": "^6.4.299",
@@ -45,5 +46,10 @@
     "typescript": "5.9.3",
     "vite": "7.3.7",
     "vite-plugin-singlefile": "2.3.0"
+  },
+  "overrides": {
+    "epubjs": {
+      "@xmldom/xmldom": "^0.9.12"
+    }
   }
 }

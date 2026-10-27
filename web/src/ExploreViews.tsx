@@ -127,9 +127,14 @@ export function BrainExplore({ vault, name, entries, onOpen, onActivate, onConte
     const root = positions[normalizePath(vault)] ?? { x: 600, y: 520 };
     const placed = new Map<string, Point>([[normalizePath(vault), root]]);
     const siblings = new Map<string, number>(), siblingCounts = new Map<string, number>();
-    ordered.forEach((entry) => { const parent = normalizePath(parentPath(entry.path)); siblingCounts.set(parent, (siblingCounts.get(parent) ?? 0) + 1); });
+    const rootPath = normalizePath(vault), visible = new Set(ordered.map((entry) => normalizePath(entry.path)));
+    // When filtering hides folders, their notes become siblings of the root.
+    // Count them together instead of putting the first child of each hidden
+    // parent at the exact same position.
+    const layoutParent = (entry: Entry) => { const parent = normalizePath(parentPath(entry.path)); return parent === rootPath || visible.has(parent) ? parent : rootPath; };
+    ordered.forEach((entry) => { const parent = layoutParent(entry); siblingCounts.set(parent, (siblingCounts.get(parent) ?? 0) + 1); });
     return ordered.map((entry) => {
-      const parent = normalizePath(parentPath(entry.path)), parentPosition = placed.get(parent);
+      const parent = layoutParent(entry), parentPosition = placed.get(parent);
       const sibling = siblings.get(parent) ?? 0; siblings.set(parent, sibling + 1);
       const rootChild = parent === normalizePath(vault) || !parentPosition;
       const origin = parentPosition ?? root;
@@ -152,6 +157,24 @@ export function BrainExplore({ vault, name, entries, onOpen, onActivate, onConte
     const matrix = element.getScreenCTM(); if (!matrix) return { x: clientX, y: clientY };
     const result = point.matrixTransform(matrix.inverse()); return { x: result.x, y: result.y };
   };
+  const zoomState = useRef({ zoom, pan }); zoomState.current = { zoom, pan };
+  useEffect(() => {
+    const element = svg.current; if (!element) return;
+    const wheel = (event: WheelEvent) => {
+      if (!event.ctrlKey && !event.metaKey) return;
+      event.preventDefault();
+      const point = element.createSVGPoint(); point.x = event.clientX; point.y = event.clientY;
+      const matrix = element.getScreenCTM(); if (!matrix) return;
+      const cursor = point.matrixTransform(matrix.inverse());
+      const old = zoomState.current;
+      const next = Math.max(.6, Math.min(2, old.zoom * (event.deltaY < 0 ? 1.12 : 1 / 1.12)));
+      const factor = next / old.zoom;
+      const nextPan = { x: cursor.x - 600 - factor * (cursor.x - 600 - old.pan.x), y: cursor.y - 520 - factor * (cursor.y - 520 - old.pan.y) };
+      zoomState.current = { zoom: next, pan: nextPan }; setZoom(next); setPan(nextPan);
+    };
+    element.addEventListener("wheel", wheel, { passive: false });
+    return () => element.removeEventListener("wheel", wheel);
+  }, []);
   const startDrag = (event: ReactPointerEvent, node?: Positioned) => {
     if (event.button !== 0) return;
     event.preventDefault(); event.stopPropagation();

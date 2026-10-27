@@ -7,7 +7,7 @@ import { graphEdges } from '../src/utils/graph.ts';
 import { connectionGeometry } from '../src/utils/todoGeometry.ts';
 import { fileKind } from '../src/utils/fileTypes.ts';
 import { entryIcon } from '../src/FileIcon.tsx';
-import { FileAudio, FileImage, FileVideo, FileType2, ListChecks, Folder } from 'lucide-react';
+import { Music2, FileImage, Clapperboard, FileType2, ListChecks, Folder } from 'lucide-react';
 import { readWorkspaceIdentities, saveWorkspaceIdentities, identityFor } from '../src/utils/workspaceIdentity.ts';
 
 let failures = 0;
@@ -23,7 +23,7 @@ check('deduplicates descendants before deleting', selectionRoots(['/vault/a/x', 
 check('editable text limits count UTF-8 bytes and reject NULs before writing', !editableTextError('plain text') && !!editableTextError('a\0b') && !editableTextError('a'.repeat(MAX_EDITABLE_BYTES)) && !!editableTextError('😀'.repeat(MAX_EDITABLE_BYTES / 4 + 1)));
 check('distinguishes PDF, link and dedicated board files', fileKind('a.PDF') === 'pdf' && fileKind('v.url') === 'link' && fileKind('plan.comet-todo') === 'todo');
 const iconEntry = (path, kind = 'file') => ({ name: path, path, kind });
-check('uses distinct icons for media, PDFs, to-do boards and folders wherever files are listed', entryIcon(iconEntry('song.mp3')) === FileAudio && entryIcon(iconEntry('pic.png')) === FileImage && entryIcon(iconEntry('clip.webm')) === FileVideo && entryIcon(iconEntry('paper.pdf')) === FileType2 && entryIcon(iconEntry('plan.comet-todo')) === ListChecks && entryIcon(iconEntry('notes', 'folder')) === Folder);
+check('uses distinct icons for media, PDFs, to-do boards and folders wherever files are listed', entryIcon(iconEntry('song.mp3')) === Music2 && entryIcon(iconEntry('pic.png')) === FileImage && entryIcon(iconEntry('clip.webm')) === Clapperboard && entryIcon(iconEntry('paper.pdf')) === FileType2 && entryIcon(iconEntry('plan.comet-todo')) === ListChecks && entryIcon(iconEntry('notes', 'folder')) === Folder);
 check('round-trips standard web shortcut data', parseShortcut(serializeShortcut('https://youtu.be/dQw4w9WgXcQ')) === 'https://youtu.be/dQw4w9WgXcQ');
 check('rejects dangerous, malformed and credentialed links', ['javascript:alert(1)', 'file:///etc/passwd', 'https://user:secret@example.com/', 'https://'].every((url) => safeWebUrl(url) === null));
 check('extracts only a validated YouTube id or supported direct video link', videoLink('https://youtu.be/dQw4w9WgXcQ')?.kind === 'youtube' && videoLink('https://example.com/a.mp4?x=1')?.kind === 'video' && !videoLink('https://youtube.com.evil/watch?v=dQw4w9WgXcQ'));

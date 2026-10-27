@@ -8,10 +8,10 @@ import { EditorContent, useEditor, useEditorState } from "@tiptap/react";
 import {
   AlertCircle, ArrowLeft, ArrowRight, Bold, BookOpen, CalendarDays, CheckCircle2,
   ChevronDown, ChevronRight, Code2, FileCode2, FilePlus2, FileText,
-  FolderOpen, FolderPlus, GitBranch, GripVertical, Network, Image as ImageIcon, Italic, Link2, List,
+  FolderOpen, FolderPlus, GitBranch, GripVertical, Network, Image as ImageIcon, Italic, KeyRound, Link2, List,
   ListChecks, LoaderCircle, Maximize2, Minimize2,
   MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pencil, Plus, Quote, Redo2,
-  Search, Settings2, Sparkles, Star, Pin, Tag, Upload, Underline, Strikethrough, Highlighter, ListOrdered, Trash2, Undo2, X, type LucideIcon,
+  Search, Settings2, Sparkles, Square, Star, Pin, Tag, Upload, Underline, Strikethrough, Highlighter, ListOrdered, Trash2, Undo2, X, type LucideIcon,
 } from "lucide-react";
 import type { EditorProps } from "@tiptap/pm/view";
 import Image from "@tiptap/extension-image";
@@ -19,8 +19,12 @@ import { TaskItem, TaskList } from "@tiptap/extension-list";
 import StarterKit from "@tiptap/starter-kit";
 import { Markdown } from "@tiptap/markdown";
 import { APP_VERSION } from "virtual:comet-version";
+import { checkUpdates, type UpdateInfo } from "./utils/updates";
 import { TodoBoard } from "./TodoBoard";
+import { Whiteboard } from "./Whiteboard";
+import { newWhiteboard, parseWhiteboard, serializeWhiteboard, type WhiteboardDocument } from "./utils/whiteboard";
 import { CalendarView } from "./CalendarView";
+import { PasswordsView } from "./PasswordsView";
 import { parseTodo, newTodoDocument, serializeTodo, type TodoDocument } from "./utils/todo";
 import { editableTextError } from "./utils/textSafety";
 import { BrainExplore, TreeExplore } from "./ExploreViews";
@@ -82,11 +86,11 @@ import {
 } from "./utils/vaultBridge";
 
 type ViewMode = "write" | "source" | "read";
-type WorkspaceView = "note" | "file" | "todo" | "all" | "folder" | "pinned" | "favorites" | "tree" | "brain" | "calendar" | "settings";
+type WorkspaceView = "note" | "file" | "todo" | "whiteboard" | "all" | "folder" | "pinned" | "favorites" | "tree" | "brain" | "calendar" | "passwords" | "settings";
 type NavigationPoint = { vault: string; view: WorkspaceView; path: string };
 type NavigationHistory = { items: NavigationPoint[]; index: number };
 type CaptureType = "text" | "link" | "image";
-type CreateDialog = { kind: "note" | "folder" | "todo"; folder: string };
+type CreateDialog = { kind: "note" | "folder" | "todo" | "whiteboard"; folder: string };
 type PathCreateDialog = Extract<PathPlan, { kind: "create" }> & { vault: string };
 type DropIndicator = { path: string; position: "before" | "after" | "into"; surface: "sidebar" | "workspace" | "map"; source?: string };
 type ContextMenu = { x: number; y: number; node?: TreeNode; folder: string };
@@ -100,8 +104,8 @@ function initialSample() {
   const path = selected?.path ?? "";
   const raw = path ? sampleVault.read(path) : "";
   const editable = Boolean(path && isTextFile(path) && !isSampleDataUrl(raw) && !raw.includes("\0"));
-  const specialText = path && ["link", "todo"].includes(fileKind(path)) && !isSampleDataUrl(raw) && !raw.includes("\0");
-  const view: WorkspaceView = path ? (fileKind(path) === "todo" && specialText && parseTodo(raw) ? "todo" : editable ? "note" : "file") : "all";
+  const specialText = path && ["link", "todo", "whiteboard"].includes(fileKind(path)) && !isSampleDataUrl(raw) && !raw.includes("\0");
+  const view: WorkspaceView = path ? (fileKind(path) === "todo" && specialText && parseTodo(raw) ? "todo" : fileKind(path) === "whiteboard" && specialText && parseWhiteboard(raw) ? "whiteboard" : editable ? "note" : "file") : "all";
   return { entries, path, editable, view, content: editable || specialText ? raw : "", mediaUrl: isSampleDataUrl(raw) ? raw : "" };
 }
 
@@ -114,6 +118,9 @@ function errorMessage(error: unknown): string {
 function App() {
   const [settings, setSettings] = useState(readSettings);
   const [settingsPersisted, setSettingsPersisted] = useState(true);
+  const [settingsSection, setSettingsSection] = useState<"general" | "updates" | "cloud">("general");
+  const [availableUpdate, setAvailableUpdate] = useState<UpdateInfo | null>(null);
+  const [updateNotice, setUpdateNotice] = useState(false), [updateStatus, setUpdateStatus] = useState("");
   const [trayAvailable, setTrayAvailable] = useState(false);
   const [sampleStart] = useState(initialSample);
   const [lastSession] = useState(() => desktopAvailable && settings.reopenWorkspace ? readSession() : null);
@@ -234,14 +241,21 @@ function App() {
   const vaultName = workspaceIdentity.name;
   const selectedName = selectedPath ? fileName(selectedPath) : "";
   const modifier = typeof navigator !== "undefined" && /Mac|iPhone|iPad/i.test(navigator.userAgent) ? "⌘" : "Ctrl";
-  const currentLocation = workspaceView === "note" || workspaceView === "file" || workspaceView === "todo" ? selectedPath : workspaceView === "folder" ? folderPath : vaultPath;
+  const currentLocation = workspaceView === "note" || workspaceView === "file" || workspaceView === "todo" || workspaceView === "whiteboard" ? selectedPath : workspaceView === "folder" ? folderPath : vaultPath;
   const displayedPath = displayWorkspacePath(currentLocation, vaultPath);
   const pathPlan = useMemo(() => planWorkspacePath(pathDraft, vaultPath, entries), [pathDraft, vaultPath, entries]);
   const folderEntries = useMemo(() => orderItems(entries.filter((entry) => parentPath(entry.path) === folderPath), folderPath), [entries, folderPath, orderItems]);
   const folderParent = parentPath(folderPath);
   const folderParentIsRoot = normalizePath(folderParent) === normalizePath(vaultPath);
-  const workspaceDestination = workspaceView === "folder" ? folderPath : (workspaceView === "note" || workspaceView === "file" || workspaceView === "todo") && selectedPath ? parentPath(selectedPath) || vaultPath : vaultPath;
+  const workspaceDestination = workspaceView === "folder" ? folderPath : (workspaceView === "note" || workspaceView === "file" || workspaceView === "todo" || workspaceView === "whiteboard") && selectedPath ? parentPath(selectedPath) || vaultPath : vaultPath;
   const workspaceEntries = workspaceView === "folder" ? folderEntries : workspaceView === "pinned" ? entries.filter((entry) => itemMeta(metadata, entry.path).pinned) : workspaceView === "favorites" ? entries.filter((entry) => itemMeta(metadata, entry.path).favorite) : orderItems(entries, vaultPath);
+
+  useEffect(() => {
+    if (!desktopAvailable) return;
+    const controller = new AbortController(), timer = window.setTimeout(() => controller.abort(), 12_000);
+    void checkUpdates(APP_VERSION, controller.signal).then((result) => { if (result && !controller.signal.aborted) { setAvailableUpdate(result); setUpdateNotice(true); } }).catch(() => undefined).finally(() => window.clearTimeout(timer));
+    return () => { controller.abort(); window.clearTimeout(timer); };
+  }, []);
 
   useEffect(() => { const next = new Set<string>(); selectionRef.current = next; setSelection(next); selectionAnchor.current = ""; }, [vaultPath]);
   useEffect(() => {
@@ -469,7 +483,7 @@ function App() {
       loadingRef.current = true;
       setLoading(true);
       const text = isTextFile(path);
-      const specialText = ["link", "todo"].includes(fileKind(path));
+      const specialText = ["link", "todo", "whiteboard"].includes(fileKind(path));
       const next = text || specialText ? await readNote(vaultRef.current, path) : "";
       if ((text || specialText) && ((isSamplePath(vaultRef.current) && isSampleDataUrl(next)) || next.includes("\0"))) throw new Error("This file contains binary data, not editable text.");
       const asset = text || specialText ? "" : isSamplePath(vaultRef.current) ? sampleVault.read(path) : convertFileSrc(path);
@@ -480,7 +494,7 @@ function App() {
       setSelectedPath(path);
       setContent(next);
       setMediaUrl(asset);
-      const nextView: WorkspaceView = fileKind(path) === "todo" && parseTodo(next) ? "todo" : text ? "note" : "file";
+      const nextView: WorkspaceView = fileKind(path) === "todo" && parseTodo(next) ? "todo" : fileKind(path) === "whiteboard" && parseWhiteboard(next) ? "whiteboard" : text ? "note" : "file";
       setWorkspaceView(nextView);
       if (text) {
         const mode: ViewMode = isMarkdown(path) ? (previousWasMarkdown ? modeRef.current : "write") : "source";
@@ -518,7 +532,7 @@ function App() {
         let nextPath = nextEntries.some((entry) => entry.path === lastSession.note && entry.kind === "file")
           ? lastSession.note : "";
         let nextContent = "";
-        if (nextPath && (isTextFile(nextPath) || ["link", "todo"].includes(fileKind(nextPath)))) {
+        if (nextPath && (isTextFile(nextPath) || ["link", "todo", "whiteboard"].includes(fileKind(nextPath)))) {
           try { nextContent = await readNote(lastSession.vault, nextPath); } catch { nextPath = ""; }
         }
         if (!active || request !== loadRequest.current) return;
@@ -529,8 +543,8 @@ function App() {
         setEntries(nextEntries);
         setSelectedPath(nextPath);
         setContent(nextContent);
-        setMediaUrl(nextPath && !isTextFile(nextPath) && !["link", "todo"].includes(fileKind(nextPath)) ? convertFileSrc(nextPath) : "");
-        const restoredView: WorkspaceView = nextPath ? (fileKind(nextPath) === "todo" && parseTodo(nextContent) ? "todo" : isTextFile(nextPath) ? "note" : "file") : "all";
+        setMediaUrl(nextPath && !isTextFile(nextPath) && !["link", "todo", "whiteboard"].includes(fileKind(nextPath)) ? convertFileSrc(nextPath) : "");
+        const restoredView: WorkspaceView = nextPath ? (fileKind(nextPath) === "todo" && parseTodo(nextContent) ? "todo" : fileKind(nextPath) === "whiteboard" && parseWhiteboard(nextContent) ? "whiteboard" : isTextFile(nextPath) ? "note" : "file") : "all";
         setWorkspaceView(restoredView);
         modeRef.current = nextPath && !isMarkdown(nextPath) ? "source" : "write";
         setViewMode(modeRef.current);
@@ -630,7 +644,7 @@ function App() {
     } catch (error) { setNotice(`Couldn't switch workspace: ${errorMessage(error)}`); }
   }, [flushAll, rememberVault, resetNavigation]);
 
-  const openCreate = useCallback((kind: "note" | "folder" | "todo", folder: string) => {
+  const openCreate = useCallback((kind: "note" | "folder" | "todo" | "whiteboard", folder: string) => {
     setEntryName("");
     setDialogError("");
     setDialogBusy(false);
@@ -641,8 +655,9 @@ function App() {
   const submitCreate = async (event: FormEvent) => {
     event.preventDefault();
     if (!createDialog || dialogBusy) return;
-    const proposed = createDialog.kind === "todo" && entryName.trim() && !/\.comet-todo$/i.test(entryName.trim()) ? `${entryName.trim()}.comet-todo` : entryName;
-    const { name, error } = validEntryName(proposed, createDialog.kind === "todo" ? "file" : createDialog.kind);
+    const extension = createDialog.kind === "todo" ? ".comet-todo" : createDialog.kind === "whiteboard" ? ".comet-whiteboard" : "";
+    const proposed = extension && entryName.trim() && !entryName.trim().toLowerCase().endsWith(extension) ? `${entryName.trim()}${extension}` : entryName;
+    const { name, error } = validEntryName(proposed, createDialog.kind === "todo" || createDialog.kind === "whiteboard" ? "file" : createDialog.kind);
     if (error) {
       setDialogError(error);
       return;
@@ -651,8 +666,9 @@ function App() {
     setDialogBusy(true);
     setDialogError("");
     try {
-      if (createDialog.kind === "note") await createNote(vaultRef.current, path, fileKind(path) === "todo" ? serializeTodo(newTodoDocument()) : "");
+      if (createDialog.kind === "note") await createNote(vaultRef.current, path, fileKind(path) === "todo" ? serializeTodo(newTodoDocument()) : fileKind(path) === "whiteboard" ? serializeWhiteboard(newWhiteboard()) : "");
       else if (createDialog.kind === "todo") await createNote(vaultRef.current, path, serializeTodo(newTodoDocument()));
+      else if (createDialog.kind === "whiteboard") await createNote(vaultRef.current, path, serializeWhiteboard(newWhiteboard()));
       else await createFolder(vaultRef.current, path);
       await refresh(vaultRef.current);
       setExpanded((previous) => new Set([...previous, createDialog.folder, ...(createDialog.kind === "folder" ? [path] : [])]));
@@ -671,7 +687,7 @@ function App() {
     }
   };
 
-  const showOverview = useCallback(async (view: "all" | "pinned" | "favorites" | "tree" | "brain" | "calendar", record = true): Promise<boolean> => {
+  const showOverview = useCallback(async (view: "all" | "pinned" | "favorites" | "tree" | "brain" | "calendar" | "passwords", record = true): Promise<boolean> => {
     const request = ++loadRequest.current;
     try {
       await flushAll();
@@ -748,7 +764,7 @@ function App() {
     let index = current.index + direction;
     while (index >= 0 && index < current.items.length) {
       const point = current.items[index];
-      const exists = !["note", "file", "todo", "folder"].includes(point.view) || entries.some((item) => item.path === point.path && (point.view === "folder" ? item.kind === "folder" : item.kind === "file"));
+      const exists = !["note", "file", "todo", "whiteboard", "folder"].includes(point.view) || entries.some((item) => item.path === point.path && (point.view === "folder" ? item.kind === "folder" : item.kind === "file"));
       if (point.vault === vaultRef.current && exists) break;
       index += direction;
     }
@@ -756,7 +772,7 @@ function App() {
     navigatingHistory.current = true;
     const point = current.items[index];
     try {
-      const success = point.view === "note" || point.view === "file" || point.view === "todo" ? await selectNote(point.path, false)
+      const success = point.view === "note" || point.view === "file" || point.view === "todo" || point.view === "whiteboard" ? await selectNote(point.path, false)
         : point.view === "folder" ? await showFolder(point.path, false)
         : point.view === "settings" ? await showSettings(false)
         : await showOverview(point.view, false);
@@ -801,7 +817,7 @@ function App() {
       // previous component was containment-checked by the bridge.
       if (pathCreateDialog.target === "folder") {
         for (const folder of pathCreateDialog.missingFolders) await createFolder(pathCreateDialog.vault, folder);
-      } else await createNote(pathCreateDialog.vault, pathCreateDialog.path, fileKind(pathCreateDialog.path) === "todo" ? serializeTodo(newTodoDocument()) : "");
+      } else await createNote(pathCreateDialog.vault, pathCreateDialog.path, fileKind(pathCreateDialog.path) === "todo" ? serializeTodo(newTodoDocument()) : fileKind(pathCreateDialog.path) === "whiteboard" ? serializeWhiteboard(newWhiteboard()) : "");
       try {
         await refresh(pathCreateDialog.vault);
       } catch {
@@ -861,7 +877,7 @@ function App() {
         const nextPath = remapPath(selectedRef.current, renameNode.path, destination);
         selectedRef.current = nextPath;
         setSelectedPath(nextPath);
-        if (workspaceView === "note" || workspaceView === "file" || workspaceView === "todo") {
+        if (workspaceView === "note" || workspaceView === "file" || workspaceView === "todo" || workspaceView === "whiteboard") {
           selectedToReload = nextPath;
           loadingRef.current = true;
           setLoading(true);
@@ -1353,7 +1369,7 @@ function App() {
         if (checked.error) throw new Error(checked.error);
         if (isSamplePath(vault)) {
           let value: string;
-          if (isTextFile(file.name) || ["link", "todo"].includes(fileKind(file.name))) {
+          if (isTextFile(file.name) || ["link", "todo", "whiteboard"].includes(fileKind(file.name))) {
             value = new TextDecoder("utf-8", { fatal: true }).decode(await file.arrayBuffer());
             if (value.includes("\0")) throw new Error("This text file contains binary data.");
           } else {
@@ -1482,7 +1498,7 @@ function App() {
       const row = hit?.closest<HTMLElement>("[data-tree-path]");
       const item = row && entries.find((entry) => entry.path === row.dataset.treePath);
       const mapRoot = hit?.closest<HTMLElement>("[data-map-root]");
-      showDropIndicator(row && item ? treePlacement(source.path, item, row.getBoundingClientRect(), next.clientY, mapRoot ? "map" : "sidebar") : mapRoot ? { path: vaultRef.current, position: "into", surface: "map", source: source.path } : null);
+      showDropIndicator(row && item ? treePlacement(source.path, item, row.getBoundingClientRect(), next.clientY, mapRoot ? "map" : "sidebar") : mapRoot && hit?.closest<HTMLElement>("[data-map-path]")?.dataset.mapPath === vaultRef.current && normalizePath(parentPath(source.path)) !== normalizePath(vaultRef.current) ? { path: vaultRef.current, position: "into", surface: "map", source: source.path } : null);
     };
     const finish = (next: PointerEvent) => {
       if (next.pointerId !== pointer) return;
@@ -1574,6 +1590,19 @@ function App() {
     return () => { window.removeEventListener("keydown", onKey); window.removeEventListener("pagehide", onPageHide); };
   });
 
+  const runUpdateCheck = async (notify = false) => {
+    setUpdateStatus("Checking GitHub…");
+    try { const result = await checkUpdates(APP_VERSION, AbortSignal.timeout(12_000)); setAvailableUpdate(result); setUpdateStatus(result ? "" : "You're up to date."); if (result && notify) setUpdateNotice(true); }
+    catch { setUpdateStatus("Couldn't check for updates. Check your connection and try again."); }
+  };
+  const installUpdate = async () => {
+    if (!availableUpdate?.installer || !desktopAvailable) return;
+    setUpdateStatus("Saving your work…");
+    try { await flushAll(); setUpdateStatus("Downloading and verifying the Windows installer…"); await invoke("install_update", { version: availableUpdate.version, digest: availableUpdate.installer.digest }); setUpdateStatus("The installer has opened. Follow its instructions to finish updating."); }
+    catch (reason) { setUpdateStatus(`Couldn't start the update: ${errorMessage(reason)}. You can open the release page instead.`); }
+  };
+  const openUpdatePage = () => { if (!availableUpdate) return; if (desktopAvailable) void openUrl(availableUpdate.page); else window.open(availableUpdate.page, "_blank", "noopener,noreferrer"); };
+
   const updateTodo = (board: TodoDocument) => {
     if (workspaceView !== "todo" || selectedRef.current !== selectedPath || fileKind(selectedPath) !== "todo") return false;
     const next = serializeTodo(board);
@@ -1581,6 +1610,13 @@ function App() {
     if (textError || !parseTodo(next)) { setNotice(textError || "This change exceeds the to-do board limits and wasn't saved."); return false; }
     contentRef.current = next; setContent(next); queueSave(selectedPath, next);
     return true;
+  };
+
+  const updateWhiteboard = (board: WhiteboardDocument) => {
+    if (workspaceView !== "whiteboard" || selectedRef.current !== selectedPath || fileKind(selectedPath) !== "whiteboard") return false;
+    const next = serializeWhiteboard(board), textError = editableTextError(next);
+    if (textError || !parseWhiteboard(next)) { setNotice(textError || "This change exceeds whiteboard limits and wasn't saved."); return false; }
+    contentRef.current = next; setContent(next); queueSave(selectedPath, next); return true;
   };
 
   const saveLabel = saveState === "error" ? "Save failed" : saveState === "saving" ? "Saving…" : saveState === "unsaved" ? "Unsaved changes" : "Saved";
@@ -1623,6 +1659,7 @@ function App() {
             <button className={workspaceView === "tree" ? "nav-item active" : "nav-item"} type="button" aria-current={workspaceView === "tree" ? "page" : undefined} onClick={() => void showOverview("tree")}><GitBranch size={17} /><span>Tree view</span><ChevronRight size={14} className="settings-nav-arrow" /></button>
             <button className={workspaceView === "brain" ? "nav-item active" : "nav-item"} type="button" aria-current={workspaceView === "brain" ? "page" : undefined} onClick={() => void showOverview("brain")}><Network size={17} /><span>Brain view</span><ChevronRight size={14} className="settings-nav-arrow" /></button>
             <button className={workspaceView === "calendar" ? "nav-item active" : "nav-item"} type="button" aria-current={workspaceView === "calendar" ? "page" : undefined} onClick={() => void showOverview("calendar")}><CalendarDays size={17} /><span>Calendar</span><ChevronRight size={14} className="settings-nav-arrow" /></button>
+            <button className={workspaceView === "passwords" ? "nav-item active" : "nav-item"} type="button" aria-current={workspaceView === "passwords" ? "page" : undefined} onClick={() => void showOverview("passwords")}><KeyRound size={17} /><span>Passwords</span><ChevronRight size={14} className="settings-nav-arrow" /></button>
             <button className="nav-item" type="button" onClick={() => openTags()}><Tag size={17} /><span>Manage tags</span><ChevronRight size={14} className="settings-nav-arrow" /></button>
           </nav>
           <div className="sidebar-section-heading">
@@ -1631,10 +1668,10 @@ function App() {
           </div>
           <div className={`tree-scroll${dropIndicator?.surface === "sidebar" && dropGroup === vaultPath ? " drop-target" : ""}`} data-drop-folder={vaultPath} onClick={(event) => { if (event.target === event.currentTarget || (event.target as Element).classList.contains("tree-list") || (event.target as Element).classList.contains("tree-message")) clearSelection(); }} onContextMenu={(event) => { if (event.target === event.currentTarget || (event.target as Element).classList.contains("tree-list")) openNewMenu(event, vaultPath); }} onDragOver={(event) => { event.preventDefault(); showDropIndicator({ path: vaultPath, position: "into", surface: "sidebar" }); }} onDrop={(event) => dropToFolder(event, vaultPath)}>
             {tree.length === 0 && <div className="tree-message">Nothing here yet.<br /><span>Create a file to get started.</span></div>}
-            <div className="tree-list">{tree.map((node) => <TreeNodeView key={node.path} node={node} depth={0} selectedPath={workspaceView === "note" || workspaceView === "file" || workspaceView === "todo" ? selectedPath : workspaceView === "folder" ? folderPath : ""} expanded={expanded} metadata={metadata} onToggle={toggleFolder} onActivate={(event, item) => activateSelection(event, item, visibleTreePaths)} selectedPaths={selection} onContext={handleTreeContext} onDragStart={dragStart} onDragOver={dragOverTree} onDrop={dropOnTree} onPointerDrag={startPointerDrag} dropIndicator={dropIndicator} dropGroup={dropIndicator?.surface === "sidebar" ? dropGroup : ""} />)}</div>
+            <div className="tree-list">{tree.map((node) => <TreeNodeView key={node.path} node={node} depth={0} selectedPath={workspaceView === "note" || workspaceView === "file" || workspaceView === "todo" || workspaceView === "whiteboard" ? selectedPath : workspaceView === "folder" ? folderPath : ""} expanded={expanded} metadata={metadata} onToggle={toggleFolder} onActivate={(event, item) => activateSelection(event, item, visibleTreePaths)} selectedPaths={selection} onContext={handleTreeContext} onDragStart={dragStart} onDragOver={dragOverTree} onDrop={dropOnTree} onPointerDrag={startPointerDrag} dropIndicator={dropIndicator} dropGroup={dropIndicator?.surface === "sidebar" ? dropGroup : ""} />)}</div>
           </div>
           <div className="sidebar-bottom">
-            <button className={workspaceView === "settings" ? "nav-item settings-nav active" : "nav-item settings-nav"} type="button" aria-current={workspaceView === "settings" ? "page" : undefined} onClick={() => void showSettings()}><Settings2 size={17} /><span>Settings</span><ChevronRight size={14} className="settings-nav-arrow" /></button>
+            <button className={workspaceView === "settings" ? "nav-item settings-nav active" : "nav-item settings-nav"} type="button" aria-current={workspaceView === "settings" ? "page" : undefined} onClick={() => { setSettingsSection("general"); void showSettings(); }}><Settings2 size={17} /><span>Settings</span><ChevronRight size={14} className="settings-nav-arrow" /></button>
             <div className="sidebar-footer"><span>{isSample ? (sampleVault.isPersisted() ? "Sample · saved here" : "Sample · temporary") : "Local workspace"}</span><span>v{APP_VERSION}</span></div>
           </div>
         </aside>
@@ -1675,11 +1712,11 @@ function App() {
           </header>
 
           <div ref={workspaceScrollRef} className={`workspace-scroll without-cover${dropIndicator?.surface === "workspace" && dropIndicator.path === workspaceDestination && dropIndicator.position === "into" ? " drop-target" : ""}`} data-drop-folder={workspaceDestination} onClick={(event) => { const target = event.target as Element; if (!target.closest("button, a, input, select, textarea, [contenteditable=true], .workspace-entry, .brain-node, .todo-card, .todo-link-hit, .note-card, .media-card")) clearSelection(); }} onDragOver={(event) => { event.preventDefault(); showDropIndicator({ path: workspaceDestination, position: "into", surface: "workspace" }); }} onDrop={(event) => dropToFolder(event, workspaceDestination)} onContextMenu={(event) => { if (event.target === event.currentTarget) openNewMenu(event, workspaceDestination); }}>
-            {workspaceView === "tree" ? <TreeExplore key={vaultPath} vault={vaultPath} name={vaultName} tree={tree} onOpen={openEntry} onContext={entryContext} selectedPaths={selection} onActivate={activateSelection} onClearSelection={clearSelection} dropIndicator={dropIndicator?.surface === "map" ? dropIndicator : null} dropGroup={dropIndicator?.surface === "map" ? dropGroup : ""} onDragStart={dragStart} onDragOverNode={(event, item) => dragOverTree(event, item, "map")} onDropNode={(event, item) => dropOnTree(event, item, "map")} onDragOverRoot={(event) => { event.preventDefault(); event.stopPropagation(); showDropIndicator({ path: vaultPath, position: "into", surface: "map", source: dragSourceRef.current }); }} onDropRoot={(event) => dropToFolder(event, vaultPath)} /> : workspaceView === "brain" ? <BrainExplore key={vaultPath} vault={vaultPath} name={vaultName} entries={entries} onOpen={openEntry} onContext={entryContext} selectedPaths={selection} onActivate={activateSelection} onClearSelection={clearSelection} /> : workspaceView === "calendar" ? <CalendarView key={vaultPath} vault={vaultPath} name={vaultName} /> : workspaceView === "settings" ? <SettingsPage settings={settings} persisted={settingsPersisted} isSample={isSample} modifier={modifier} desktop={desktopAvailable} trayAvailable={trayAvailable} onChange={updateSettings} onBack={() => history.index > 0 ? void navigateHistory(-1) : void showOverview("all")} onOpenVault={() => void openVault()} /> : workspaceView === "todo" && selectedPath && parseTodo(content) ? <div className="todo-workspace"><div className="media-top-actions"><button className={`icon-button ${itemMeta(metadata, selectedPath).pinned ? "active" : ""}`} type="button" aria-label={itemMeta(metadata, selectedPath).pinned ? "Unpin board" : "Pin board"} onClick={() => toggleProperty(selectedPath, "pinned")}><Pin size={17} /></button><button className={`icon-button ${itemMeta(metadata, selectedPath).favorite ? "active" : ""}`} type="button" aria-label={itemMeta(metadata, selectedPath).favorite ? "Remove board from favorites" : "Add board to favorites"} onClick={() => toggleProperty(selectedPath, "favorite")}><Star size={17} /></button><button className="icon-button" type="button" aria-label="Edit board tags" onClick={() => openTags(selectedPath)}><Tag size={17} /></button><button className="icon-button" type="button" aria-label={`More options for ${selectedName}`} onClick={(event) => handleTreeContext(event, { name: selectedName, path: selectedPath, kind: "file", children: [] })}><MoreHorizontal size={19} /></button></div><TodoBoard key={selectedPath} board={parseTodo(content)!} arrowheads={settings.todoArrowheads} name={selectedName.replace(/\.comet-todo$/i, "")} saveState={saveState} onChange={updateTodo} onRetry={() => void flushAll().catch(() => setNotice("Still couldn't save. Please check the folder and try again."))} /></div> : workspaceView === "note" && selectedPath ? <section className="note-card" aria-label={`File: ${selectedName}`}>
+            {workspaceView === "tree" ? <TreeExplore key={vaultPath} vault={vaultPath} name={vaultName} tree={tree} onOpen={openEntry} onContext={entryContext} selectedPaths={selection} onActivate={activateSelection} onClearSelection={clearSelection} dropIndicator={dropIndicator?.surface === "map" ? dropIndicator : null} dropGroup={dropIndicator?.surface === "map" ? dropGroup : ""} onDragStart={dragStart} onDragOverNode={(event, item) => dragOverTree(event, item, "map")} onDropNode={(event, item) => dropOnTree(event, item, "map")} onDragOverRoot={(event) => { event.preventDefault(); event.stopPropagation(); const root = (event.target as Element).closest<HTMLElement>("[data-map-path]"); if (root?.dataset.mapPath === vaultPath && (!dragSourceRef.current || normalizePath(parentPath(dragSourceRef.current)) !== normalizePath(vaultPath))) showDropIndicator({ path: vaultPath, position: "into", surface: "map", source: dragSourceRef.current }); else showDropIndicator(null); }} onDropRoot={(event) => { const root = (event.target as Element).closest<HTMLElement>("[data-map-path]"); if (root?.dataset.mapPath === vaultPath) dropToFolder(event, vaultPath); else { event.preventDefault(); event.stopPropagation(); showDropIndicator(null); } }} /> : workspaceView === "brain" ? <BrainExplore key={vaultPath} vault={vaultPath} name={vaultName} entries={entries} onOpen={openEntry} onContext={entryContext} selectedPaths={selection} onActivate={activateSelection} onClearSelection={clearSelection} /> : workspaceView === "calendar" ? <CalendarView key={vaultPath} vault={vaultPath} name={vaultName} desktop={desktopAvailable} onConnect={() => { setSettingsSection("cloud"); void showSettings(); }} /> : workspaceView === "passwords" ? <PasswordsView /> : workspaceView === "settings" ? <SettingsPage settings={settings} persisted={settingsPersisted} isSample={isSample} modifier={modifier} desktop={desktopAvailable} trayAvailable={trayAvailable} section={settingsSection} onSection={setSettingsSection} version={APP_VERSION} update={availableUpdate} updateStatus={updateStatus} onCheckUpdate={() => void runUpdateCheck()} onInstallUpdate={() => void installUpdate()} onUpdatePage={openUpdatePage} onChange={updateSettings} onBack={() => history.index > 0 ? void navigateHistory(-1) : void showOverview("all")} onOpenVault={() => void openVault()} /> : workspaceView === "whiteboard" && selectedPath && parseWhiteboard(content) ? <div className="todo-workspace"><div className="media-top-actions"><button className="icon-button" type="button" aria-label={`More options for ${selectedName}`} onClick={(event) => handleTreeContext(event, { name: selectedName, path: selectedPath, kind: "file", children: [] })}><MoreHorizontal size={19} /></button></div><Whiteboard key={selectedPath} board={parseWhiteboard(content)!} name={selectedName.replace(/\.comet-whiteboard$/i, "")} saveState={saveState} onChange={updateWhiteboard} onRename={() => openRename({ name: selectedName, path: selectedPath, kind: "file", children: [] })} onRetry={() => void flushAll().catch(() => setNotice("Still couldn't save. Please check the folder and try again."))} /></div> : workspaceView === "todo" && selectedPath && parseTodo(content) ? <div className="todo-workspace"><div className="media-top-actions"><button className={`icon-button ${itemMeta(metadata, selectedPath).pinned ? "active" : ""}`} type="button" aria-label={itemMeta(metadata, selectedPath).pinned ? "Unpin board" : "Pin board"} onClick={() => toggleProperty(selectedPath, "pinned")}><Pin size={17} /></button><button className={`icon-button ${itemMeta(metadata, selectedPath).favorite ? "active" : ""}`} type="button" aria-label={itemMeta(metadata, selectedPath).favorite ? "Remove board from favorites" : "Add board to favorites"} onClick={() => toggleProperty(selectedPath, "favorite")}><Star size={17} /></button><button className="icon-button" type="button" aria-label="Edit board tags" onClick={() => openTags(selectedPath)}><Tag size={17} /></button><button className="icon-button" type="button" aria-label={`More options for ${selectedName}`} onClick={(event) => handleTreeContext(event, { name: selectedName, path: selectedPath, kind: "file", children: [] })}><MoreHorizontal size={19} /></button></div><TodoBoard key={selectedPath} board={parseTodo(content)!} arrowheads={settings.todoArrowheads} name={selectedName.replace(/\.comet-todo$/i, "")} onRename={() => openRename({ name: selectedName, path: selectedPath, kind: "file", children: [] })} saveState={saveState} onChange={updateTodo} onRetry={() => void flushAll().catch(() => setNotice("Still couldn't save. Please check the folder and try again."))} /></div> : workspaceView === "note" && selectedPath ? <section className="note-card" aria-label={`File: ${selectedName}`}>
               <div className="document-header">
                 <div className="document-heading">
                   <div className="document-icon"><FileText size={20} /></div>
-                  <div className="document-heading-copy"><span>{isMarkdown(selectedPath) ? "YOUR NOTE" : "YOUR FILE"}</span><h2 title={selectedName}>{isMarkdown(selectedPath) ? noteTitle(selectedName) : selectedName}</h2></div>
+                  <div className="document-heading-copy"><span>{isMarkdown(selectedPath) ? "YOUR NOTE" : "YOUR FILE"}</span><h2><button className="rename-title" type="button" aria-label={`Rename ${selectedName}`} title="Click to rename" onClick={() => openRename({ name: selectedName, path: selectedPath, kind: "file", children: [] })}>{isMarkdown(selectedPath) ? noteTitle(selectedName) : selectedName}<Pencil size={13} /></button></h2></div>
                 </div>
                 <div className="document-actions">
                   <div className={`save-indicator ${saveState}`} role="status">{saveState === "error" ? <AlertCircle size={15} /> : saveState === "saving" ? <LoaderCircle size={15} className="spin" /> : <CheckCircle2 size={15} />}<span>{saveLabel}</span>{saveState === "error" && <button type="button" onClick={() => void flushAll().catch(() => setNotice("Still couldn't save. Please check the folder and try again."))}>Retry</button>}</div>
@@ -1731,7 +1768,7 @@ function App() {
               <div className="document-footer"><div><span>{words} {words === 1 ? "word" : "words"}</span><span className="footer-dot" /> <span>{isMarkdown(selectedPath) ? "Markdown" : "Plain text"}</span></div><span>{isSample ? (sampleVault.isPersisted() ? (desktopAvailable ? "Sample saved in this app" : "Sample saved in this browser") : "Temporary sample") : "Saved locally"}</span></div>
             </section> : workspaceView === "file" && selectedPath ? <div className="media-workspace">
               <div className="media-top-actions"><button className={`icon-button ${itemMeta(metadata, selectedPath).pinned ? "active" : ""}`} type="button" aria-label={itemMeta(metadata, selectedPath).pinned ? "Unpin file" : "Pin file"} onClick={() => toggleProperty(selectedPath, "pinned")}><Pin size={17} /></button><button className={`icon-button ${itemMeta(metadata, selectedPath).favorite ? "active" : ""}`} type="button" aria-label={itemMeta(metadata, selectedPath).favorite ? "Remove from favorites" : "Add to favorites"} onClick={() => toggleProperty(selectedPath, "favorite")}><Star size={17} /></button><button className="icon-button" type="button" aria-label="Edit file tags" onClick={() => openTags(selectedPath)}><Tag size={17} /></button><button className="icon-button" type="button" aria-label={`More options for ${selectedName}`} onClick={(event) => handleTreeContext(event, { name: selectedName, path: selectedPath, kind: "file", children: [] })}><MoreHorizontal size={19} /></button></div>
-              <MediaView key={selectedPath} path={selectedPath} url={mediaUrl} content={content} sample={isSample} autoCoverArt={settings.autoCoverArt} onOpenExternal={() => void openExternal()} onEditAsText={() => void openUnknownAsText()} onOpenWeb={(url) => { if (desktopAvailable) void openUrl(url).catch(() => setNotice("Couldn't open that link.")); else window.open(url, "_blank", "noopener,noreferrer"); }} />
+              <MediaView key={selectedPath} path={selectedPath} url={mediaUrl} content={content} sample={isSample} autoCoverArt={settings.autoCoverArt} onRename={() => openRename({ name: selectedName, path: selectedPath, kind: "file", children: [] })} onOpenExternal={() => void openExternal()} onEditAsText={() => void openUnknownAsText()} onOpenWeb={(url) => { if (desktopAvailable) void openUrl(url).catch(() => setNotice("Couldn't open that link.")); else window.open(url, "_blank", "noopener,noreferrer"); }} />
             </div> : <>
               {workspaceView === "folder" && <button className="folder-parent workspace-parent" type="button" onClick={() => folderParentIsRoot ? void showOverview("all") : void showFolder(folderParent)}><ArrowRight size={14} /> {folderParentIsRoot ? "All files" : fileName(folderParent)}</button>}
               <WorkspacePanel title={workspaceView === "folder" ? fileName(folderPath) : workspaceView === "pinned" ? "Pinned" : workspaceView === "favorites" ? "Favorites" : "All files"} description={workspaceView === "folder" ? "Everything in this folder, together." : workspaceView === "pinned" ? "The things you want close at hand." : workspaceView === "favorites" ? "A little collection of your favorites." : "All your files and folders, in one place."} entries={workspaceEntries} vault={vaultPath} destination={workspaceDestination} metadata={metadata} layout={layout} iconSize={iconSize} onLayout={setLayout} onIconSize={setIconSize} onOpen={(event, entry) => activateSelection(event, entry, workspaceEntries.map((item) => item.path))} selectedPaths={selection} onMenu={entryContext} onBackgroundMenu={openNewMenu} onCreate={openNewMenu} onDragStart={dragStart} onDragOver={(event, folder) => { event.preventDefault(); event.stopPropagation(); showDropIndicator({ path: folder, position: "into", surface: "workspace" }); }} dropFolder={dropIndicator?.surface === "workspace" && dropIndicator.position === "into" ? dropIndicator.path : ""} onDrop={dropToFolder} />
@@ -1740,19 +1777,23 @@ function App() {
         </main>
       </div>
 
+      {updateNotice && availableUpdate && <div className="update-notice" role="status"><div><strong>Comet {availableUpdate.version} is available</strong><span>A new version is ready to review.</span></div><button type="button" className="secondary-button" onClick={() => setUpdateNotice(false)}>Later</button><button type="button" className="primary-button" onClick={() => { setUpdateNotice(false); setSettingsSection("updates"); void showSettings(); }}>Update</button></div>}
+
       {notice && <div className="toast" role="status"><AlertCircle size={17} /> <span>{notice}</span><button type="button" onClick={() => setNotice("")} aria-label="Dismiss message"><X size={16} /></button></div>}
 
       {contextMenu && <div className="context-menu" role="menu" style={{ left: contextMenu.x, top: contextMenu.y }} onClick={(event) => event.stopPropagation()}>
         <div className="context-heading" title={contextMenu.node?.name ?? contextMenu.folder}>{contextMenu.node?.name ?? `Add to ${contextMenu.folder === vaultPath ? "workspace" : fileName(contextMenu.folder)}`}</div>
+        {contextMenu.node && <button role="menuitem" type="button" onClick={() => { const node = contextMenu.node!; setContextMenu(null); openEntry(node); }}><FolderOpen size={16} /> Open</button>}
+        {!isSample && <button role="menuitem" type="button" onClick={() => void revealPath(contextMenu.node?.path ?? contextMenu.folder)}><FolderOpen size={16} /> Open in Explorer</button>}
         {(!contextMenu.node || contextMenu.node.kind === "folder") && <>
+        {contextMenu.node && <div className="context-divider" />}
         <button role="menuitem" type="button" onClick={() => openCreate("note", contextMenu.folder)}><FilePlus2 size={16} /> New file</button>
         <button role="menuitem" type="button" onClick={() => openCreate("folder", contextMenu.folder)}><FolderPlus size={16} /> New folder</button>
         <button role="menuitem" type="button" onClick={() => openCreate("todo", contextMenu.folder)}><ListChecks size={16} /> New to-do board</button>
+        <button role="menuitem" type="button" onClick={() => openCreate("whiteboard", contextMenu.folder)}><Square size={16} /> New whiteboard</button>
         <button role="menuitem" type="button" onClick={() => void upload(contextMenu.folder)}><Upload size={16} /> Upload files</button>
         </>}
-        {!isSample && <button role="menuitem" type="button" onClick={() => void revealPath(contextMenu.node?.path ?? contextMenu.folder)}><FolderOpen size={16} /> Show in file explorer</button>}
         {contextMenu.node && <>
-          <button role="menuitem" type="button" onClick={() => { const node = contextMenu.node!; setContextMenu(null); openEntry(node); }}><FolderOpen size={16} /> Open</button>
           {contextMenu.node.kind === "folder" && <div className="context-divider" />}
           <button role="menuitem" type="button" onClick={() => toggleProperty(contextMenu.node!.path, "pinned")}><Pin size={16} /> {itemMeta(metadata, contextMenu.node.path).pinned ? "Unpin" : "Pin"}</button>
           <button role="menuitem" type="button" onClick={() => toggleProperty(contextMenu.node!.path, "favorite")}><Star size={16} /> {itemMeta(metadata, contextMenu.node.path).favorite ? "Remove favorite" : "Add favorite"}</button>
@@ -1801,13 +1842,13 @@ function App() {
       {createDialog && <div className="modal-backdrop" onMouseDown={() => !dialogBusy && setCreateDialog(null)}>
         <form className="modal" role="dialog" aria-modal="true" aria-labelledby="create-title" onSubmit={(event) => void submitCreate(event)} onMouseDown={(event) => event.stopPropagation()}>
           <div className="modal-icon"><FilePlus2 size={20} /></div><button className="modal-close icon-button" type="button" onClick={() => setCreateDialog(null)} aria-label="Close dialog" disabled={dialogBusy}><X size={18} /></button>
-          <h2 id="create-title">New {createDialog.kind === "note" ? "file" : createDialog.kind === "todo" ? "to-do board" : "folder"}</h2>
-          <p>Give your {createDialog.kind === "note" ? "file" : createDialog.kind === "todo" ? "to-do board" : "folder"} a name. It will be saved in <strong>{createDialog.folder === vaultPath ? vaultName : relativePath(createDialog.folder, vaultPath)}</strong>.</p>
-          <label className="modal-label" htmlFor="entry-name">{createDialog.kind === "note" ? "File name" : createDialog.kind === "todo" ? "Board name" : "Folder name"}</label>
-          <input id="entry-name" autoFocus value={entryName} onChange={(event) => { setEntryName(event.target.value); setDialogError(""); }} placeholder={createDialog.kind === "note" ? "e.g. ideas.md or list.txt" : createDialog.kind === "todo" ? "e.g. My workflow" : "Give your folder a name"} autoComplete="off" />
-          {createDialog.kind === "note" && <span className="input-hint">Use any extension. Names without one are saved as .md.</span>}{createDialog.kind === "todo" && <span className="input-hint">Saved as a dedicated .comet-todo file.</span>}
+          <h2 id="create-title">New {createDialog.kind === "note" ? "file" : createDialog.kind === "todo" ? "to-do board" : createDialog.kind === "whiteboard" ? "whiteboard" : "folder"}</h2>
+          <p>Give your {createDialog.kind === "note" ? "file" : createDialog.kind === "todo" ? "to-do board" : createDialog.kind === "whiteboard" ? "whiteboard" : "folder"} a name. It will be saved in <strong>{createDialog.folder === vaultPath ? vaultName : relativePath(createDialog.folder, vaultPath)}</strong>.</p>
+          <label className="modal-label" htmlFor="entry-name">{createDialog.kind === "note" ? "File name" : createDialog.kind === "todo" || createDialog.kind === "whiteboard" ? "Board name" : "Folder name"}</label>
+          <input id="entry-name" autoFocus value={entryName} onChange={(event) => { setEntryName(event.target.value); setDialogError(""); }} placeholder={createDialog.kind === "note" ? "e.g. ideas.md or list.txt" : createDialog.kind === "todo" || createDialog.kind === "whiteboard" ? "e.g. My ideas" : "Give your folder a name"} autoComplete="off" />
+          {createDialog.kind === "note" && <span className="input-hint">Use any extension. Names without one are saved as .md.</span>}{createDialog.kind === "todo" && <span className="input-hint">Saved as a dedicated .comet-todo file.</span>}{createDialog.kind === "whiteboard" && <span className="input-hint">Saved as a dedicated .comet-whiteboard file.</span>}
           {dialogError && <div className="dialog-error" role="alert"><AlertCircle size={15} /> {dialogError}</div>}
-          <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setCreateDialog(null)} disabled={dialogBusy}>Cancel</button><button type="submit" className="primary-button" disabled={dialogBusy}>{dialogBusy ? "Creating…" : `Create ${createDialog.kind === "note" ? "file" : createDialog.kind === "todo" ? "board" : "folder"}`}</button></div>
+          <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setCreateDialog(null)} disabled={dialogBusy}>Cancel</button><button type="submit" className="primary-button" disabled={dialogBusy}>{dialogBusy ? "Creating…" : `Create ${createDialog.kind === "note" ? "file" : createDialog.kind === "todo" || createDialog.kind === "whiteboard" ? "board" : "folder"}`}</button></div>
         </form>
       </div>}
 

@@ -1,19 +1,19 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type FormEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { createPortal } from "react-dom";
-import { AlertCircle, CheckCircle2, ChevronDown, ChevronRight, GripVertical, ListChecks, LoaderCircle, Minus, MoreHorizontal, Plus, Trash2, X } from "lucide-react";
+import { AlertCircle, CheckCircle2, ChevronDown, ChevronRight, GripVertical, ListChecks, LoaderCircle, Minus, MoreHorizontal, Pencil, Plus, Trash2, X } from "lucide-react";
 import { ColorMenu } from "./ColorMenu";
 import { todoId, TODO_CONNECTION_COLOR, TODO_MAX_COORD, type TodoDocument, type TodoTask } from "./utils/todo";
 import { connectionGeometry, type Point } from "./utils/todoGeometry";
 import type { SaveState } from "./utils/saveQueue";
 
-interface Props { board: TodoDocument; name: string; saveState: SaveState; arrowheads?: boolean; onChange: (board: TodoDocument) => boolean; onRetry: () => void }
+interface Props { board: TodoDocument; name: string; onRename?: () => void; saveState: SaveState; arrowheads?: boolean; onChange: (board: TodoDocument) => boolean; onRetry: () => void }
 type LinkDraft = { from: string; end: Point };
 const CARD_WIDTH = 270;
 const connectionKey = (from: string, to: string) => JSON.stringify([from, to]);
 const clamp = (value: number) => Math.max(0, Math.min(TODO_MAX_COORD, Math.round(value)));
 const scaleOf = (element: HTMLElement) => element.offsetWidth ? element.getBoundingClientRect().width / element.offsetWidth || 1 : 1;
 
-export function TodoBoard({ board, name, saveState, arrowheads = false, onChange, onRetry }: Props) {
+export function TodoBoard({ board, name, onRename, saveState, arrowheads = false, onChange, onRetry }: Props) {
   const stage = useRef<HTMLDivElement>(null);
   const pan = useRef<{ pointer: number; x: number; y: number; left: number; top: number } | null>(null);
   const zoomRef = useRef(1);
@@ -144,7 +144,7 @@ export function TodoBoard({ board, name, saveState, arrowheads = false, onChange
   const menuTask = menu ? byId.get(menu.id) : null;
   const reveal = (id: string) => setExpanded((previous) => new Set(previous).add(id));
   return <section className="todo-board" aria-labelledby="todo-title">
-    <div className="todo-header"><div className="explore-heading-icon"><ListChecks size={20} /></div><div><span className="section-eyebrow">YOUR TO-DO BOARD</span><h2 id="todo-title">{name}</h2><p>A little room to arrange your ideas.</p></div><span className="todo-header-spacer" /><div className={`save-indicator ${saveState}`} role="status">{saveState === "error" ? <AlertCircle size={15} /> : saveState === "saving" ? <LoaderCircle size={15} className="spin" /> : <CheckCircle2 size={15} />}<span>{saveState === "error" ? "Save failed" : saveState === "saving" ? "Saving…" : saveState === "unsaved" ? "Unsaved changes" : "Saved"}</span>{saveState === "error" && <button type="button" onClick={onRetry}>Retry</button>}</div></div>
+    <div className="todo-header"><div className="explore-heading-icon"><ListChecks size={20} /></div><div><span className="section-eyebrow">YOUR TO-DO BOARD</span><h2 id="todo-title">{onRename ? <button type="button" className="rename-title" aria-label={`Rename ${name}`} title="Click to rename" onClick={onRename}>{name}<Pencil size={13} /></button> : name}</h2><p>A little room to arrange your ideas.</p></div><span className="todo-header-spacer" /><div className={`save-indicator ${saveState}`} role="status">{saveState === "error" ? <AlertCircle size={15} /> : saveState === "saving" ? <LoaderCircle size={15} className="spin" /> : <CheckCircle2 size={15} />}<span>{saveState === "error" ? "Save failed" : saveState === "saving" ? "Saving…" : saveState === "unsaved" ? "Unsaved changes" : "Saved"}</span>{saveState === "error" && <button type="button" onClick={onRetry}>Retry</button>}</div></div>
     <div className="todo-toolbar">
       <form className="todo-create" onSubmit={addTask}><input aria-label="New to-do" maxLength={500} value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="What needs doing?" /><button className="primary-button" type="submit" disabled={!draft.trim() || board.tasks.length >= 5000}><Plus size={15} /> Add to-do</button></form>
       <button type="button" className="secondary-button" aria-expanded={showCategories} onClick={() => setShowCategories((value) => !value)}>Categories {board.categories.length > 0 && <span className="todo-category-count">{board.categories.length}</span>}</button>

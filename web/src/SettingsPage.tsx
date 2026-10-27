@@ -2,6 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { disable as disableAutostart, enable as enableAutostart, isEnabled as isAutostartEnabled } from "@tauri-apps/plugin-autostart";
 import { ArrowLeft, Check, FolderOpen, Gem, Keyboard, Monitor, Moon, RotateCcw, Sun } from "lucide-react";
 import { keyboardShortcut, shortcutLabel, SHORTCUT_ACTIONS, type ShortcutAction } from "./utils/shortcuts";
+import { GoogleSettings } from "./GoogleSettings";
+import { UpdatesSettings } from "./UpdatesSettings";
+import type { UpdateInfo } from "./utils/updates";
 import { DEFAULT_SETTINGS, type Settings, type ThemePreference } from "./utils/settings";
 
 interface SettingsPageProps {
@@ -14,6 +17,14 @@ interface SettingsPageProps {
   onChange: (patch: Partial<Settings>) => void;
   onBack: () => void;
   onOpenVault: () => void;
+  section?: "general" | "updates" | "cloud";
+  onSection?: (section: "general" | "updates" | "cloud") => void;
+  version?: string;
+  update?: UpdateInfo | null;
+  updateStatus?: string;
+  onCheckUpdate?: () => void;
+  onInstallUpdate?: () => void;
+  onUpdatePage?: () => void;
 }
 
 const themes: { value: ThemePreference; label: string; description: string; icon: typeof Moon }[] = [
@@ -25,7 +36,7 @@ const themes: { value: ThemePreference; label: string; description: string; icon
   { value: "navy", label: "Navy", description: "A midnight blue", icon: Moon },
 ];
 
-export function SettingsPage({ settings, persisted, isSample, modifier, desktop, trayAvailable, onChange, onBack, onOpenVault }: SettingsPageProps) {
+export function SettingsPage({ settings, persisted, isSample, modifier, desktop, trayAvailable, onChange, onBack, onOpenVault, section = "general", onSection, version = "", update = null, updateStatus = "", onCheckUpdate = () => {}, onInstallUpdate = () => {}, onUpdatePage = () => {} }: SettingsPageProps) {
   const [recording, setRecording] = useState<ShortcutAction | null>(null);
   const [shortcutError, setShortcutError] = useState("");
   const mac = modifier === "⌘";
@@ -36,7 +47,8 @@ export function SettingsPage({ settings, persisted, isSample, modifier, desktop,
       <span className="settings-saved"><Check size={14} /> {persisted ? "Saved on this device" : "For this session only"}</span>
     </div>
 
-    <div className="settings-layout">
+    {onSection && <div className="settings-tabs" role="tablist" aria-label="Settings sections"><button type="button" role="tab" aria-selected={section === "general"} onClick={() => onSection("general")}>General</button><button type="button" role="tab" aria-selected={section === "updates"} onClick={() => onSection("updates")}>Updates{update && <span className="update-dot" />}</button><button type="button" role="tab" aria-selected={section === "cloud"} onClick={() => onSection("cloud")}>Cloud</button></div>}
+    {section === "cloud" ? <GoogleSettings desktop={desktop} /> : section === "updates" ? <UpdatesSettings version={version} update={update} status={updateStatus} desktop={desktop} onCheck={onCheckUpdate} onInstall={onInstallUpdate} onPage={onUpdatePage} /> : <div className="settings-layout">
       <div className="settings-main">
         <section className="settings-card" aria-labelledby="appearance-title">
           <div className="settings-card-heading"><div><h2 id="appearance-title">Appearance</h2><p>Set the mood for your workspace.</p></div></div>
@@ -108,7 +120,7 @@ export function SettingsPage({ settings, persisted, isSample, modifier, desktop,
         </div>
         <button className="reset-settings" type="button" onClick={() => onChange({ ...DEFAULT_SETTINGS })}><RotateCcw size={15} /> Reset preferences</button>
       </aside>
-    </div>
+    </div>}
   </section>;
 }
 

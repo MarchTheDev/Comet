@@ -8,6 +8,8 @@ use std::path::{Component, PathBuf};
 use tauri::{Emitter, Manager};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
+mod update;
+mod google;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -499,6 +501,14 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             list_vault,
             tray_available,
+            update::install_update,
+            google::google_status,
+            google::google_connect,
+            google::google_disconnect,
+            google::google_calendar_list,
+            google::google_calendar_create,
+            google::google_calendar_update,
+            google::google_calendar_delete,
             quit_app,
             open_vault_file,
             open_workspace_directory,

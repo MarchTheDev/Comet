@@ -2,14 +2,14 @@
 
 Comet is a local-first desktop workspace for notes and other files. Choose a
 folder on your computer; Comet works with the files there without an account.
-Google Calendar and manual Google Drive workspace snapshots are optional.
+Google Calendar and on-demand two-way Google Drive workspace sync are optional.
 
 ## Workspace
 
 - **Organize your files.** Browse all files, folders, pins and favorites. Use the
   list or gallery layout and the size slider to adjust type-specific file icons.
-  Create files, folders, to-do boards and whiteboards, or upload files from a `+`, folder or
-  background menu. File menus contain actions for that file only.
+  Create files, folders, to-do boards and whiteboards, or upload files from Quick
+  Capture, a `+`, folder or background menu. File menus contain actions for that file only.
 - **Move and arrange.** Drag an item onto a folder to move it. In the sidebar
   or Tree view, drop above or below another item to place it there—even when
   that moves it into a different folder. A grouped outline highlights the
@@ -23,7 +23,9 @@ Google Calendar and manual Google Drive workspace snapshots are optional.
   range, in either the sidebar or the file list. Use the trash button to review
   and permanently delete the selection. Click blank space, press Escape, or use
   the X to clear it. A selected folder includes its descendants; failures are
-  reported individually.
+  reported individually. A plain click opens an item without adding it to the
+  selection. Drag a selection to move or reorder it together; if a collision
+  interrupts a batch, remaining items stay in place.
 - **Explore.** Expand the root and folder nodes in the left-to-right Tree view
   to reveal files. Brain view shows up to 150 items as a network: click a folder
   node to reveal or hide its children, drag the background to pan or a node to
@@ -48,8 +50,9 @@ Google Calendar and manual Google Drive workspace snapshots are optional.
   theme by default; Settings also offers dark, light, emerald, rubellite and navy
   themes, app and interface-text scaling, editor size, spell check, to-do
   arrowheads, and reopening the last workspace. Scaling applies when a dragged
-  slider is released. The Matterhorn photo is always subtly visible behind the
-  workspace.
+  slider is released. Drag the sidebar's right edge to change its width; the
+  width is remembered on this device. The Matterhorn photo is always subtly
+  visible behind the workspace.
 - **Calendar.** Open Calendar from the sidebar to view a month, select a day,
   and add, edit, or delete events with an optional time and notes. Click the
   month or year to browse, or jump directly to any year from 1 to 9999. Each workspace has its
@@ -90,8 +93,9 @@ Names without an extension default to `.md`; names with an extension keep it.
 Markdown opens in the visual editor, source editor, or read-only view. Known
 UTF-8 text files such as `.txt`, `.json`, and `.csv` open in a plain-text editor.
 Text editing is limited to 16 MB. Images, PDFs, audio and video open in a preview
-or player; EPUB books open in a built-in reader with chapters, pagination and
-saved position. EPUB scripts and remote resources are blocked; DRM-protected
+or player; EPUB books open in a built-in reader with chapter navigation,
+page-by-page buttons and arrow keys, bookmarks, saved position, font/spacing
+controls and page colors. EPUB scripts and remote resources are blocked; DRM-protected
 books are unsupported. Playback depends on the codecs available on the system. Unknown
 formats are not automatically decoded as text: open them with the system app or
 explicitly try UTF-8 text editing. Invalid UTF-8 and files containing NUL bytes
@@ -104,7 +108,9 @@ previous page visible while the sharper version renders. The custom
 video controls include seeking, volume, playback speed and fullscreen. The audio
 player shows embedded title, artist and cover art when available, a sound-driven
 visualizer, a fullscreen player, and a volume slider that responds to the mouse
-wheel.
+wheel. In the focused player, Space toggles playback, Left/Right seek by ten
+seconds, M mutes, and F toggles fullscreen. Keyboard shortcuts do not intercept
+text fields or dialogs.
 
 When a track has no embedded cover, Comet **automatically sends its title and
 artist, or its filename if tags are unavailable, to Apple's music catalog** to
@@ -129,8 +135,9 @@ folders. End the path with a slash, for example `Comet\Folder\Nested\`, to
 create only the missing folders. `Comet` is an alias for the current workspace;
 absolute paths and `..` traversal are rejected.
 
-Quick capture (`+` at the top) saves text as a new Markdown file, or a web link
-as a standard `.url` shortcut in the destination folder. An image capture copies
+Quick capture (`+` at the top) saves text as a new Markdown file, a web link
+as a standard `.url` shortcut, or copies selected files into the destination
+folder. An image capture copies
 the image into that same folder and links it relatively; image capture requires
 a desktop workspace. Dropped links also become shortcuts; they do **not**
 download videos. YouTube and direct video links in Markdown automatically show
@@ -141,7 +148,7 @@ links are used. Markdown source view remains plain text.
 
 Create a **to-do board** from the New menu. A new `.comet-todo` file is a blank,
 autosaving canvas: add tasks, use **Add item** for independently checkable
-entries within a task, drag card grips to arrange them, and assign colored
+entries within a task, drag card top bars to arrange them, and assign colored
 categories from expanded details. Right-click a card or use its options button
 for more actions. Hover a task to reveal its connection dot (always visible on
 touch devices), then drag it onto another task. Click a connection to change its
@@ -151,12 +158,17 @@ Ctrl/Cmd + scroll.
 
 Create a **whiteboard** from the New menu for a separate `.comet-whiteboard`
 canvas. Add text boxes, to-dos, shapes and images (PNG/JPEG/GIF/WebP up to 2 MB
-apiece); drag their grips to arrange them and their dots to connect them. Drag
-blank space to pan, or use the zoom controls. Boards autosave in the workspace;
-unknown formats are not overwritten.
+apiece), pick from the shape menu, or use the pen for freehand strokes. Drag an
+item's top bar to move it, its bottom-right handle to resize it, or its dot to
+connect it to another item. Select a connection to change its color or remove
+it. Clicking blank canvas clears focus; drag blank space to pan or use the zoom
+controls. Version 1 whiteboards open without being rewritten and migrate to
+version 2 on the first edit. Older versions of Comet may not understand edited
+version 2 boards. Boards autosave in the workspace; unknown or damaged formats
+are not overwritten.
 
-Existing version 1 and version 2 boards open without being changed on disk. On the
-first edit they migrate to version 3, preserving tasks, notes, categories and
+Existing version 1 and version 2 to-do boards open without being changed on disk.
+On the first edit they migrate to version 3, preserving tasks, notes, categories and
 connections. Version 1 lists become categories; old list-to-list connections are
 preserved in the file but not drawn as task connections. Comet refuses to edit
 an invalid, unrecognized or newer board format rather than discarding unfamiliar
@@ -195,37 +207,58 @@ use Ctrl on Windows/Linux and Command on macOS.
 The Passwords view stores an AES-256-GCM encrypted vault in this device's app
 profile. Its master key is derived using PBKDF2-SHA256 with 600,000 iterations;
 the master password is not stored. The vault locks when you leave the view, hide
-the app, or after five minutes of inactivity. There is **no password recovery**;
-keep an encrypted backup and remember the master password. Icons are optional:
-enabling them sends site domains (not usernames or passwords) to Google's
-favicon service. Comet's vault has not been independently security-audited and
-is not a replacement for an audited password manager. It has no autofill or
-cloud sync and is not included in Drive snapshots.
+the app, or after five minutes of inactivity. To reduce lockout risk, unlock the
+vault, choose **Set up recovery**, confirm the master password, and save the
+random recovery code somewhere separate and safe before enabling it. The code
+can reset a forgotten master password; anyone with the code and an encrypted
+vault or backup can unlock its contents. **The code alone cannot restore a lost
+vault**: use Backup to save an encrypted copy. New recovery settings do not
+change earlier backups, which retain their original password and recovery code.
+Comet cannot decrypt the data if both the master password and recovery code are
+lost. Icons are optional: enabling them sends site domains (not usernames or
+passwords) to Google's favicon service. Comet's vault has not been independently
+security-audited and is not a replacement for an audited password manager. It
+has no autofill or cloud sync and is not included in Drive revisions.
 
-In **Settings → Cloud**, Google integrations use a system-browser Desktop OAuth
-flow with PKCE. Tokens and any client secret are stored in the OS credential
-store (Linux requires a working Secret Service). Comet currently has **no
-registered Google OAuth client**: create your own Google Cloud project, enable
-the Calendar API and/or Drive API, configure an OAuth consent screen and test
-users if necessary, create a **Desktop app** OAuth client, and enter its ID and,
-if required, its secret in Settings. Never share a client secret in chat. Use the
-same OAuth client and Google account on each device; reconnect if Google revokes
-or expires authorization. Disconnect removes Comet's local credentials; revoke
-access in your Google account to remove the grant itself.
+In **Settings → Cloud**, a single Google connection uses the system browser and
+Desktop OAuth with PKCE for both Calendar events and Comet-created Drive files.
+Tokens and any configured client secret are kept in the OS credential store
+(Linux requires a working Secret Service). A build needs a **registered Google
+Desktop OAuth client** before the Connect button works without setup. No such
+client is included in this source tree: the project owner must enable the
+Calendar and Drive APIs, configure the consent screen and any test users, and
+provide the public desktop client ID and optional desktop client secret at build
+time (see `docs/RELEASING.md`). In an unconfigured build, the advanced fields
+also allow an existing Desktop OAuth client. Desktop client configuration is
+public, not a way to keep a secret. Use the same Google account and OAuth client
+on each device. Reconnect if Google revokes or expires authorization. Disconnect
+removes local credentials; revoke access in your Google account to remove the
+grant itself. No Google account or network is needed for local use.
 
-Google Drive access is scoped to files created by Comet. **Upload current
-workspace** creates an immutable, uncompressed snapshot in Drive; **Import as
-new** asks for a destination folder and creates a separate workspace without
-replacing existing files. Avoid editing files while uploading: snapshots are not
-an atomic filesystem freeze. Upload again after changes; this is manual transfer,
-**not continuous two-way synchronization or conflict merging**. Snapshots are
-limited to 128 MB total, do not follow symbolic links, and reject names that
-cannot be safely transferred across platforms. They contain workspace files,
-including potentially sensitive notes and media, **without additional Comet
-encryption**. Local calendars, passwords, preferences, and organization metadata
-are not included; export/back them up separately. Keep independent backups and
-review the files in Google Drive. Real Google account/OS integration should be
-verified in your environment before relying on it.
+**Workspace sync is on demand, not continuous background sync.** With Google
+connected, choose **Start syncing this workspace** on the first device. On another
+device choose **Import on this device**, which creates a separate local workspace,
+then use **Sync now** on each device after changes and before switching devices.
+Comet uses immutable, checksummed Drive revisions and a three-way merge: changes
+on both sides are kept, conflicting remote files receive a named conflict copy,
+and replaced or deleted originals are moved into a visible `Comet sync safety …`
+folder next to the workspace. A failed operation reports any safety folder. The
+app blocks editing while a sync is running, but other applications may still
+change files; close external editors during sync. Keep independent backups and
+inspect conflicts before deleting them. The older **Upload current workspace**
+and **Import as new** snapshot actions remain available under Older manual
+backups, and never replace an existing workspace.
+
+Drive revisions are uncompressed and **not encrypted by Comet**. They include
+workspace files, potentially sensitive notes and media; local-only calendars,
+passwords, preferences, and organization metadata are excluded and must be
+backed up separately. Each revision is limited to 128 MB and 20,000 items;
+symbolic links and nonportable paths are refused. Comet currently lists at most
+2,000 sync revisions per account/client, and does not automatically prune
+history. Removing revisions can break merge ancestry, so keep independent backups
+and avoid deleting them while using sync. Real Google account, operating-system
+credential-store and multi-device behavior should be verified in your own setup
+before relying on this feature.
 
 On desktop, Comet checks published GitHub releases at startup and offers Later or
 an Updates page in Settings. On Windows, a user-initiated action downloads the

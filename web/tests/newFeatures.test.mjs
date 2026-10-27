@@ -1,5 +1,6 @@
 import { editableTextError, MAX_EDITABLE_BYTES } from "../src/utils/textSafety.ts";
 import { selectRange, selectionRoots } from '../src/utils/selection.ts';
+import { displayEntryName } from '../src/utils/vault.ts';
 import { keyboardShortcut, readShortcuts, DEFAULT_SHORTCUTS } from '../src/utils/shortcuts.ts';
 import { parseTodo, serializeTodo, newTodoDocument, TODO_CONNECTION_COLOR } from '../src/utils/todo.ts';
 import { safeWebUrl, parseShortcut, serializeShortcut, videoLink, firstDroppedUrl } from '../src/utils/links.ts';
@@ -14,7 +15,9 @@ let failures = 0;
 function check(name, ok) { if (ok) console.log(`  ok   ${name}`); else { failures++; console.log(`  FAIL ${name}`); } }
 console.log('\nselection, links, boards and exploration');
 const ordered = ['/vault/a', '/vault/b', '/vault/c', '/vault/d'];
-let selected = selectRange(new Set(), '', ordered, '/vault/a', false, false);
+let selected = selectRange(new Set(['/vault/b']), '', ordered, '/vault/a', false, false);
+check('ordinary click opens an item and clears multi-selection', selected.open && selected.selected.size === 0 && selected.anchor === '/vault/a');
+check('board suffixes are hidden while unrelated extensions remain', displayEntryName('Plan.comet-todo') === 'Plan' && displayEntryName('Canvas.COMET-WHITEBOARD') === 'Canvas' && displayEntryName('photo.png') === 'photo.png');
 selected = selectRange(selected.selected, selected.anchor, ordered, '/vault/c', false, true);
 check('shift selects a contiguous range without opening items', !selected.open && [...selected.selected].join() === ordered.slice(0, 3).join());
 selected = selectRange(selected.selected, selected.anchor, ordered, '/vault/b', true, false);

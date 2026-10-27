@@ -1,4 +1,5 @@
 import { webcrypto } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { AudioPlayer } from '../src/MediaPlayer.tsx';
@@ -21,6 +22,14 @@ board.items.push(a, b); board.connections.push({ from:a.id, to:b.id, color:'#889
 check('whiteboards round-trip content and connections', parseWhiteboard(serializeWhiteboard(board))?.connections.length === 1);
 check('whiteboards reject dangling connections and unknown future fields', !parseWhiteboard(JSON.stringify({ ...board, connections:[{from:a.id,to:'missing',color:'#8899aa'}] })) && !parseWhiteboard(JSON.stringify({...board, version:3})));
 check('whiteboards reject unsafe embedded image data', !parseWhiteboard(JSON.stringify({ ...board, items:[{...a,type:'image',image:'data:image/svg+xml;base64,PHN2Zz4='}], connections:[] })));
+const legacyItem={id:'old',type:'text',x:10,y:20,text:'safe',done:false,color:'#abcdef',image:''};
+const legacyBoard={format:'comet-whiteboard',version:1,items:[legacyItem],connections:[]}, migrated=parseWhiteboard(JSON.stringify(legacyBoard));
+check('legacy whiteboards migrate in memory with default dimensions and preserve content',migrated?.version===2&&migrated.items[0].text==='safe'&&migrated.items[0].width===240&&migrated.strokes.length===0);
+check('legacy documents reject shapes or unknown fields instead of silently changing them',!parseWhiteboard(JSON.stringify({...legacyBoard,items:[{...legacyItem,type:'shape'}]}))&&!parseWhiteboard(JSON.stringify({...legacyBoard,extra:true})));
+check('whiteboard rejects unbounded strokes and malformed dimensions',!parseWhiteboard(JSON.stringify({...board,items:[{...a,width:1}]}))&&!parseWhiteboard(JSON.stringify({...board,strokes:[{id:'s',color:'#123456',width:4,points:[{x:-1,y:0}]}]})));
+const css=readFileSync('src/index.css','utf8'),epubSource=readFileSync('src/EpubView.tsx','utf8');
+check('EPUB wrapper styles cannot constrain epub.js paginated inner views',css.includes('.comet-epub-view {')&&!/^\s*\.epub-view\s*\{/m.test(css)&&epubSource.includes('comet-epub-view'));
+
 const salt = crypto.getRandomValues(new Uint8Array(16)), key = await derivePasswordKey('correct horse battery staple', salt);
 const data = {format:'comet-passwords-data',version:1,entries:[{id:'one',name:'Example',website:'https://example.com/',username:'alice@example.com',password:'hidden secret',notes:''}]};
 const encrypted = await encryptPasswordData(data, key, salt), another = await encryptPasswordData(data, key, salt);

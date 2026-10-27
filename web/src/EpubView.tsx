@@ -100,7 +100,7 @@ export function EpubView({ url, path, sample, onOpenExternal }: { url: string; p
     const next = [...bookmarks, { cfi, label }]; try { localStorage.setItem(bookmarkKey(path), JSON.stringify(next)); setBookmarks(next); setSelectedBookmark(cfi); } catch { setNotice("Couldn't save the bookmark on this device."); }
   };
   const removeBookmark = () => { const next = bookmarks.filter((item) => item.cfi !== selectedBookmark); try { localStorage.setItem(bookmarkKey(path), JSON.stringify(next)); setBookmarks(next); setSelectedBookmark(""); } catch { setNotice("Couldn't update bookmarks on this device."); } };
-  return <div className={`epub-view epub-paper-${prefs.paper}`}>
+  return <div className={`comet-epub-view epub-paper-${prefs.paper}`}>
     <div className="epub-toolbar"><BookOpen size={17} /><strong>EPUB reader</strong><span className="pdf-spacer" />
       <select aria-label="Book chapter" value={toc.find((item) => item.href.split("#")[0] === chapter.split("#")[0])?.href ?? ""} disabled={!ready || !toc.length} onChange={(event) => { if (internalLink(event.target.value)) void rendition.current?.display(event.target.value).catch(() => setNotice("Couldn't open that chapter.")); }}><option value="">Contents</option>{toc.map((item, index) => <option key={`${item.href}:${index}`} value={item.href}>{item.label}</option>)}</select>
       <button type="button" aria-label="Smaller book text" disabled={!ready || prefs.font <= 70} onClick={() => updatePrefs({ font: Math.max(70, prefs.font - 10) })}><Minus size={16} /></button><span>{prefs.font}%</span><button type="button" aria-label="Larger book text" disabled={!ready || prefs.font >= 180} onClick={() => updatePrefs({ font: Math.min(180, prefs.font + 10) })}><Plus size={16} /></button>

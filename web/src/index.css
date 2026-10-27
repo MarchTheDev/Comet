@@ -1306,7 +1306,8 @@ button.tree-disclosure:hover { color: var(--accent-ink); background: var(--accen
 :root[data-theme] .secondary-button { color:var(--text-secondary); border-color:var(--border-strong); background:var(--panel-raised); }
 :root[data-theme] .secondary-button:hover:not(:disabled) { color:var(--accent-ink); border-color:var(--accent); background:var(--accent-soft); }
 :root[data-theme] ::selection { color:var(--text); background:var(--accent-soft); }
-.epub-view { max-width:1000px; margin:22px auto; }
+/* epub.js also uses .epub-view for its wide internal paginated viewport. */
+.comet-epub-view { max-width:1000px; margin:22px auto; }
 .epub-toolbar, .epub-navigation { display:flex; align-items:center; gap:9px; flex-wrap:wrap; color:var(--text-secondary); font-size:calc(11px * var(--interface-text-scale,1)); }
 .epub-toolbar { padding:10px; border:1px solid var(--border); border-radius:10px 10px 0 0; background:var(--panel-soft); }
 .epub-toolbar button { display:grid; place-items:center; width:30px; height:30px; color:var(--text-secondary); border:0; border-radius:6px; background:transparent; }

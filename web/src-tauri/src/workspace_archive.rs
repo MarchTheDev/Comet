@@ -232,10 +232,12 @@ fn current_file_matches(path: &Path, bytes: &[u8]) -> bool {
     fs::symlink_metadata(path).ok().is_some_and(|m| m.is_file() && !m.file_type().is_symlink() && m.len() == bytes.len() as u64)
         && fs::read(path).ok().is_some_and(|old| old == bytes)
 }
-fn conflict_copy(path: &Path, bytes: &[u8]) -> Result<bool, String> {
+fn conflict_copy(root: &Path, path: &Path, bytes: &[u8]) -> Result<bool, String> {
     let hash = Sha256::digest(bytes); let tag = hash[..4].iter().map(|b| format!("{b:02x}")).collect::<String>();
     for index in 0..1000 {
         let candidate = conflict_path(path, &tag, index)?;
+        // Refuse before writing a copy that the next portable snapshot could not pack.
+        relative_name(root, &candidate)?;
         match atomic_write_new(&candidate, bytes) {
             Ok(()) => return Ok(true),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
@@ -331,7 +333,7 @@ pub fn merge(vault: &str, base: Option<&[u8]>, remote: &[u8]) -> Result<MergeSum
                 // An external editor wrote after our snapshot; restore its edit
                 // and preserve the incoming version as a conflict instead.
                 crate::rename_without_replace(&saved, &target).map_err(|_| "A local file changed during sync; its original is in the safety folder.")?;
-                if conflict_copy(&target, value.bytes)? { result.conflicts += 1; }
+                if conflict_copy(&root, &target, value.bytes)? { result.conflicts += 1; }
                 continue;
             }
             match atomic_write_new(&target, value.bytes) {
@@ -339,11 +341,11 @@ pub fn merge(vault: &str, base: Option<&[u8]>, remote: &[u8]) -> Result<MergeSum
                 Err(_) => { let _ = crate::rename_without_replace(&saved, &target); return Err(format!("Couldn't apply a complete remote file. The local original, if not restored, is safe in {}.", saved.display())); }
             }
         } else if here.is_some() || (!changed_parent && original.is_some()) {
-            if conflict_copy(&target, value.bytes)? { result.conflicts += 1; }
+            if conflict_copy(&root, &target, value.bytes)? { result.conflicts += 1; }
         } else {
             match atomic_write_new(&target, value.bytes) {
                 Ok(()) => result.applied += 1,
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => { if conflict_copy(&target, value.bytes)? { result.conflicts += 1; } },
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => { if conflict_copy(&root, &target, value.bytes)? { result.conflicts += 1; } },
                 Err(_) => return Err("Couldn't create a complete synced file.".into()),
             }
         }
@@ -464,6 +466,30 @@ mod sync_tests {
         fs::create_dir(&base).unwrap(); fs::create_dir(&local).unwrap(); fs::write(base.join("remote"), "remote").unwrap(); symlink(&base, local.join("linked")).unwrap();
         let data = pack(base.to_str().unwrap()).unwrap(); assert!(merge(local.to_str().unwrap(), None, &data).is_err());
         assert!(!local.join("remote").exists()); fs::remove_dir_all(area).unwrap();
+    }
+
+    #[test]
+    fn locally_deleted_folder_preserves_remote_edited_descendant_as_conflict() {
+        let area = test_dir("delete-edit"); let base = area.join("base"); let local = area.join("local"); let remote = area.join("remote");
+        fs::create_dir_all(base.join("folder")).unwrap(); fs::create_dir(&local).unwrap(); fs::create_dir_all(remote.join("folder")).unwrap();
+        fs::write(base.join("folder/note.md"), "old").unwrap(); fs::write(remote.join("folder/note.md"), "edited remotely").unwrap();
+        let old = pack(base.to_str().unwrap()).unwrap(); let incoming = pack(remote.to_str().unwrap()).unwrap();
+        let result = merge(local.to_str().unwrap(), Some(&old), &incoming).unwrap();
+        assert_eq!(result.conflicts, 1); assert!(!local.join("folder/note.md").exists());
+        let copy = fs::read_dir(local.join("folder")).unwrap().map(Result::unwrap).next().unwrap().path();
+        assert_eq!(fs::read_to_string(copy).unwrap(), "edited remotely");
+        fs::remove_dir_all(area).unwrap();
+    }
+    #[cfg(unix)]
+    #[test]
+    fn overly_long_conflict_names_fail_before_creating_untransferable_files() {
+        let area = test_dir("long-conflict"); let local = area.join("local"); fs::create_dir(&local).unwrap();
+        let mut path = local.clone(); for n in 0..8 { path.push(format!("{}{}", n, "x".repeat(239))); fs::create_dir(&path).unwrap(); }
+        let target = path.join(format!("{}.txt", "n".repeat(100))); fs::write(&target, "local").unwrap();
+        let before = fs::read_dir(&path).unwrap().count();
+        assert!(conflict_copy(&fs::canonicalize(&local).unwrap(), &target, b"remote").is_err());
+        assert_eq!(fs::read_to_string(target).unwrap(), "local"); assert_eq!(fs::read_dir(&path).unwrap().count(), before);
+        fs::remove_dir_all(area).unwrap();
     }
 
 }

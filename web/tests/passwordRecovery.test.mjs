@@ -50,5 +50,26 @@ await click(button('Lock'));await click(button('Forgot master password? Use reco
 inputs=document.querySelectorAll('.password-unlock input');await fill(inputs[0],code);await fill(inputs[1],master);await fill(inputs[2],master);
 await submit();const external='changed elsewhere';localStorage.setItem(PASSWORD_STORAGE_KEY,external);await wait(()=>!!document.querySelector('[role="alert"]'));
 check('recovery refuses to overwrite a vault changed in another window',localStorage.getItem(PASSWORD_STORAGE_KEY)===external&&document.querySelector('[role="alert"]')?.textContent.includes('elsewhere'));
-await act(async()=>root.unmount());dom.window.close();delete globalThis.IS_REACT_ACT_ENVIRONMENT;delete globalThis.localStorage;
+await act(async()=>root.unmount());
+// Closing or hiding the view while a reset is deriving a key must not commit it.
+localStorage.setItem(PASSWORD_STORAGE_KEY,updated);const root2=createRoot(document.getElementById('root'));await act(async()=>root2.render(React.createElement(PasswordsView)));
+await click(button('Forgot master password? Use recovery code'));inputs=document.querySelectorAll('.password-unlock input');await fill(inputs[0],code);await fill(inputs[1],master);await fill(inputs[2],master);await submit();
+Object.defineProperty(document,'hidden',{value:true,configurable:true});await act(async()=>document.dispatchEvent(new dom.window.Event('visibilitychange')));await act(async()=>new Promise(r=>setTimeout(r,1200)));
+check('auto-lock during recovery cancels the pending reset',localStorage.getItem(PASSWORD_STORAGE_KEY)===updated&&!button('Lock')&&[...document.querySelectorAll('.password-unlock input')].every(e=>!e.value));
+Object.defineProperty(document,'hidden',{value:false,configurable:true});await act(async()=>root2.unmount());
+// Set up recovery on a v1 vault, requiring confirmation that the code was saved.
+localStorage.setItem(PASSWORD_STORAGE_KEY,legacy);const root3=createRoot(document.getElementById('root'));await act(async()=>root3.render(React.createElement(PasswordsView)));
+await fill(document.querySelector('.password-unlock input[type=password]'),master);await submit();await wait(()=>!!button('Set up recovery'));await click(button('Set up recovery'));
+await fill(document.querySelector('.password-recovery-panel input[type=password]'),master);await act(async()=>document.querySelector('.password-recovery-panel form').dispatchEvent(new dom.window.Event('submit',{bubbles:true,cancelable:true})));await wait(()=>!!document.querySelector('.password-recovery-panel code'));
+const displayedCode=document.querySelector('.password-recovery-panel code')?.textContent;
+check('setup shows a code but does not change a v1 vault before confirmation',!!displayedCode&&button('Enable recovery').disabled&&localStorage.getItem(PASSWORD_STORAGE_KEY)===legacy);
+await click(document.querySelector('.password-recovery-panel input[type=checkbox]'));await click(button('Enable recovery'));const upgraded=localStorage.getItem(PASSWORD_STORAGE_KEY);
+check('confirmed setup preserves legacy entries and enables the displayed code',upgraded!==legacy&&(await unlockPasswordRecovery(upgraded,displayedCode)).data.entries[0].password==='sensitive');
+await act(async()=>root3.unmount());
+// Import is allowed only into an empty device vault and can itself be recovered.
+localStorage.removeItem(PASSWORD_STORAGE_KEY);const root4=createRoot(document.getElementById('root'));await act(async()=>root4.render(React.createElement(PasswordsView)));
+const fileInput=document.querySelector('.password-unlock input[type=file]');Object.defineProperty(fileInput,'files',{configurable:true,value:[{size:upgraded.length,text:async()=>upgraded}]});await act(async()=>fileInput.dispatchEvent(new dom.window.Event('change',{bubbles:true})));await wait(()=>document.querySelector('.password-unlock h2')?.textContent==='Unlock backup');
+await click(button('Forgot master password? Use recovery code'));inputs=document.querySelectorAll('.password-unlock input:not([type=file])');await fill(inputs[0],displayedCode);await fill(inputs[1],newMaster);await fill(inputs[2],newMaster);await submit();await wait(()=>!!button('Lock'));
+check('an encrypted backup can be imported through recovery without its old master password',!!button('Lock')&&document.querySelector('.password-list')?.textContent.includes('Test')&&(await unlockPasswordData(readPasswordStorage(localStorage.getItem(PASSWORD_STORAGE_KEY)).envelope,newMaster)).data.entries.length===1);
+await act(async()=>root4.unmount());dom.window.close();delete globalThis.IS_REACT_ACT_ENVIRONMENT;delete globalThis.localStorage;
 globalThis.__cometFailures=(globalThis.__cometFailures??0)+failures;

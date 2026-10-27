@@ -39,10 +39,27 @@ remove either.
 3. On Windows, run the setup and MSI, check their icon and branding, launch the
    standalone and portable versions, and exercise file editing, calendar, media,
    Explorer reveal, launch-at-login, tray restore, close-to-tray, tray quit,
-   whiteboards, password locking/backup, EPUB reading, Google OAuth/calendar,
-   Drive snapshot upload/import and the update handoff after an edit. Also verify that a failed save prevents closing or quitting.
+   whiteboards, password recovery/locking/backup, EPUB page turning, Google
+   OAuth/calendar, Drive sync between two devices (including simultaneous edits,
+   deletions, retries and conflict copies), snapshot upload/import, and the update
+   handoff after an edit. Also verify that a failed save prevents closing or quitting.
 4. Review the release notes, then publish the draft when ready. The workflow
    leaves an already-published release untouched.
+
+### Google sign-in configuration
+
+Google requires a registered Desktop OAuth client. Create one for the Comet
+project, enable the Google Calendar and Drive APIs, and configure the consent
+screen, test users and any required verification with Google. Set GitHub Actions
+repository variables `COMET_GOOGLE_CLIENT_ID` and, if required,
+`COMET_GOOGLE_CLIENT_SECRET` before building. The workflow passes them into the
+frontend as `VITE_GOOGLE_CLIENT_ID` and `VITE_GOOGLE_CLIENT_SECRET`; local builds
+can set those environment variables directly. A desktop client ID and secret are
+publicly extractable from an installed app, not a protected secret. Do not put
+refresh tokens or user passwords in either variable. If no client is configured,
+the app clearly offers advanced manual setup instead of pretending one-click
+sign-in is ready. Verify the final installer against a real Google account and
+OS credential store; mocked tests cannot prove OAuth or Drive integration.
 
 To build locally on Windows, install Rust with the MSVC toolchain, Visual Studio
 Build Tools with **Desktop development with C++**, Node.js 22.13 or newer, and

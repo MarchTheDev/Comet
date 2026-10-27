@@ -1,0 +1,24 @@
+import { downloadCover, readCover, saveCover, validCoverUrl } from '../src/utils/coverCache.ts';
+let failures = 0;
+function check(name, ok) { if (ok) console.log(`  ok   ${name}`); else { failures++; console.log(`  FAIL ${name}`); } }
+console.log('\ncover artwork cache');
+const data = new Map();
+globalThis.localStorage = { getItem: key => data.get(key) ?? null, setItem: (key, value) => data.set(key, value) };
+const url = 'https://is1-ssl.mzstatic.com/image/thumb/album/600x600bb.jpg';
+check('accepts only credential-free HTTPS artwork on Apple image hosts', validCoverUrl(url) && !validCoverUrl('https://mzstatic.com.evil.example/a.jpg') && !validCoverUrl('https://user:pass@mzstatic.com/a.jpg') && !validCoverUrl('http://mzstatic.com/a.jpg') && !validCoverUrl('data:image/png,unsafe'));
+const blob = new Blob([new Uint8Array([1, 2, 3])], { type: 'image/png' });
+await saveCover('track by artist', url, blob);
+const cached = await readCover('track by artist');
+check('keeps artwork and a persistent validated lookup without the workspace', cached?.url === url && cached?.blob?.size === 3 && [...data.values()].some(value => value.includes(url)));
+await saveCover('invalid', 'https://evil.example/a.jpg', blob);
+check('never caches an untrusted artwork URL', await readCover('invalid') === null);
+const originalFetch = globalThis.fetch;
+globalThis.fetch = async () => new Response(new Uint8Array([1, 2, 3]), { status: 200, headers: { 'Content-Type': 'image/png' } });
+check('downloads bounded valid image bytes', (await downloadCover(url, new AbortController().signal))?.size === 3);
+globalThis.fetch = async () => new Response('not an image', { status: 200, headers: { 'Content-Type': 'text/html' } });
+check('ignores non-image responses', await downloadCover(url, new AbortController().signal) === undefined);
+globalThis.fetch = async () => new Response('large', { status: 200, headers: { 'Content-Type': 'image/png', 'Content-Length': String(5 * 1024 * 1024) } });
+check('refuses oversized artwork', await downloadCover(url, new AbortController().signal) === undefined);
+globalThis.fetch = originalFetch;
+delete globalThis.localStorage;
+globalThis.__cometFailures = (globalThis.__cometFailures ?? 0) + failures;

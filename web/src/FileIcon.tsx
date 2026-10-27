@@ -9,5 +9,5 @@ export function entryIcon(entry: Entry, expanded = false): LucideIcon {
 }
 export function FileIcon({ entry, size = 18, expanded = false }: { entry: Entry; size?: number; expanded?: boolean }) {
   const Icon = entryIcon(entry, expanded);
-  return <Icon size={size} strokeWidth={1.65} aria-hidden="true" />;
+  return <Icon className={`file-kind-icon ${entry.kind === "folder" ? "kind-folder" : `kind-${fileKind(entry.path)}`}`} size={size} strokeWidth={1.85} aria-hidden="true" />;
 }

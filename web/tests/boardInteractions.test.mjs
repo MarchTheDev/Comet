@@ -21,8 +21,8 @@ Object.defineProperty(globalThis, 'navigator', { value: dom.window.navigator, co
 
 const initial = newTodoDocument();
 initial.tasks = [
-  { id: 'first', text: 'First', done: false, notes: '', x: 40, y: 50, categoryId: null },
-  { id: 'second', text: 'Second', done: false, notes: '', x: 400, y: 130, categoryId: null },
+  { id: 'first', text: 'First', done: false, notes: '', x: 40, y: 50, categoryId: null, subtasks: [] },
+  { id: 'second', text: 'Second', done: false, notes: '', x: 400, y: 130, categoryId: null, subtasks: [] },
 ];
 let current = initial;
 function Harness() {
@@ -44,9 +44,23 @@ await fire(document.querySelector('[aria-label="Connect First to another to-do"]
 await fire(window, pointer('pointermove', 80, 80));
 await fire(window, pointer('pointerup', 80, 80));
 check('dragging the dot connects two tasks', current.connections.length === 1 && current.connections[0].from === 'first' && current.connections[0].to === 'second' && !!document.querySelector('.todo-link-line'));
+check('connection arrowheads are off by default', !document.querySelector('.todo-link-line').hasAttribute('marker-end'));
 await fire(document.querySelector('.todo-link-hit'), new dom.window.MouseEvent('click', { bubbles: true }));
+await fire(document.querySelector('[aria-label="Color connection from First to Second"]'), new dom.window.MouseEvent('click', { bubbles: true }));
+await fire(document.querySelector('[aria-label="Choose #e78383"]'), new dom.window.MouseEvent('click', { bubbles: true }));
+check('connection color is editable and persisted in the board', current.connections[0].color === '#e78383');
 await fire(document.querySelector('.todo-link-remove'), new dom.window.MouseEvent('click', { bubbles: true }));
 check('removing a connection keeps both tasks', current.connections.length === 0 && current.tasks.length === 2);
+await fire(document.querySelector('[data-todo-id="first"]'), new dom.window.MouseEvent('contextmenu', { bubbles: true, button: 2, clientX: 40, clientY: 40 }));
+check('right-click exposes useful to-do actions', document.querySelector('.todo-context-menu')?.textContent.includes('Add item'));
+const addItem = [...document.querySelectorAll('.todo-context-menu button')].find(button => button.textContent === 'Add item');
+await fire(addItem, new dom.window.MouseEvent('click', { bubbles: true }));
+const itemInput = document.querySelector('[aria-label="New item for First"]');
+await act(async () => { Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value').set.call(itemInput, 'Meeting'); itemInput.dispatchEvent(new dom.window.Event('input', { bubbles: true })); });
+await fire(document.querySelector('.todo-subtask-add'), new dom.window.Event('submit', { bubbles: true, cancelable: true }));
+check('adds a named sub-item without changing the parent title', current.tasks[0].text === 'First' && current.tasks[0].subtasks[0]?.text === 'Meeting');
+await fire(document.querySelector('[aria-label="Zoom board in"]'), new dom.window.MouseEvent('click', { bubbles: true }));
+check('board has working zoom controls', document.querySelector('.todo-zoom-reset').textContent === '120%');
 
 const categories = [...document.querySelectorAll('button')].find((button) => button.textContent.trim() === 'Categories');
 await fire(categories, new dom.window.MouseEvent('click', { bubbles: true }));

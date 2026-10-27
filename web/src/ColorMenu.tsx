@@ -29,7 +29,10 @@ export function ColorMenu({ color, onChange, label, trigger, preserveSelection, 
       if (!trigger || !panel) return;
       const left = Math.max(8, Math.min(trigger.left, window.innerWidth - panel.width - 8));
       const top = trigger.bottom + 6 + panel.height > window.innerHeight - 8 ? Math.max(8, trigger.top - panel.height - 6) : trigger.bottom + 6;
-      setPosition({ left, top });
+      // The app scale uses CSS zoom on the root. DOM rects are screen pixels,
+      // while fixed-position portal coordinates are expressed in zoomed CSS pixels.
+      const scale = Number(document.documentElement.style.zoom) || 1;
+      setPosition({ left: left / scale, top: top / scale });
     };
     place(); window.addEventListener("resize", place); window.addEventListener("scroll", place, true);
     return () => { window.removeEventListener("resize", place); window.removeEventListener("scroll", place, true); };
@@ -42,7 +45,7 @@ export function ColorMenu({ color, onChange, label, trigger, preserveSelection, 
   };
   return <div className="color-menu-root" ref={root}>
     <button className="color-menu-trigger" type="button" aria-label={label} aria-expanded={open} title={label} onMouseDown={preserveSelection ? (event) => event.preventDefault() : undefined} onClick={() => setOpen((value) => !value)}>{trigger ?? <span className="color-current" style={{ background: safe }} />}</button>
-    {open && createPortal(<div ref={popover} className="color-popover" role="group" aria-label={`${label} palette`} style={{ left: position.left, top: position.top }}>
+    {open && createPortal(<div ref={popover} className="color-popover" role="group" aria-label={`${label} palette`} style={{ left: position.left, top: position.top }} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
       <div className="color-popover-heading">{label}<span>Choose a color</span></div>
       <div className="color-swatches">{PALETTE.map((swatch) => <button key={swatch} type="button" title={swatch} aria-label={`Choose ${swatch}`} aria-pressed={safe.toLowerCase() === swatch} style={{ background: swatch }} onMouseDown={preserveSelection ? (event) => event.preventDefault() : undefined} onClick={() => { onChange(swatch); setOpen(false); }}>{safe.toLowerCase() === swatch && <Check size={14} />}</button>)}</div>
       {onReset && <button type="button" className="color-reset" onMouseDown={preserveSelection ? (event) => event.preventDefault() : undefined} onClick={() => { onReset(); setOpen(false); }}>Use default color</button>}

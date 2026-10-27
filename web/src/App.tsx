@@ -86,7 +86,7 @@ type NavigationHistory = { items: NavigationPoint[]; index: number };
 type CaptureType = "text" | "link" | "image";
 type CreateDialog = { kind: "note" | "folder" | "todo"; folder: string };
 type PathCreateDialog = Extract<PathPlan, { kind: "create" }> & { vault: string };
-type DropIndicator = { path: string; position: "before" | "after" | "into"; surface: "sidebar" | "workspace" };
+type DropIndicator = { path: string; position: "before" | "after" | "into"; surface: "sidebar" | "workspace"; source?: string };
 type ContextMenu = { x: number; y: number; node?: TreeNode; folder: string };
 
 function initialSample() {
@@ -286,6 +286,12 @@ function App() {
   useEffect(() => {
     setSettingsPersisted(saveSettings(settings));
   }, [settings]);
+
+  useEffect(() => {
+    document.documentElement.style.setProperty("--interface-text-scale", String(settings.textScale / 100));
+    document.documentElement.style.zoom = String(settings.interfaceScale / 100);
+    return () => { document.documentElement.style.removeProperty("--interface-text-scale"); document.documentElement.style.removeProperty("zoom"); };
+  }, [settings.textScale, settings.interfaceScale]);
 
   useEffect(() => {
     const media = window.matchMedia?.("(prefers-color-scheme: dark)");
@@ -1192,7 +1198,8 @@ function App() {
     const bounds = event.currentTarget.getBoundingClientRect();
     const x = event.clientX || bounds.right;
     const y = event.clientY || bounds.bottom;
-    setContextMenu({ x: Math.max(8, Math.min(x, window.innerWidth - 240)), y: Math.max(8, Math.min(y, window.innerHeight - 390)), node: item, folder: item.kind === "folder" ? item.path : parentPath(item.path) || vaultRef.current });
+    const scale = Number(document.documentElement.style.zoom) || 1;
+    setContextMenu({ x: Math.max(8, Math.min(x, window.innerWidth - 240 * scale)) / scale, y: Math.max(8, Math.min(y, window.innerHeight - 390 * scale)) / scale, node: item, folder: item.kind === "folder" ? item.path : parentPath(item.path) || vaultRef.current });
   }, []);
 
   const startVaultDrag = (event: React.PointerEvent, source: string) => {
@@ -1217,7 +1224,8 @@ function App() {
     event.preventDefault(); event.stopPropagation();
     const bounds = event.currentTarget.getBoundingClientRect();
     const x = event.clientX || bounds.left, y = event.clientY || bounds.bottom;
-    setContextMenu({ x: Math.max(8, Math.min(x, window.innerWidth - 240)), y: Math.max(8, Math.min(y, window.innerHeight - 190)), folder });
+    const scale = Number(document.documentElement.style.zoom) || 1;
+    setContextMenu({ x: Math.max(8, Math.min(x, window.innerWidth - 240 * scale)) / scale, y: Math.max(8, Math.min(y, window.innerHeight - 190 * scale)) / scale, folder });
   };
   const entryContext = (event: MouseEvent, entry: Entry) => handleTreeContext(event, { ...entry, children: [] });
   const openEntry = (entry: Entry) => { if (entry.kind === "folder") void showFolder(entry.path); else void selectNote(entry.path); };
@@ -1390,8 +1398,8 @@ function App() {
     const nearEdge = y < bounds.top + bounds.height * .28 || y > bounds.bottom - bounds.height * .28;
     // Edges of a file or folder mean ordering among its siblings. This also
     // works across folders: the item is moved into that parent before ordering.
-    if (item.kind !== "folder" || nearEdge) return { path: item.path, position: before ? "before" : "after", surface: "sidebar" };
-    if (item.kind === "folder" && !isPathInside(item.path, source)) return { path: item.path, position: "into", surface: "sidebar" };
+    if (item.kind !== "folder" || nearEdge) return { path: item.path, position: before ? "before" : "after", surface: "sidebar", source };
+    if (item.kind === "folder" && !isPathInside(item.path, source)) return { path: item.path, position: "into", surface: "sidebar", source };
     return null;
   };
   const applyTreeDrop = (source: string, item: Entry, indicator: DropIndicator | null) => {
@@ -1546,8 +1554,8 @@ function App() {
   return (
     <div className={`comet-root mountain-visible${focusMode ? " focus-mode" : ""}${selection.size ? " has-selection" : ""}`} style={{ "--editor-font-size": `${settings.editorFontSize}px` } as CSSProperties} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); showDropIndicator(null); dragSourceRef.current = ""; }} onDragEnd={() => { showDropIndicator(null); dragSourceRef.current = ""; }} onClick={(event) => { if (contextMenu) setContextMenu(null); if (vaultMenuOpen && !(event.target as Element).closest(".workspace-switcher")) setVaultMenuOpen(false); }}>
       <div className="app-shell">
-        {explorerOpen && <button className="sidebar-scrim" type="button" aria-label="Close sidebar" onClick={() => setExplorerOpen(false)} />}
-        {explorerOpen && <aside className="sidebar" aria-label="Workspace navigation">
+        <button className={`sidebar-scrim${explorerOpen ? " is-open" : ""}`} type="button" aria-label="Close sidebar" aria-hidden={!explorerOpen} tabIndex={explorerOpen ? 0 : -1} onClick={() => setExplorerOpen(false)} />
+        <aside className={`sidebar${explorerOpen ? "" : " is-closed"}`} aria-label="Workspace navigation" aria-hidden={!explorerOpen} inert={!explorerOpen}>
           <div className="sidebar-brand">
             <div className="brand-mark" aria-hidden="true"><img src="/comet.svg" alt="" /></div>
             <div className="brand-name">comet<span>.</span></div>
@@ -1594,7 +1602,7 @@ function App() {
             <button className={workspaceView === "settings" ? "nav-item settings-nav active" : "nav-item settings-nav"} type="button" aria-current={workspaceView === "settings" ? "page" : undefined} onClick={() => void showSettings()}><Settings2 size={17} /><span>Settings</span><ChevronRight size={14} className="settings-nav-arrow" /></button>
             <div className="sidebar-footer"><span>{isSample ? (sampleVault.isPersisted() ? "Sample · saved here" : "Sample · temporary") : "Local workspace"}</span><span>v{APP_VERSION}</span></div>
           </div>
-        </aside>}
+        </aside>
 
         <main className="main-area">
           <header className="app-topbar">
@@ -1631,7 +1639,7 @@ function App() {
           </header>
 
           <div ref={workspaceScrollRef} className={`workspace-scroll without-cover${dropIndicator?.surface === "workspace" && dropIndicator.path === workspaceDestination && dropIndicator.position === "into" ? " drop-target" : ""}`} data-drop-folder={workspaceDestination} onClick={(event) => { const target = event.target as Element; if (!target.closest("button, a, input, select, textarea, [contenteditable=true], .workspace-entry, .brain-node, .todo-card, .todo-link-hit, .note-card, .media-card")) clearSelection(); }} onDragOver={(event) => { event.preventDefault(); showDropIndicator({ path: workspaceDestination, position: "into", surface: "workspace" }); }} onDrop={(event) => dropToFolder(event, workspaceDestination)} onContextMenu={(event) => { if (event.target === event.currentTarget) openNewMenu(event, workspaceDestination); }}>
-            {workspaceView === "tree" ? <TreeExplore key={vaultPath} vault={vaultPath} name={vaultName} tree={tree} onOpen={openEntry} selectedPaths={selection} onActivate={activateSelection} onClearSelection={clearSelection} /> : workspaceView === "brain" ? <BrainExplore key={vaultPath} vault={vaultPath} name={vaultName} entries={entries} onOpen={openEntry} selectedPaths={selection} onActivate={activateSelection} onClearSelection={clearSelection} /> : workspaceView === "settings" ? <SettingsPage settings={settings} persisted={settingsPersisted} isSample={isSample} modifier={modifier} onChange={updateSettings} onBack={() => history.index > 0 ? void navigateHistory(-1) : void showOverview("all")} onOpenVault={() => void openVault()} /> : workspaceView === "todo" && selectedPath && parseTodo(content) ? <div className="todo-workspace"><div className="media-top-actions"><button className={`icon-button ${itemMeta(metadata, selectedPath).pinned ? "active" : ""}`} type="button" aria-label={itemMeta(metadata, selectedPath).pinned ? "Unpin board" : "Pin board"} onClick={() => toggleProperty(selectedPath, "pinned")}><Pin size={17} /></button><button className={`icon-button ${itemMeta(metadata, selectedPath).favorite ? "active" : ""}`} type="button" aria-label={itemMeta(metadata, selectedPath).favorite ? "Remove board from favorites" : "Add board to favorites"} onClick={() => toggleProperty(selectedPath, "favorite")}><Star size={17} /></button><button className="icon-button" type="button" aria-label="Edit board tags" onClick={() => openTags(selectedPath)}><Tag size={17} /></button><button className="icon-button" type="button" aria-label={`More options for ${selectedName}`} onClick={(event) => handleTreeContext(event, { name: selectedName, path: selectedPath, kind: "file", children: [] })}><MoreHorizontal size={19} /></button></div><TodoBoard key={selectedPath} board={parseTodo(content)!} name={selectedName.replace(/\.comet-todo$/i, "")} saveState={saveState} onChange={updateTodo} onRetry={() => void flushAll().catch(() => setNotice("Still couldn't save. Please check the folder and try again."))} /></div> : workspaceView === "note" && selectedPath ? <section className="note-card" aria-label={`File: ${selectedName}`}>
+            {workspaceView === "tree" ? <TreeExplore key={vaultPath} vault={vaultPath} name={vaultName} tree={tree} onOpen={openEntry} selectedPaths={selection} onActivate={activateSelection} onClearSelection={clearSelection} /> : workspaceView === "brain" ? <BrainExplore key={vaultPath} vault={vaultPath} name={vaultName} entries={entries} onOpen={openEntry} onContext={entryContext} selectedPaths={selection} onActivate={activateSelection} onClearSelection={clearSelection} /> : workspaceView === "settings" ? <SettingsPage settings={settings} persisted={settingsPersisted} isSample={isSample} modifier={modifier} onChange={updateSettings} onBack={() => history.index > 0 ? void navigateHistory(-1) : void showOverview("all")} onOpenVault={() => void openVault()} /> : workspaceView === "todo" && selectedPath && parseTodo(content) ? <div className="todo-workspace"><div className="media-top-actions"><button className={`icon-button ${itemMeta(metadata, selectedPath).pinned ? "active" : ""}`} type="button" aria-label={itemMeta(metadata, selectedPath).pinned ? "Unpin board" : "Pin board"} onClick={() => toggleProperty(selectedPath, "pinned")}><Pin size={17} /></button><button className={`icon-button ${itemMeta(metadata, selectedPath).favorite ? "active" : ""}`} type="button" aria-label={itemMeta(metadata, selectedPath).favorite ? "Remove board from favorites" : "Add board to favorites"} onClick={() => toggleProperty(selectedPath, "favorite")}><Star size={17} /></button><button className="icon-button" type="button" aria-label="Edit board tags" onClick={() => openTags(selectedPath)}><Tag size={17} /></button><button className="icon-button" type="button" aria-label={`More options for ${selectedName}`} onClick={(event) => handleTreeContext(event, { name: selectedName, path: selectedPath, kind: "file", children: [] })}><MoreHorizontal size={19} /></button></div><TodoBoard key={selectedPath} board={parseTodo(content)!} arrowheads={settings.todoArrowheads} name={selectedName.replace(/\.comet-todo$/i, "")} saveState={saveState} onChange={updateTodo} onRetry={() => void flushAll().catch(() => setNotice("Still couldn't save. Please check the folder and try again."))} /></div> : workspaceView === "note" && selectedPath ? <section className="note-card" aria-label={`File: ${selectedName}`}>
               <div className="document-header">
                 <div className="document-heading">
                   <div className="document-icon"><FileText size={20} /></div>
@@ -1687,7 +1695,7 @@ function App() {
               <div className="document-footer"><div><span>{words} {words === 1 ? "word" : "words"}</span><span className="footer-dot" /> <span>{isMarkdown(selectedPath) ? "Markdown" : "Plain text"}</span></div><span>{isSample ? (sampleVault.isPersisted() ? (desktopAvailable ? "Sample saved in this app" : "Sample saved in this browser") : "Temporary sample") : "Saved locally"}</span></div>
             </section> : workspaceView === "file" && selectedPath ? <div className="media-workspace">
               <div className="media-top-actions"><button className={`icon-button ${itemMeta(metadata, selectedPath).pinned ? "active" : ""}`} type="button" aria-label={itemMeta(metadata, selectedPath).pinned ? "Unpin file" : "Pin file"} onClick={() => toggleProperty(selectedPath, "pinned")}><Pin size={17} /></button><button className={`icon-button ${itemMeta(metadata, selectedPath).favorite ? "active" : ""}`} type="button" aria-label={itemMeta(metadata, selectedPath).favorite ? "Remove from favorites" : "Add to favorites"} onClick={() => toggleProperty(selectedPath, "favorite")}><Star size={17} /></button><button className="icon-button" type="button" aria-label="Edit file tags" onClick={() => openTags(selectedPath)}><Tag size={17} /></button><button className="icon-button" type="button" aria-label={`More options for ${selectedName}`} onClick={(event) => handleTreeContext(event, { name: selectedName, path: selectedPath, kind: "file", children: [] })}><MoreHorizontal size={19} /></button></div>
-              <MediaView key={selectedPath} path={selectedPath} url={mediaUrl} content={content} sample={isSample} onOpenExternal={() => void openExternal()} onEditAsText={() => void openUnknownAsText()} onOpenWeb={(url) => { if (desktopAvailable) void openUrl(url).catch(() => setNotice("Couldn't open that link.")); else window.open(url, "_blank", "noopener,noreferrer"); }} />
+              <MediaView key={selectedPath} path={selectedPath} url={mediaUrl} content={content} sample={isSample} autoCoverArt={settings.autoCoverArt} onOpenExternal={() => void openExternal()} onEditAsText={() => void openUnknownAsText()} onOpenWeb={(url) => { if (desktopAvailable) void openUrl(url).catch(() => setNotice("Couldn't open that link.")); else window.open(url, "_blank", "noopener,noreferrer"); }} />
             </div> : <>
               {workspaceView === "folder" && <button className="folder-parent workspace-parent" type="button" onClick={() => folderParentIsRoot ? void showOverview("all") : void showFolder(folderParent)}><ArrowRight size={14} /> {folderParentIsRoot ? "All files" : fileName(folderParent)}</button>}
               <WorkspacePanel title={workspaceView === "folder" ? fileName(folderPath) : workspaceView === "pinned" ? "Pinned" : workspaceView === "favorites" ? "Favorites" : "All files"} description={workspaceView === "folder" ? "Everything in this folder, together." : workspaceView === "pinned" ? "The things you want close at hand." : workspaceView === "favorites" ? "A little collection of your favorites." : "All your files and folders, in one place."} entries={workspaceEntries} vault={vaultPath} destination={workspaceDestination} metadata={metadata} layout={layout} iconSize={iconSize} onLayout={setLayout} onIconSize={setIconSize} onOpen={(event, entry) => activateSelection(event, entry, workspaceEntries.map((item) => item.path))} selectedPaths={selection} onMenu={entryContext} onBackgroundMenu={openNewMenu} onCreate={openNewMenu} onDragStart={dragStart} onDragOver={(event, folder) => { event.preventDefault(); event.stopPropagation(); showDropIndicator({ path: folder, position: "into", surface: "workspace" }); }} dropFolder={dropIndicator?.surface === "workspace" && dropIndicator.position === "into" ? dropIndicator.path : ""} onDrop={dropToFolder} />
@@ -1707,6 +1715,7 @@ function App() {
         <button role="menuitem" type="button" onClick={() => void upload(contextMenu.folder)}><Upload size={16} /> Upload files</button>
         </>}
         {contextMenu.node && <>
+          <button role="menuitem" type="button" onClick={() => { const node = contextMenu.node!; setContextMenu(null); openEntry(node); }}><FolderOpen size={16} /> Open</button>
           {contextMenu.node.kind === "folder" && <div className="context-divider" />}
           <button role="menuitem" type="button" onClick={() => toggleProperty(contextMenu.node!.path, "pinned")}><Pin size={16} /> {itemMeta(metadata, contextMenu.node.path).pinned ? "Unpin" : "Pin"}</button>
           <button role="menuitem" type="button" onClick={() => toggleProperty(contextMenu.node!.path, "favorite")}><Star size={16} /> {itemMeta(metadata, contextMenu.node.path).favorite ? "Remove favorite" : "Add favorite"}</button>
@@ -1873,6 +1882,7 @@ const TreeNodeView = memo(function TreeBranch({ node, depth, selectedPath, expan
         <span className={`tree-icon ${folder ? "folder" : fileKind(node.path)}`}><FileIcon entry={node} size={16} expanded={openFolder} /></span>
         <span className="tree-name">{!folder && isMarkdown(node.name) ? noteTitle(node.name) : node.name}</span>{meta.pinned && <Pin size={11} className="tree-badge" />}{meta.favorite && <Star size={11} className="tree-badge" />}
       </button>
+      {dropIndicator?.surface === "sidebar" && dropIndicator.path === node.path && dropIndicator.position !== "into" && dropIndicator.source && normalizePath(parentPath(dropIndicator.source)) !== normalizePath(parentPath(node.path)) && <span className="tree-drop-label" role="status">Move to {fileName(parentPath(node.path))} · {dropIndicator.position}</span>}
       <button type="button" className="tree-drag-handle" aria-label={`Drag to arrange ${node.name}`} title="Drag to arrange or move" onPointerDown={(event) => onPointerDrag(event, node)} onClick={(event) => event.stopPropagation()}><GripVertical size={14} /></button>
       <button type="button" className="tree-action" aria-label={`More options for ${node.name}`} title={`More options for ${node.name}`} onClick={(event) => onContext(event, node)}><MoreHorizontal size={16} /></button>
     </div>

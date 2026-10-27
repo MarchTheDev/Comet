@@ -7,15 +7,23 @@ export interface Settings {
   theme: ThemePreference;
   shortcuts: Shortcuts;
   editorFontSize: EditorFontSize;
+  interfaceScale: number;
+  textScale: number;
+  todoArrowheads: boolean;
+  autoCoverArt: boolean;
   spellcheck: boolean;
   reopenWorkspace: boolean;
 }
 
 export const SETTINGS_KEY = "comet:settings:v1";
 export const DEFAULT_SETTINGS: Settings = {
-  theme: "dark",
+  theme: "system",
   shortcuts: { ...DEFAULT_SHORTCUTS },
   editorFontSize: 16,
+  interfaceScale: 100,
+  textScale: 100,
+  todoArrowheads: false,
+  autoCoverArt: true,
   spellcheck: true,
   reopenWorkspace: true,
 };
@@ -42,6 +50,10 @@ export function readSettings(store: SettingsStorage | undefined = storage()): Se
       theme: (["light", "system", "dark", "emerald", "rubellite", "navy"] as unknown[]).includes(value.theme) ? value.theme as ThemePreference : DEFAULT_SETTINGS.theme,
       shortcuts: readShortcuts(value.shortcuts),
       editorFontSize: value.editorFontSize === 14 || value.editorFontSize === 16 || value.editorFontSize === 18 ? value.editorFontSize : DEFAULT_SETTINGS.editorFontSize,
+      interfaceScale: typeof value.interfaceScale === "number" && Number.isFinite(value.interfaceScale) && value.interfaceScale >= 75 && value.interfaceScale <= 150 ? value.interfaceScale : DEFAULT_SETTINGS.interfaceScale,
+      textScale: typeof value.textScale === "number" && Number.isFinite(value.textScale) && value.textScale >= 80 && value.textScale <= 140 ? value.textScale : DEFAULT_SETTINGS.textScale,
+      todoArrowheads: typeof value.todoArrowheads === "boolean" ? value.todoArrowheads : DEFAULT_SETTINGS.todoArrowheads,
+      autoCoverArt: typeof value.autoCoverArt === "boolean" ? value.autoCoverArt : DEFAULT_SETTINGS.autoCoverArt,
       spellcheck: typeof value.spellcheck === "boolean" ? value.spellcheck : DEFAULT_SETTINGS.spellcheck,
       reopenWorkspace: typeof value.reopenWorkspace === "boolean" ? value.reopenWorkspace : DEFAULT_SETTINGS.reopenWorkspace,
     };

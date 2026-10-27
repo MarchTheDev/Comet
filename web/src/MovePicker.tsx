@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { ChevronDown, ChevronRight, Folder, FolderOpen, Search, X } from "lucide-react";
+import { FileIcon } from "./FileIcon";
 import { displayWorkspacePath } from "./utils/pathNavigation";
 import { isPathInside, normalizePath, parentPath, type TreeNode } from "./utils/vault";
 
@@ -8,8 +9,8 @@ export function MovePicker({ item, tree, vault, name, destination, onDestination
   const [query, setQuery] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(tree.filter((node) => node.kind === "folder").map((node) => node.path)));
   const current = parentPath(item.path);
-  const matches = (node: TreeNode): boolean => node.kind === "folder" && !isPathInside(node.path, item.path) && (!query.trim() || node.name.toLowerCase().includes(query.toLowerCase()) || node.children.some(matches));
-  const rows = (nodes: TreeNode[], depth: number): React.ReactNode => nodes.filter(matches).map((node) => <div key={node.path}>
+  const matches = (node: TreeNode): boolean => !(node.kind === "folder" && isPathInside(node.path, item.path)) && (!query.trim() || node.name.toLowerCase().includes(query.toLowerCase().trim()) || node.children.some(matches));
+  const rows = (nodes: TreeNode[], depth: number): React.ReactNode => nodes.filter(matches).map((node) => node.kind === "file" ? <div key={node.path} className="move-file-row" data-move-file={node.path} style={{ paddingLeft: 34 + depth * 18 }}><FileIcon entry={node} size={16} /><span>{node.name}</span>{normalizePath(node.path) === normalizePath(item.path) && <small>Moving</small>}</div> : <div key={node.path}>
     <div className={`move-folder-row${normalizePath(destination) === normalizePath(node.path) ? " selected" : ""}`} style={{ paddingLeft: 10 + depth * 18 }}>
       <button type="button" className="move-disclosure" aria-label={`${expanded.has(node.path) ? "Collapse" : "Expand"} ${node.name}`} onClick={() => setExpanded((previous) => { const next = new Set(previous); if (next.has(node.path)) next.delete(node.path); else next.add(node.path); return next; })}>{expanded.has(node.path) ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</button>
       <button type="button" className="move-folder-select" aria-pressed={normalizePath(destination) === normalizePath(node.path)} onClick={() => onDestination(node.path)}>{expanded.has(node.path) ? <FolderOpen size={17} /> : <Folder size={17} />}<span>{node.name}</span>{normalizePath(current) === normalizePath(node.path) && <small>Current</small>}</button>

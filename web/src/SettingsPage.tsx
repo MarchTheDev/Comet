@@ -14,9 +14,9 @@ interface SettingsPageProps {
 }
 
 const themes: { value: ThemePreference; label: string; description: string; icon: typeof Moon }[] = [
+  { value: "system", label: "System", description: "Match your device", icon: Monitor },
   { value: "dark", label: "Dark", description: "Easy on the eyes", icon: Moon },
   { value: "light", label: "Light", description: "A brighter space", icon: Sun },
-  { value: "system", label: "System", description: "Match your device", icon: Monitor },
   { value: "emerald", label: "Emerald", description: "A forest glow", icon: Gem },
   { value: "rubellite", label: "Rubellite", description: "A warm rose glow", icon: Gem },
   { value: "navy", label: "Navy", description: "A midnight blue", icon: Moon },
@@ -36,7 +36,7 @@ export function SettingsPage({ settings, persisted, isSample, modifier, onChange
     <div className="settings-layout">
       <div className="settings-main">
         <section className="settings-card" aria-labelledby="appearance-title">
-          <div className="settings-card-heading"><div><h2 id="appearance-title">Appearance</h2><p>Set the mood for your workspace.</p></div><span className="settings-number">01</span></div>
+          <div className="settings-card-heading"><div><h2 id="appearance-title">Appearance</h2><p>Set the mood for your workspace.</p></div></div>
           <fieldset className="theme-fieldset">
             <legend>Theme</legend>
             <div className="theme-options">
@@ -48,11 +48,18 @@ export function SettingsPage({ settings, persisted, isSample, modifier, onChange
               </label>)}
             </div>
           </fieldset>
-
+          <label className="setting-row scale-setting">
+            <span className="setting-copy"><strong>App scale</strong><small>Resize the whole interface.</small></span>
+            <input type="range" aria-label="App scale" min="75" max="150" step="5" value={settings.interfaceScale} onChange={(event) => onChange({ interfaceScale: Number(event.target.value) })} /><output>{settings.interfaceScale}%</output>
+          </label>
+          <label className="setting-row scale-setting">
+            <span className="setting-copy"><strong>Interface text scale</strong><small>Make labels and other text easier to read.</small></span>
+            <input type="range" aria-label="Interface text scale" min="80" max="140" step="5" value={settings.textScale} onChange={(event) => onChange({ textScale: Number(event.target.value) })} /><output>{settings.textScale}%</output>
+          </label>
         </section>
 
         <section className="settings-card" aria-labelledby="editor-settings-title">
-          <div className="settings-card-heading"><div><h2 id="editor-settings-title">Editor</h2><p>Make a little more room to think.</p></div><span className="settings-number">02</span></div>
+          <div className="settings-card-heading"><div><h2 id="editor-settings-title">Editor</h2><p>Make a little more room to think.</p></div></div>
           <label className="setting-row">
             <span className="setting-copy"><strong>Text size</strong><small>Adjust the size of your note text.</small></span>
             <select aria-label="Editor text size" value={settings.editorFontSize} onChange={(event) => onChange({ editorFontSize: Number(event.target.value) as Settings["editorFontSize"] })}>
@@ -66,10 +73,18 @@ export function SettingsPage({ settings, persisted, isSample, modifier, onChange
         </section>
 
         <section className="settings-card" aria-labelledby="workspace-settings-title">
-          <div className="settings-card-heading"><div><h2 id="workspace-settings-title">Workspace</h2><p>Keep your notes close, and yours alone.</p></div><span className="settings-number">03</span></div>
+          <div className="settings-card-heading"><div><h2 id="workspace-settings-title">Workspace</h2><p>Keep your notes close, and yours alone.</p></div></div>
           <label className="setting-row">
             <span className="setting-copy"><strong>Reopen last workspace</strong><small>Return to your last local folder and note when Comet starts.</small></span>
             <input className="setting-toggle" type="checkbox" aria-label="Reopen last workspace" checked={settings.reopenWorkspace} onChange={(event) => onChange({ reopenWorkspace: event.target.checked })} />
+          </label>
+          <label className="setting-row">
+            <span className="setting-copy"><strong>To-do connection arrowheads</strong><small>Show an arrow at the end of each connection.</small></span>
+            <input className="setting-toggle" type="checkbox" aria-label="To-do connection arrowheads" checked={settings.todoArrowheads} onChange={(event) => onChange({ todoArrowheads: event.target.checked })} />
+          </label>
+          <label className="setting-row">
+            <span className="setting-copy"><strong>Find music covers automatically</strong><small>Sends a track's title and artist (or filename) to Apple's music catalog when artwork is missing.</small></span>
+            <input className="setting-toggle" type="checkbox" aria-label="Find music covers automatically" checked={settings.autoCoverArt} onChange={(event) => onChange({ autoCoverArt: event.target.checked })} />
           </label>
           <div className="setting-row">
             <span className="setting-copy"><strong>{isSample ? "Sample workspace" : "Local workspace"}</strong><small>{isSample ? "Your sample is separate from your local files." : "Files are stored in your folder on this device."}</small></span>

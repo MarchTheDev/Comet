@@ -1,9 +1,10 @@
 import { editableTextError, MAX_EDITABLE_BYTES } from "../src/utils/textSafety.ts";
 import { selectRange, selectionRoots } from '../src/utils/selection.ts';
 import { keyboardShortcut, readShortcuts, DEFAULT_SHORTCUTS } from '../src/utils/shortcuts.ts';
-import { parseTodo, serializeTodo, newTodoDocument } from '../src/utils/todo.ts';
+import { parseTodo, serializeTodo, newTodoDocument, TODO_CONNECTION_COLOR } from '../src/utils/todo.ts';
 import { safeWebUrl, parseShortcut, serializeShortcut, videoLink, firstDroppedUrl } from '../src/utils/links.ts';
 import { graphEdges } from '../src/utils/graph.ts';
+import { connectionGeometry } from '../src/utils/todoGeometry.ts';
 import { fileKind } from '../src/utils/fileTypes.ts';
 import { entryIcon } from '../src/FileIcon.tsx';
 import { FileAudio, FileImage, FileVideo, FileType2, ListChecks, Folder } from 'lucide-react';
@@ -29,8 +30,8 @@ check('extracts only a validated YouTube id or supported direct video link', vid
 check('reads the first valid URI dropped from a browser', firstDroppedUrl('# source\nhttps://example.com/watch\n', 'ignore') === 'https://example.com/watch');
 const board = newTodoDocument();
 board.categories.push({ id: 'category', title: 'Work', color: '#123456' });
-board.tasks.push({ id: 'task', text: 'One', done: false, notes: 'Details', x: 20, y: 30, categoryId: 'category' }, { id: 'task2', text: 'Two', done: true, notes: '', x: 400, y: 50, categoryId: null });
-board.connections.push({ from: 'task', to: 'task2' });
+board.tasks.push({ id: 'task', text: 'One', done: false, notes: 'Details', x: 20, y: 30, categoryId: 'category', subtasks: [{ id: 'meeting', text: 'Meeting', done: false }, { id: 'dinner', text: 'Dinner', done: true }] }, { id: 'task2', text: 'Two', done: true, notes: '', x: 400, y: 50, categoryId: null, subtasks: [] });
+board.connections.push({ from: 'task', to: 'task2', color: '#1255aa' });
 check('new to-do boards start as a blank canvas without default lines', newTodoDocument().tasks.length === 0 && newTodoDocument().connections.length === 0);
 check('to-do canvas round-trips tasks, positions, categories and task connections', JSON.stringify(parseTodo(serializeTodo(board))) === JSON.stringify(board));
 const legacy = { format: 'comet-todo', version: 1, lists: [
@@ -38,11 +39,22 @@ const legacy = { format: 'comet-todo', version: 1, lists: [
   { id: 'b', title: 'Done', color: '#334455', tasks: [] },
 ], connections: [{ from: 'a', to: 'b' }] };
 const migrated = parseTodo(JSON.stringify(legacy));
-check('legacy list tasks and connections survive in-memory migration without drawing default lines', migrated?.version === 2 && migrated.tasks[0].notes === 'Important detail' && migrated.tasks[0].done && migrated.tasks[0].categoryId === 'a' && migrated.categories[1].title === 'Done' && migrated.connections.length === 0 && migrated.legacyListConnections[0].to === 'b');
+check('legacy list tasks and connections survive in-memory migration without drawing default lines', migrated?.version === 3 && migrated.tasks[0].notes === 'Important detail' && migrated.tasks[0].done && migrated.tasks[0].categoryId === 'a' && migrated.categories[1].title === 'Done' && migrated.connections.length === 0 && migrated.legacyListConnections[0].to === 'b');
 check('migrated board remains valid after serialization', parseTodo(serializeTodo(migrated))?.legacyListConnections.length === 1);
+const v2 = { format: 'comet-todo', version: 2, categories: [{ id: 'category', title: 'Work', color: '#123456' }], tasks: [{ id: 'task', text: 'Keep me', done: true, notes: 'notes', x: 200, y: 140, categoryId: 'category' }, { id: 'task2', text: 'Other', done: false, notes: '', x: 700, y: 140, categoryId: null }], connections: [{ from: 'task', to: 'task2' }], legacyListConnections: [] };
+const v2Before = JSON.stringify(v2), migratedV2 = parseTodo(v2Before);
+check('v2 migration preserves existing data and links in memory without rewriting the source', JSON.stringify(v2) === v2Before && migratedV2?.version === 3 && migratedV2.tasks[0].notes === 'notes' && migratedV2.tasks[0].done && migratedV2.tasks[0].subtasks.length === 0 && migratedV2.connections[0].color === TODO_CONNECTION_COLOR && parseTodo(serializeTodo(migratedV2))?.connections[0].to === 'task2');
+check('rejects unknown v2 fields and malformed nested items or colors', parseTodo(JSON.stringify({ ...v2, extra: 'do not discard' })) === null && parseTodo(JSON.stringify({ ...board, tasks: [{ ...board.tasks[0], subtasks: [{ id: 'x', text: 'x', done: false, extra: true }] }, board.tasks[1]] })) === null && parseTodo(JSON.stringify({ ...board, connections: [{ from: 'task', to: 'task2', color: 'red' }] })) === null);
+
 const invalid = { ...board, futureField: 'keep me' };
-check('unknown board fields and future versions are rejected without serialization', parseTodo(JSON.stringify(invalid)) === null && parseTodo(JSON.stringify({ ...board, version: 3 })) === null);
+check('unknown board fields and future versions are rejected without serialization', parseTodo(JSON.stringify(invalid)) === null && parseTodo(JSON.stringify({ ...board, version: 4 })) === null);
 check('corrupt or duplicate IDs, invalid coordinates and unknown connections cannot become editable boards', parseTodo('{bad') === null && parseTodo(JSON.stringify({ ...board, tasks: [board.tasks[0], board.tasks[0]] })) === null && parseTodo(JSON.stringify({ ...board, tasks: [{ ...board.tasks[0], x: -1 }] })) === null && parseTodo(JSON.stringify({ ...board, connections: [{ from: board.tasks[0].id, to: 'missing' }] })) === null);
+const card = { x: 50, y: 50, width: 270, height: 110 };
+const below = connectionGeometry(card, { x: 50, y: 400, width: 270, height: 120 });
+const above = connectionGeometry({ x: 50, y: 400, width: 270, height: 120 }, card);
+const left = connectionGeometry(card, { x: -400, y: 50, width: 270, height: 110 });
+check('connections join facing card edges vertically and horizontally, in either direction', !below.horizontal && below.from.y === 160 && below.to.y === 400 && above.from.y === 400 && above.to.y === 160 && left.horizontal && left.from.x === 50 && left.to.x === -130);
+
 const entries = [
   { path: '/vault/Notes', name: 'Notes', kind: 'folder' },
   { path: '/vault/Notes/One.md', name: 'One.md', kind: 'file' },

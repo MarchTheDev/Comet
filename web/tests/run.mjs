@@ -25,6 +25,7 @@ const checks = [
   'tests/saveQueue.test.mjs',
   'tests/newFeatures.test.mjs',
   'tests/boardInteractions.test.mjs',
+  'tests/coverCache.test.mjs',
 ];
 try {
   for (const file of checks) {

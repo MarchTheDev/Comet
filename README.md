@@ -12,7 +12,9 @@ a built-in sync service.
   background menu. File menus contain actions for that file only.
 - **Move and arrange.** Drag an item onto a folder to move it. In the sidebar,
   drop above or below another item to place it there—even when that moves it into
-  a different folder. The **Move to** menu provides a searchable folder picker.
+  a different folder; a destination label makes cross-folder drops clear. The
+  **Move to** menu provides a searchable folder picker that also shows files
+  beneath expanded folders (only folders can be selected as destinations).
   Drop files or web links on a folder or workspace to add them. Dropped files are
   limited to 20 MB; use **Upload files** for larger files in the desktop app.
   Renames, moves and imports reject collisions; moving or renaming does not
@@ -22,10 +24,12 @@ a built-in sync service.
   and permanently delete the selection. Click blank space, press Escape, or use
   the X to clear it. A selected folder includes its descendants; failures are
   reported individually.
-- **Explore.** Expand the root and folder nodes in Tree view to reveal files.
-  Brain view shows up to 150 items as a network: drag the background to pan or a
-  node to arrange it, and click a file to open it. Node positions are saved on
-  this device. Solid lines represent folder membership; dotted lines represent
+- **Explore.** Expand the root and folder nodes in the left-to-right Tree view
+  to reveal files. Brain view shows up to 150 items as a network: click a folder
+  node to reveal or hide its children, drag the background to pan or a node to
+  arrange it, and click a file to open it. Right-click a node for actions such
+  as Open, Move, Rename and Delete. Node positions are saved on this device.
+  Solid lines represent folder membership; dotted lines represent
   links between Markdown notes. Only the first 256K characters of the first 120
   Markdown notes are read for connections, with bounded concurrency; binary files
   are never scanned as text.
@@ -39,9 +43,10 @@ a built-in sync service.
   including the sample, can be removed from the list. Removal keeps its files
   or sample data; the sample can be added back from the dropdown.
 - **Navigation and appearance.** Use the back/forward arrows, mouse side
-  buttons, or keyboard shortcuts to revisit places. Comet starts in dark mode;
-  Settings also offers light, system, emerald, rubellite and navy themes, editor
-  size, spell check, and reopening the last workspace. The Matterhorn photo is
+  buttons, or keyboard shortcuts to revisit places. Comet follows your system
+  theme by default; Settings also offers dark, light, emerald, rubellite and navy
+  themes, app and interface-text scaling, editor size, spell check, to-do
+  arrowheads, and reopening the last workspace. The Matterhorn photo is
   always subtly visible behind the workspace.
 
 Tags, pins, favorites, sidebar ordering, brain-node positions, workspace names
@@ -65,13 +70,19 @@ are rejected for text editing.
 
 PDFs use locally bundled PDF.js resources. Choose single- or two-page layout,
 fit pages to the available width, drag to pan, and use the zoom buttons or
-Ctrl/Cmd + scroll. The custom video controls include seeking, volume, playback
-speed and fullscreen. The audio player shows embedded title, artist and cover
-art when available, a visualizer driven by the sound, and a volume slider that
-also responds to the mouse wheel. If a track has no embedded cover, **Find cover
-online** sends its title and artist (or filename) to Apple's music catalog only
-when clicked; the resulting artwork is loaded from Apple's image host. The cover
-lookup is optional and is not needed for playback.
+Ctrl/Cmd + scroll; zoom follows the page position under the cursor. The custom
+video controls include seeking, volume, playback speed and fullscreen. The audio
+player shows embedded title, artist and cover art when available, a sound-driven
+visualizer, a fullscreen player, and a volume slider that responds to the mouse
+wheel.
+
+When a track has no embedded cover, Comet **automatically sends its title and
+artist, or its filename if tags are unavailable, to Apple's music catalog** to
+look for one. Artwork is loaded from Apple's image host and cached on this device
+(not in the workspace); cached image bytes are kept when the host permits it, with
+an image URL as a fallback. You can turn off automatic lookup in Settings; the
+**Find cover online** button remains available for an explicit lookup. Network
+access is not required for playback, and unavailable artwork never blocks it.
 
 The visual Markdown toolbar includes headings, sizes, preset and custom text
 colors, highlighting, links, lists, and other formatting. Markdown has no
@@ -99,16 +110,22 @@ YouTube uses the `youtube-nocookie.com` embed domain. Only validated HTTP(S)
 links are used. Markdown source view remains plain text.
 
 Create a **to-do board** from the New menu. A new `.comet-todo` file is a blank,
-autosaving canvas: add tasks, drag their grips to arrange them, and create colored
-categories to assign from a task's expanded details. Hover a task to reveal its
-connection dot (always visible on touch devices), then drag it onto another task.
-Click a connection and its X to remove it; drag the canvas to look around.
+autosaving canvas: add tasks, use **Add item** for independently checkable
+entries within a task, drag card grips to arrange them, and assign colored
+categories from expanded details. Right-click a card or use its options button
+for more actions. Hover a task to reveal its connection dot (always visible on
+touch devices), then drag it onto another task. Click a connection to change its
+color or remove it. Connections have no arrowheads by default; enable them in
+Settings if wanted. Drag the canvas to look around, or use its zoom controls and
+Ctrl/Cmd + scroll.
 
-Existing version 1 boards open without being changed. On the first edit, their
-lists become categories and their tasks and notes remain intact. Old list-to-list
-connections are preserved in the file but not drawn as task connections. Comet
-refuses to automatically edit an invalid or newer board format rather than
-discarding unfamiliar data.
+Existing version 1 and version 2 boards open without being changed on disk. On the
+first edit they migrate to version 3, preserving tasks, notes, categories and
+connections. Version 1 lists become categories; old list-to-list connections are
+preserved in the file but not drawn as task connections. Comet refuses to edit
+an invalid, unrecognized or newer board format rather than discarding unfamiliar
+data. Older versions of Comet may not understand boards after they are edited in
+this version; keep a backup if you need to use both versions.
 
 Edits save automatically. If a save fails, the edit remains in the app and can
 be retried. Comet waits for pending saves before switching notes or workspaces,

@@ -10,6 +10,7 @@
         const theme = JSON.parse(localStorage.getItem("comet:settings:v1") || "{}").theme;
         const resolved = theme === "light" || (theme === "system" && !matchMedia("(prefers-color-scheme: dark)").matches) ? "light" : "dark";
         document.documentElement.dataset.theme = resolved;
+        document.documentElement.dataset.palette = ["emerald", "rubellite", "navy"].includes(theme) ? theme : "";
         document.documentElement.style.colorScheme = resolved;
       } catch {}
     </script>

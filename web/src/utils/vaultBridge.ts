@@ -1,3 +1,4 @@
+import { editableTextError } from "./textSafety";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { sampleVault, SAMPLE_ROOT } from "./sampleVault";
 import { fileName, joinPath, type Entry, type SearchHit } from "./vault";
@@ -14,6 +15,8 @@ export async function readNote(vault: string, path: string): Promise<string> {
 }
 
 export async function writeNote(vault: string, path: string, content: string): Promise<void> {
+  const error = editableTextError(content);
+  if (error) throw new Error(error);
   if (isSamplePath(vault)) sampleVault.write(path, content);
   else await invoke("write_note", { vault, path, content });
 }

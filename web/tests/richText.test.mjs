@@ -3,6 +3,7 @@ import { Editor } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import { Markdown } from '@tiptap/markdown';
 import { richTextExtensions } from '../src/utils/richText.ts';
+import { VideoEmbeds } from '../src/utils/videoEmbeds.ts';
 
 let failures = 0;
 function check(name, ok) { if (ok) console.log(`  ok   ${name}`); else { failures++; console.log(`  FAIL ${name}`); } }
@@ -58,6 +59,12 @@ linked.commands.toggleBold();
 const reopenedLinkUnderline = makeEditor(linked.getMarkdown());
 const linkUnderlineMarks = reopenedLinkUnderline.getJSON().content?.[0]?.content?.find((node) => node.text?.includes('Watch'))?.marks ?? [];
 check('round-trips underline and bold within links', linkUnderlineMarks.some((mark) => mark.type === 'link') && linkUnderlineMarks.some((mark) => mark.type === 'bold') && linkUnderlineMarks.some((mark) => mark.type === 'underline'));
+const videoEditor = new Editor({ element: document.createElement('div'), extensions: [StarterKit, VideoEmbeds, Markdown], content: '[A video](https://youtu.be/dQw4w9WgXcQ)\n\nAfter', contentType: 'markdown' });
+const frame = videoEditor.view.dom.querySelector('.inline-video iframe');
+check('renders validated video links inline without changing Markdown', frame?.getAttribute('src') === 'https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ' && videoEditor.getMarkdown().includes('[A video](https://youtu.be/dQw4w9WgXcQ)') && !videoEditor.getMarkdown().includes('iframe'));
+videoEditor.commands.insertContentAt(videoEditor.state.doc.content.size - 1, ' more');
+check('retains the same iframe while unrelated text changes', videoEditor.view.dom.querySelector('.inline-video iframe') === frame);
+videoEditor.destroy();
 editor.destroy(); reopened.destroy(); reopenedHighlight.destroy(); combined.destroy(); reopenedCombined.destroy(); special.destroy(); reopenedSpecial.destroy(); linked.destroy(); reopenedLink.destroy(); reopenedJustUnderline.destroy(); reopenedLinkUnderline.destroy(); dom.window.close();
 
 globalThis.__cometFailures = (globalThis.__cometFailures ?? 0) + failures;

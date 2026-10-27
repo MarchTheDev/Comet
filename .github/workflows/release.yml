@@ -108,7 +108,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
           cache-dependency-path: web/package-lock.json
 
@@ -172,6 +172,10 @@ jobs:
           ) -join "`r`n"
           Set-Content -Path "$portable/Read me.txt" -Value $readme -Encoding utf8
           Compress-Archive -Path "$portable/*" -DestinationPath "$out/Comet-$version-windows-portable.zip"
+          # Never replace an existing draft with an incomplete set of installers.
+          foreach ($file in @("Comet-$version-windows_setup.exe", "Comet-$version-windows.msi", "Comet.exe", "Comet-$version-windows-portable.zip")) {
+            if (-not (Test-Path -Path (Join-Path $out $file) -PathType Leaf)) { throw "Expected release artifact missing: $file" }
+          }
 
       - uses: actions/upload-artifact@v4
         with:
@@ -182,10 +186,8 @@ jobs:
   # --------------------------------------------------------------- the release
   release:
     name: Draft a release
-    # Everything that produces a file, including the best-effort jobs: a platform
-    # that failed to build must not stop the others from being offered.
+    # Preserve the previous draft if the Windows build or artifact upload fails.
     needs: [version, windows]
-    if: ${{ always() }}
     runs-on: ubuntu-latest
     env:
       COMET_VERSION: ${{ needs.version.outputs.version }}
@@ -193,7 +195,6 @@ jobs:
       # Download only installable release bundles. Debug logs are separate
       # artifacts and must never become public release files.
       - uses: actions/download-artifact@v4
-        continue-on-error: true
         with:
           name: windows
           path: files/windows
@@ -270,4 +271,4 @@ jobs:
           overwrite_files: true
           files: files/*/*
           body_path: notes.md
-          fail_on_unmatched_files: false
+          fail_on_unmatched_files: true

@@ -1,9 +1,11 @@
-export type ThemePreference = "dark" | "light" | "system";
+import { DEFAULT_SHORTCUTS, readShortcuts, type Shortcuts } from "./shortcuts";
+
+export type ThemePreference = "dark" | "light" | "system" | "emerald" | "rubellite" | "navy";
 export type EditorFontSize = 14 | 16 | 18;
 
 export interface Settings {
   theme: ThemePreference;
-  showCover: boolean;
+  shortcuts: Shortcuts;
   editorFontSize: EditorFontSize;
   spellcheck: boolean;
   reopenWorkspace: boolean;
@@ -12,7 +14,7 @@ export interface Settings {
 export const SETTINGS_KEY = "comet:settings:v1";
 export const DEFAULT_SETTINGS: Settings = {
   theme: "dark",
-  showCover: true,
+  shortcuts: { ...DEFAULT_SHORTCUTS },
   editorFontSize: 16,
   spellcheck: true,
   reopenWorkspace: true,
@@ -37,8 +39,8 @@ export function readSettings(store: SettingsStorage | undefined = storage()): Se
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return { ...DEFAULT_SETTINGS };
     const value = parsed as Partial<Settings>;
     return {
-      theme: value.theme === "light" || value.theme === "system" || value.theme === "dark" ? value.theme : DEFAULT_SETTINGS.theme,
-      showCover: typeof value.showCover === "boolean" ? value.showCover : DEFAULT_SETTINGS.showCover,
+      theme: (["light", "system", "dark", "emerald", "rubellite", "navy"] as unknown[]).includes(value.theme) ? value.theme as ThemePreference : DEFAULT_SETTINGS.theme,
+      shortcuts: readShortcuts(value.shortcuts),
       editorFontSize: value.editorFontSize === 14 || value.editorFontSize === 16 || value.editorFontSize === 18 ? value.editorFontSize : DEFAULT_SETTINGS.editorFontSize,
       spellcheck: typeof value.spellcheck === "boolean" ? value.spellcheck : DEFAULT_SETTINGS.spellcheck,
       reopenWorkspace: typeof value.reopenWorkspace === "boolean" ? value.reopenWorkspace : DEFAULT_SETTINGS.reopenWorkspace,

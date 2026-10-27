@@ -1,4 +1,4 @@
-import { readFileSync } from "fs";
+import { readFileSync, readdirSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import tailwindcss from "@tailwindcss/vite";
@@ -40,8 +40,32 @@ const versionModule = {
       : null;
   },
 };
+// PDF.js uses fonts, CMaps, color profiles and WASM decoders by filename.
+// Serve them in development and copy the dependency's resources to dist during
+// builds, without checking generated assets into the repository.
+const pdfDirectories = ["cmaps", "standard_fonts", "wasm", "iccs"];
+const pdfBase = path.join(__dirname, "node_modules/pdfjs-dist");
+const pdfResources = {
+  name: "comet-pdf-resources",
+  configureServer(server: import("vite").ViteDevServer) {
+    server.middlewares.use("/pdfjs", (req, res, next) => {
+      const pieces = (req.url || "").split("?")[0].split("/").filter(Boolean);
+      if (pieces.length !== 2 || !pdfDirectories.includes(pieces[0]) || !/^[\w.-]+$/.test(pieces[1])) return next();
+      try {
+        const data = readFileSync(path.join(pdfBase, pieces[0], pieces[1]));
+        res.setHeader("Content-Type", pieces[1].endsWith(".wasm") ? "application/wasm" : "application/octet-stream");
+        res.end(data);
+      } catch { next(); }
+    });
+  },
+  generateBundle(this: import("rollup").PluginContext) {
+    for (const directory of pdfDirectories) for (const file of readdirSync(path.join(pdfBase, directory), { withFileTypes: true })) {
+      if (file.isFile()) this.emitFile({ type: "asset", fileName: `pdfjs/${directory}/${file.name}`, source: readFileSync(path.join(pdfBase, directory, file.name)) });
+    }
+  },
+};
 export default defineConfig({
-  plugins: [react(), tailwindcss(), viteSingleFile(), versionModule],
+  plugins: [react(), tailwindcss(), viteSingleFile(), versionModule, pdfResources],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "src"),

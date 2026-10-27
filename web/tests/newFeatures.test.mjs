@@ -1,0 +1,45 @@
+import { editableTextError, MAX_EDITABLE_BYTES } from "../src/utils/textSafety.ts";
+import { selectRange, selectionRoots } from '../src/utils/selection.ts';
+import { keyboardShortcut, readShortcuts, DEFAULT_SHORTCUTS } from '../src/utils/shortcuts.ts';
+import { parseTodo, serializeTodo, newTodoDocument } from '../src/utils/todo.ts';
+import { safeWebUrl, parseShortcut, serializeShortcut, videoLink, firstDroppedUrl } from '../src/utils/links.ts';
+import { graphEdges } from '../src/utils/graph.ts';
+import { fileKind } from '../src/utils/fileTypes.ts';
+import { readWorkspaceIdentities, saveWorkspaceIdentities, identityFor } from '../src/utils/workspaceIdentity.ts';
+
+let failures = 0;
+function check(name, ok) { if (ok) console.log(`  ok   ${name}`); else { failures++; console.log(`  FAIL ${name}`); } }
+console.log('\nselection, links, boards and exploration');
+const ordered = ['/vault/a', '/vault/b', '/vault/c', '/vault/d'];
+let selected = selectRange(new Set(), '', ordered, '/vault/a', false, false);
+selected = selectRange(selected.selected, selected.anchor, ordered, '/vault/c', false, true);
+check('shift selects a contiguous range without opening items', !selected.open && [...selected.selected].join() === ordered.slice(0, 3).join());
+selected = selectRange(selected.selected, selected.anchor, ordered, '/vault/b', true, false);
+check('modifier click toggles an item independently', !selected.selected.has('/vault/b') && selected.selected.has('/vault/c'));
+check('deduplicates descendants before deleting', selectionRoots(['/vault/a/x', '/vault/b', '/vault/a', '/vault/a/y']).join() === '/vault/b,/vault/a' || selectionRoots(['/vault/a/x', '/vault/b', '/vault/a', '/vault/a/y']).sort().join() === '/vault/a,/vault/b');
+check('editable text limits count UTF-8 bytes and reject NULs before writing', !editableTextError('plain text') && !!editableTextError('a\0b') && !editableTextError('a'.repeat(MAX_EDITABLE_BYTES)) && !!editableTextError('😀'.repeat(MAX_EDITABLE_BYTES / 4 + 1)));
+check('distinguishes PDF, link and dedicated board files', fileKind('a.PDF') === 'pdf' && fileKind('v.url') === 'link' && fileKind('plan.comet-todo') === 'todo');
+check('round-trips standard web shortcut data', parseShortcut(serializeShortcut('https://youtu.be/dQw4w9WgXcQ')) === 'https://youtu.be/dQw4w9WgXcQ');
+check('rejects dangerous, malformed and credentialed links', ['javascript:alert(1)', 'file:///etc/passwd', 'https://user:secret@example.com/', 'https://'].every((url) => safeWebUrl(url) === null));
+check('extracts only a validated YouTube id or supported direct video link', videoLink('https://youtu.be/dQw4w9WgXcQ')?.kind === 'youtube' && videoLink('https://example.com/a.mp4?x=1')?.kind === 'video' && !videoLink('https://youtube.com.evil/watch?v=dQw4w9WgXcQ'));
+check('reads the first valid URI dropped from a browser', firstDroppedUrl('# source\nhttps://example.com/watch\n', 'ignore') === 'https://example.com/watch');
+const board = newTodoDocument();
+board.lists[0].tasks.push({ id: 'task', text: 'One', done: false, notes: 'Details' });
+check('to-do board round-trips tasks, notes and connections', JSON.stringify(parseTodo(serializeTodo(board))) === JSON.stringify(board));
+const invalid = { ...board, futureField: 'keep me' };
+check('unknown board fields and future versions are rejected without serialization', parseTodo(JSON.stringify(invalid)) === null && parseTodo(JSON.stringify({ ...board, version: 2 })) === null);
+check('corrupt or duplicate IDs and unknown connections cannot become editable boards', parseTodo('{bad') === null && parseTodo(JSON.stringify({ ...board, lists: [board.lists[0], board.lists[0]] })) === null && parseTodo(JSON.stringify({ ...board, connections: [{ from: board.lists[0].id, to: 'missing' }] })) === null);
+const entries = [
+  { path: '/vault/Notes', name: 'Notes', kind: 'folder' },
+  { path: '/vault/Notes/One.md', name: 'One.md', kind: 'file' },
+  { path: '/vault/Notes/Two.md', name: 'Two.md', kind: 'file' },
+  { path: '/vault/picture.png', name: 'picture.png', kind: 'file' },
+];
+const edges = graphEdges('/vault', entries, { '/vault/Notes/One.md': '[Two](./Two.md) [[Two]] [outside](../../secret.md) ![image](../picture.png)' });
+check('graph includes hierarchy and deduplicates local note connections', edges.filter((edge) => edge.kind === 'hierarchy').length === 4 && edges.filter((edge) => edge.kind === 'link').length === 1 && edges.some((edge) => edge.kind === 'link' && edge.to === '/vault/Notes/Two.md'));
+check('space, plus and punctuation shortcuts survive capture and validation', readShortcuts({ pin: 'Mod+Shift+!' }).pin === 'Mod+Shift+!' && keyboardShortcut({key:'+',ctrlKey:true,metaKey:false,altKey:false,shiftKey:true}, false) === 'Mod+Shift+Plus' && keyboardShortcut({key:' ',ctrlKey:false,metaKey:false,altKey:true,shiftKey:false}, false) === 'Alt+Space' && keyboardShortcut({key:'?',ctrlKey:true,metaKey:false,altKey:false,shiftKey:true}, false) === 'Mod+Shift+?');
+check('editable shortcuts normalize modifiers and restore defaults for invalid values', keyboardShortcut({key:'p',ctrlKey:true,metaKey:false,altKey:false,shiftKey:true}, false) === 'Mod+Shift+P' && readShortcuts({ pin: 'Mod+Alt+P', favorite: 14 }).pin === 'Mod+Alt+P' && readShortcuts({ favorite: 14 }).favorite === DEFAULT_SHORTCUTS.favorite);
+const memory = new Map(); const store = { getItem: (key) => memory.get(key) ?? null, setItem: (key, value) => memory.set(key, value) };
+check('workspace names and icons persist independently from the vault', saveWorkspaceIdentities({ '/vault': { name: 'Ideas', icon: '🏔️' } }, store) && identityFor(readWorkspaceIdentities(store), '/vault', 'Vault').name === 'Ideas');
+
+globalThis.__cometFailures = (globalThis.__cometFailures ?? 0) + failures;

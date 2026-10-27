@@ -87,6 +87,19 @@ async fn open_vault_file(app: tauri::AppHandle, vault: String, path: String) -> 
         .map_err(|error| error.to_string())
 }
 
+// This command is used only for a workspace the user opened or remembered.
+// Resolve the directory before passing it to the platform's file manager.
+#[tauri::command]
+async fn open_workspace_directory(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    let requested = PathBuf::from(&path);
+    if !requested.is_absolute() || requested.components().any(|part| matches!(part, Component::ParentDir)) {
+        return Err("Choose a workspace folder on this device.".into());
+    }
+    let directory = std::fs::canonicalize(&requested).map_err(|e| e.to_string())?;
+    if !directory.is_dir() { return Err("The workspace is not a folder.".into()); }
+    app.opener().open_path(directory.to_string_lossy().to_string(), None::<&str>).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 async fn read_note(vault: String, path: String) -> Result<String, String> {
     let note = checked_vault_entry(&vault, &path)?;
@@ -103,6 +116,8 @@ async fn read_note(vault: String, path: String) -> Result<String, String> {
 
 #[tauri::command]
 async fn write_note(vault: String, path: String, content: String) -> Result<(), String> {
+    if content.len() > 16 * 1024 * 1024 { return Err("Text files are limited to 16 MB. Reduce the text before saving.".into()); }
+    if content.contains('\0') { return Err("This text contains a NUL character and cannot be saved as an editable file.".into()); }
     let note = checked_vault_entry(&vault, &path)?;
     std::fs::write(note, content).map_err(|e| e.to_string())
 }
@@ -296,6 +311,21 @@ async fn create_note(vault: String, path: String, content: String) -> Result<(),
     file.write_all(content.as_bytes()).map_err(|e| e.to_string())
 }
 
+// HTML drop is enabled in WebView2 so both web links and files reach the UI.
+// Bounded uploads use exclusive creation, just like the file-picker import.
+#[tauri::command]
+async fn import_dropped_bytes(vault: String, path: String, bytes: Vec<u8>) -> Result<(), String> {
+    if bytes.len() > 20 * 1024 * 1024 { return Err("Dropped files are limited to 20 MB; use Upload files for larger files.".into()); }
+    let destination = checked_new_entry(&vault, &path, false)?;
+    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&destination).map_err(|e| e.to_string())?;
+    if let Err(error) = file.write_all(&bytes) {
+        drop(file);
+        let _ = std::fs::remove_file(&destination);
+        return Err(error.to_string());
+    }
+    Ok(())
+}
+
 #[tauri::command]
 async fn copy_asset(vault: String, src: String, dest: String) -> Result<(), String> {
     let asset = checked_new_entry(&vault, &dest, true)?;
@@ -361,7 +391,7 @@ async fn search_vault(vault: String, query: String) -> Vec<SearchHit> {
             if !path.is_file() || !path
                 .extension()
                 .and_then(|e| e.to_str())
-                .map(|e| matches!(e.to_ascii_lowercase().as_str(), "md" | "markdown" | "txt" | "text" | "log" | "csv" | "tsv" | "json" | "jsonl" | "xml" | "yaml" | "yml" | "toml" | "ini" | "cfg" | "conf" | "html" | "htm" | "css" | "js" | "jsx" | "ts" | "tsx" | "py" | "rs" | "sh" | "sql" | "tex" | "rst"))
+                .map(|e| matches!(e.to_ascii_lowercase().as_str(), "md" | "markdown" | "txt" | "text" | "log" | "csv" | "tsv" | "json" | "jsonl" | "xml" | "yaml" | "yml" | "toml" | "ini" | "cfg" | "conf" | "html" | "htm" | "css" | "js" | "jsx" | "ts" | "tsx" | "py" | "rs" | "sh" | "sql" | "tex" | "rst" | "url" | "comet-todo"))
                 .unwrap_or(true)
             {
                 continue;
@@ -404,6 +434,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             list_vault,
             open_vault_file,
+            open_workspace_directory,
             read_note,
             write_note,
             open_vault,
@@ -414,6 +445,7 @@ pub fn run() {
             create_dir,
             create_note,
             copy_asset,
+            import_dropped_bytes,
             search_vault
         ])
         .run(tauri::generate_context!())
@@ -467,7 +499,7 @@ mod tests {
 
     #[test]
     fn moves_and_imports_never_replace_existing_files() {
-        use super::{copy_asset, move_entry, read_note};
+        use super::{copy_asset, import_dropped_bytes, move_entry, read_note, write_note};
         let unique = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
         let base = std::env::temp_dir().join(format!("comet-move-test-{}-{unique}", std::process::id()));
         let vault = base.join("vault");
@@ -493,9 +525,19 @@ mod tests {
             assert!(move_entry(root.clone(), path(&destination_folder), path(&destination_folder)).await.is_err());
             assert!(copy_asset(root.clone(), path(&external), path(&destination)).await.is_err());
             assert_eq!(fs::read_to_string(&destination).unwrap(), "original");
+            assert!(write_note(root.clone(), path(&destination), "x".repeat(16 * 1024 * 1024 + 1)).await.is_err());
+            assert!(write_note(root.clone(), path(&destination), "nul\0byte".into()).await.is_err());
+            assert_eq!(fs::read_to_string(&destination).unwrap(), "original");
             let binary = destination_folder.join("upload.bin");
             copy_asset(root.clone(), path(&external), path(&binary)).await.unwrap();
             assert!(read_note(root.clone(), path(&binary)).await.is_err());
+            assert!(import_dropped_bytes(root.clone(), path(&binary), vec![42]).await.is_err());
+            assert_eq!(fs::read(&binary).unwrap(), vec![0, 255, 1]);
+            let dropped = destination_folder.join("dropped.bin");
+            import_dropped_bytes(root.clone(), path(&dropped), vec![3, 0, 255]).await.unwrap();
+            assert_eq!(fs::read(&dropped).unwrap(), vec![3, 0, 255]);
+            assert!(import_dropped_bytes(root.clone(), path(&vault.join("../escape.bin")), vec![1]).await.is_err());
+            assert!(import_dropped_bytes(root.clone(), path(&destination_folder.join("huge.bin")), vec![0; 20 * 1024 * 1024 + 1]).await.is_err());
         });
         fs::remove_dir_all(base).unwrap();
     }

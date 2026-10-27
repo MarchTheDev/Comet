@@ -74,4 +74,10 @@ check('a switch waits for newer edits even when an earlier in-flight save fails'
 recoveringWrites[1].resolve();
 await waitingSwitch;
 
+const surfacedError = await new Promise((resolve) => {
+  const failing = new SaveQueue(async () => { throw new Error('storage full'); }, () => {}, resolve, 0);
+  failing.queue('/vault/e.md', 'retained');
+});
+check('surfaces the underlying autosave error to the user', surfacedError?.message === 'storage full');
+
 globalThis.__cometFailures = (globalThis.__cometFailures ?? 0) + failures;

@@ -9,7 +9,7 @@ export function displayWorkspacePath(path: string, vault: string): string {
 export type PathPlan =
   | { kind: "root" }
   | { kind: "folder" | "note"; path: string }
-  | { kind: "create"; path: string; missingFolders: string[] }
+  | { kind: "create"; target: "file" | "folder"; path: string; missingFolders: string[] }
   | { kind: "error"; message: string };
 
 /**
@@ -65,7 +65,11 @@ export function planWorkspacePath(input: string, vault: string, entries: Entry[]
     if (trailingSlash) return { kind: "error", message: `“${name}” is a file, not a folder.` };
     return { kind: "note", path: existing.path };
   }
-  if (trailingSlash) return { kind: "error", message: "That folder doesn't exist yet. Enter a note name after it to create both." };
+  if (trailingSlash) {
+    const validated = validEntryName(name, "folder");
+    if (validated.error) return { kind: "error", message: validated.error };
+    return { kind: "create", target: "folder", path: candidate, missingFolders: [...missingFolders, candidate] };
+  }
   const validated = validEntryName(name, "note");
   if (validated.error) return { kind: "error", message: validated.error };
   const path = joinPath(folder, validated.name);
@@ -73,5 +77,5 @@ export function planWorkspacePath(input: string, vault: string, entries: Entry[]
   const note = findEntry(path);
   if (note?.kind === "file") return { kind: "note", path: note.path };
   if (note?.kind === "folder") return { kind: "error", message: "A folder already has that note name." };
-  return { kind: "create", path, missingFolders };
+  return { kind: "create", target: "file", path, missingFolders };
 }

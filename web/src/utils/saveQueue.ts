@@ -15,7 +15,7 @@ export class SaveQueue {
   constructor(
     private readonly write: (path: string, content: string) => Promise<void>,
     private readonly onState: (state: SaveState) => void,
-    private readonly onFailure: () => void,
+    private readonly onFailure: (error: unknown) => void,
     private readonly delay = 450,
   ) {}
 

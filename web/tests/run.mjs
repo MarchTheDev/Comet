@@ -23,6 +23,7 @@ const checks = [
   'tests/organization.test.mjs',
   'tests/richText.test.mjs',
   'tests/saveQueue.test.mjs',
+  'tests/newFeatures.test.mjs',
 ];
 try {
   for (const file of checks) {

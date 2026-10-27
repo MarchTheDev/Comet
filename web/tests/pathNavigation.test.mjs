@@ -25,7 +25,8 @@ check('automatically gives a new extensionless note a Markdown extension', plan(
 check('rejects traversal, empty segments, absolute paths and URLs', ['../secret.md', 'Comet/../secret.md', 'Comet/./note.md', 'Comet//x.md', '/etc/passwd', 'C:\\Windows\\file.md', '\\\\server\\share\\x.md', 'https://example.com'].every((value) => plan(value).kind === 'error'));
 check('does not interpret a file as a folder', plan('plain-file/child.md').kind === 'error' && plan('Notes/Ideas.md/').kind === 'error');
 check('opens existing files and preserves explicit extensions', plan('photo.png').kind === 'note' && plan('new.txt').kind === 'create' && plan('new.txt').path === '/vault/new.txt');
-check('explains missing folders entered without a note', plan('Comet/Missing/').kind === 'error');
+const newFolder = plan('Comet/Missing/Nested/');
+check('plans only missing folders when a path ends in a slash', newFolder.kind === 'create' && newFolder.target === 'folder' && newFolder.path === '/vault/Missing/Nested' && JSON.stringify(newFolder.missingFolders) === JSON.stringify(['/vault/Missing', '/vault/Missing/Nested']));
 const windows = [{ name: 'Notes', path: 'C:\\Vault\\Notes', kind: 'folder' }, { name: 'Ideas.MD', path: 'C:\\Vault\\Notes\\Ideas.MD', kind: 'file' }];
 check('uses existing Windows paths and their actual casing', planWorkspacePath('comet/notes/ideas.md', 'C:\\Vault', windows).path === 'C:\\Vault\\Notes\\Ideas.MD');
 check('preserves case-sensitive names on Unix', plan('notes/Ideas.md').kind === 'create');

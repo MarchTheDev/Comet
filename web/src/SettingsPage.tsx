@@ -1,4 +1,6 @@
-import { ArrowLeft, Check, FolderOpen, Keyboard, Monitor, Moon, RotateCcw, Sun } from "lucide-react";
+import { useState } from "react";
+import { ArrowLeft, Check, FolderOpen, Gem, Keyboard, Monitor, Moon, RotateCcw, Sun } from "lucide-react";
+import { keyboardShortcut, shortcutLabel, SHORTCUT_ACTIONS, type ShortcutAction } from "./utils/shortcuts";
 import { DEFAULT_SETTINGS, type Settings, type ThemePreference } from "./utils/settings";
 
 interface SettingsPageProps {
@@ -15,9 +17,15 @@ const themes: { value: ThemePreference; label: string; description: string; icon
   { value: "dark", label: "Dark", description: "Easy on the eyes", icon: Moon },
   { value: "light", label: "Light", description: "A brighter space", icon: Sun },
   { value: "system", label: "System", description: "Match your device", icon: Monitor },
+  { value: "emerald", label: "Emerald", description: "A forest glow", icon: Gem },
+  { value: "rubellite", label: "Rubellite", description: "A warm rose glow", icon: Gem },
+  { value: "navy", label: "Navy", description: "A midnight blue", icon: Moon },
 ];
 
 export function SettingsPage({ settings, persisted, isSample, modifier, onChange, onBack, onOpenVault }: SettingsPageProps) {
+  const [recording, setRecording] = useState<ShortcutAction | null>(null);
+  const [shortcutError, setShortcutError] = useState("");
+  const mac = modifier === "⌘";
   return <section className="settings-page" aria-labelledby="settings-title">
     <button className="settings-back" type="button" onClick={onBack}><ArrowLeft size={16} /> Back to workspace</button>
     <div className="settings-header">
@@ -40,10 +48,7 @@ export function SettingsPage({ settings, persisted, isSample, modifier, onChange
               </label>)}
             </div>
           </fieldset>
-          <label className="setting-row">
-            <span className="setting-copy"><strong>Matterhorn background</strong><small>Show the mountain behind your workspace.</small></span>
-            <input className="setting-toggle" type="checkbox" aria-label="Matterhorn background" checked={settings.showCover} onChange={(event) => onChange({ showCover: event.target.checked })} />
-          </label>
+
         </section>
 
         <section className="settings-card" aria-labelledby="editor-settings-title">
@@ -74,7 +79,19 @@ export function SettingsPage({ settings, persisted, isSample, modifier, onChange
       </div>
 
       <aside className="settings-aside" aria-label="Settings information">
-        <div className="settings-aside-card shortcut-card"><div className="settings-aside-icon"><Keyboard size={18} /></div><h3>Little shortcuts</h3><p>A few ways to move a little faster.</p><dl><div><dt>Go to path</dt><dd><kbd>{modifier} L</kbd></dd></div><div><dt>Search files</dt><dd><kbd>{modifier} K</kbd></dd></div><div><dt>New file</dt><dd><kbd>{modifier} N</kbd></dd></div><div><dt>Quick capture</dt><dd><kbd>{modifier} ⇧ K</kbd></dd></div></dl></div>
+        <div className="settings-aside-card shortcut-card"><div className="settings-aside-icon"><Keyboard size={18} /></div><h3>Keyboard shortcuts</h3><p>Choose an action, then press its new key combination. Escape cancels.</p>
+          <dl>{(Object.entries(SHORTCUT_ACTIONS) as [ShortcutAction, string][]).map(([action, label]) => <div key={action}><dt>{label}</dt><dd><button type="button" className={recording === action ? "shortcut-edit recording" : "shortcut-edit"} aria-label={`Change ${label} shortcut`} onClick={() => { setRecording(action); setShortcutError(""); }} onKeyDown={(event) => {
+            if (recording !== action) return;
+            event.preventDefault(); event.stopPropagation();
+            if (event.key === "Escape") { setRecording(null); setShortcutError(""); return; }
+            const value = keyboardShortcut(event.nativeEvent, mac);
+            if (!value || value.endsWith("+")) { setShortcutError("Use Ctrl, Command, or Alt with another key."); return; }
+            const duplicate = (Object.entries(settings.shortcuts) as [ShortcutAction, string][]).find(([other, key]) => other !== action && key === value);
+            if (duplicate) { setShortcutError(`Already used by ${SHORTCUT_ACTIONS[duplicate[0]]}.`); return; }
+            onChange({ shortcuts: { ...settings.shortcuts, [action]: value } }); setRecording(null); setShortcutError("");
+          }}>{recording === action ? "Press keys…" : shortcutLabel(settings.shortcuts[action], mac)}</button></dd></div>)}</dl>
+          {shortcutError && <div className="dialog-error" role="alert">{shortcutError}</div>}
+        </div>
         <button className="reset-settings" type="button" onClick={() => onChange({ ...DEFAULT_SETTINGS })}><RotateCcw size={15} /> Reset preferences</button>
       </aside>
     </div>

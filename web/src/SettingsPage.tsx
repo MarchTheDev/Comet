@@ -38,6 +38,8 @@ const themes: { value: ThemePreference; label: string; description: string; icon
   { value: "emerald", label: "Emerald", description: "A forest glow", icon: Gem },
   { value: "rubellite", label: "Rubellite", description: "A warm rose glow", icon: Gem },
   { value: "navy", label: "Navy", description: "A midnight blue", icon: Moon },
+  { value: "0807-light", label: "0807 Light", description: "Soft paper & coral", icon: Sun },
+  { value: "0807-dark", label: "0807 Dark", description: "Slate & coral", icon: Moon },
 ];
 
 export function SettingsPage({ settings, persisted, isSample, vault = "", onImported = () => {}, onSyncStart, onSyncEnd, modifier, desktop, trayAvailable, onChange, onBack, onOpenVault, section = "general", onSection, version = "", update = null, updateStatus = "", onCheckUpdate = () => {}, onInstallUpdate = () => {}, onUpdatePage = () => {} }: SettingsPageProps) {

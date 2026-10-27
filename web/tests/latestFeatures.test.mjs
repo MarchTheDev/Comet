@@ -20,13 +20,18 @@ check('audio player reserves artwork metadata and lookup space while loading', a
 const board = newWhiteboard(), a = newWhiteboardItem('text', 5, 8), b = newWhiteboardItem('todo', 250, 8);
 board.items.push(a, b); board.connections.push({ from:a.id, to:b.id, color:'#8899aa' });
 check('whiteboards round-trip content and connections', parseWhiteboard(serializeWhiteboard(board))?.connections.length === 1);
-check('whiteboards reject dangling connections and unknown future fields', !parseWhiteboard(JSON.stringify({ ...board, connections:[{from:a.id,to:'missing',color:'#8899aa'}] })) && !parseWhiteboard(JSON.stringify({...board, version:3})));
+check('whiteboards reject dangling connections and unknown future fields', !parseWhiteboard(JSON.stringify({ ...board, connections:[{from:a.id,to:'missing',color:'#8899aa'}] })) && !parseWhiteboard(JSON.stringify({...board, version:4})));
 check('whiteboards reject unsafe embedded image data', !parseWhiteboard(JSON.stringify({ ...board, items:[{...a,type:'image',image:'data:image/svg+xml;base64,PHN2Zz4='}], connections:[] })));
 const legacyItem={id:'old',type:'text',x:10,y:20,text:'safe',done:false,color:'#abcdef',image:''};
 const legacyBoard={format:'comet-whiteboard',version:1,items:[legacyItem],connections:[]}, migrated=parseWhiteboard(JSON.stringify(legacyBoard));
 check('legacy whiteboards migrate in memory with default dimensions and preserve content',migrated?.version===2&&migrated.items[0].text==='safe'&&migrated.items[0].width===240&&migrated.strokes.length===0);
 check('legacy documents reject shapes or unknown fields instead of silently changing them',!parseWhiteboard(JSON.stringify({...legacyBoard,items:[{...legacyItem,type:'shape'}]}))&&!parseWhiteboard(JSON.stringify({...legacyBoard,extra:true})));
 check('whiteboard rejects unbounded strokes and malformed dimensions',!parseWhiteboard(JSON.stringify({...board,items:[{...a,width:1}]}))&&!parseWhiteboard(JSON.stringify({...board,strokes:[{id:'s',color:'#123456',width:4,points:[{x:-1,y:0}]}]})));
+const smallShape={...newWhiteboardItem('shape',20,20),width:80,height:60};
+const smallBoard={...board,items:[smallShape],connections:[]};
+check('small shapes use version 3 and version 2 retains its original size rules',!parseWhiteboard(JSON.stringify(smallBoard))&&parseWhiteboard(serializeWhiteboard(smallBoard))?.version===3&&parseWhiteboard(serializeWhiteboard(smallBoard))?.items[0].width===80);
+check('ordinary version 2 boards continue to serialize as version 2',JSON.parse(serializeWhiteboard(board)).version===2);
+
 const css=readFileSync('src/index.css','utf8'),epubSource=readFileSync('src/EpubView.tsx','utf8');
 check('EPUB wrapper styles cannot constrain epub.js paginated inner views',css.includes('.comet-epub-view {')&&!/^\s*\.epub-view\s*\{/m.test(css)&&epubSource.includes('comet-epub-view'));
 

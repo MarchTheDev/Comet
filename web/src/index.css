@@ -1464,3 +1464,43 @@ button.tree-disclosure:hover { color: var(--accent-ink); background: var(--accen
 .password-recovery-panel input[type=password] { flex:1; min-width:180px; padding:8px; color:var(--text); border:1px solid var(--border-strong); border-radius:7px; background:var(--panel-raised); }
 .password-recovery-panel .primary-button, .password-recovery-panel .secondary-button { justify-self:start; }
 .password-recovery-panel small { color:var(--text-muted); }
+
+/* Palettes inspired by 0807 (light and dark), alongside Comet's own themes. */
+:root[data-palette="0807-light"] { --canvas:#f6f8fc; --panel:#fff; --panel-raised:#fff; --panel-soft:#f6f8fc; --border:#dee4ef; --border-strong:#c4cddd; --text:#333f5c; --text-secondary:#5b6882; --text-muted:#737e94; --accent:#e25c5c; --accent-ink:#b73e42; --accent-soft:#fbe9e9; }
+:root[data-palette="0807-dark"] { --canvas:#1d2331; --panel:#262e42; --panel-raised:#262e42; --panel-soft:#303a51; --border:#3a4460; --border-strong:#586580; --text:#e9edf6; --text-secondary:#c0cadc; --text-muted:#a7b1c8; --accent:#f0837c; --accent-ink:#ffc0b8; --accent-soft:#513b49; }
+:root[data-palette="0807-light"] .workspace-scroll { background-image:linear-gradient(#f6f8fcd9,#f6f8fce8),url("/matterhorn.png") !important; }
+:root[data-palette="0807-dark"] .workspace-scroll { background-image:linear-gradient(#1d2331c9,#1d2331e8),url("/matterhorn.png") !important; }
+.theme-preview-0807-light { background:#fff; } .theme-preview-0807-light::before { background:#f6f8fc; } .theme-preview-0807-light span { background:#e25c5c; }
+.theme-preview-0807-dark { background:#262e42; } .theme-preview-0807-dark::before { background:#1d2331; } .theme-preview-0807-dark span { background:#f0837c; }
+.brain-root text, .brain-node text { font-family:inherit; font-size:calc(16px * var(--interface-text-scale,1)); font-weight:600; }
+.pdf-zoom-group { display:inline-flex; align-items:center; gap:9px; }
+@media (max-width:760px) { .pdf-zoom-group { gap:5px; } }
+.epub-options select { appearance:none; padding:7px 30px 7px 10px; font:inherit; font-weight:650; background:var(--panel-soft) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%238a98a9' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") no-repeat right 9px center; }
+/* A sidebar drop outline encloses the complete rows, including their selection. */
+.tree-branch.drop-group::after { inset:0; box-shadow:none; }
+/* Each item is its own stacking context: a lower item's resize handle never
+   paints above an item later in the board's stacking order. */
+.whiteboard-item { z-index:0; }
+.whiteboard-item.whiteboard-shape { min-width:30px; min-height:30px; border:0; background:transparent; box-shadow:none; }
+.whiteboard-shape .whiteboard-item-header { position:absolute; z-index:2; bottom:100%; left:0; min-width:150px; height:30px; opacity:0; pointer-events:none; border:1px solid var(--border); border-radius:7px; background:var(--panel-raised); }
+.whiteboard-shape:hover .whiteboard-item-header, .whiteboard-shape:focus-within .whiteboard-item-header { opacity:1; pointer-events:auto; }
+.whiteboard-shape .whiteboard-item-content.shape-content { position:absolute; inset:0; padding:0; }
+.whiteboard-shape-visual { inset:0; width:100%; height:100%; }
+.whiteboard-shape-visual > *, .whiteboard-shape-preview > * { fill:none; stroke:var(--item-color,#9c9fe1); stroke-width:2; vector-effect:non-scaling-stroke; }
+.whiteboard-shape-preview { position:absolute; z-index:0; pointer-events:none; }
+.capture-modal { width:min(100%,520px); }
+.capture-dropzone { display:flex; flex-direction:column; align-items:center; gap:7px; width:100%; padding:20px; color:var(--text-secondary); border:1.5px dashed var(--border-strong); border-radius:12px; background:var(--panel-soft); text-align:center; transition:border-color .15s,background .15s; }
+.capture-dropzone:hover, .capture-dropzone.drag-over { color:var(--accent-ink); border-color:var(--accent); background:var(--accent-soft); }
+.capture-drop-icon, .upload-card-icon { display:grid; flex:none; place-items:center; width:38px; height:38px; color:var(--accent-ink); border-radius:10px; background:var(--accent-soft); }
+.capture-dropzone strong { font-size:calc(12px * var(--interface-text-scale,1)); }.capture-dropzone small { color:var(--text-muted); font-size:calc(10px * var(--interface-text-scale,1)); }
+.capture-file-selection { margin:9px 0; padding:10px; color:var(--text-secondary); border:1px solid var(--border); border-radius:8px; background:var(--panel-raised); font-size:calc(10.5px * var(--interface-text-scale,1)); }
+.capture-file-selection > button { float:right; color:var(--accent-ink); border:0; background:transparent; font-weight:700; }.capture-file-selection ul { max-height:75px; overflow:auto; margin:6px 0 0; padding-left:18px; }.capture-file-selection li { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.capture-destination-label { margin:16px 0 0; }.capture-modal .move-search { margin-top:7px; }.capture-modal .move-folder-list { max-height:min(24vh,190px); }
+.upload-stack { position:fixed; z-index:35; right:20px; bottom:75px; display:grid; gap:8px; width:min(340px,calc(100vw - 32px)); max-height:min(70vh,560px); overflow:auto; }
+.upload-card { padding:14px; color:var(--text-secondary); border:1px solid var(--border-strong); border-radius:12px; background:var(--panel-raised); box-shadow:0 14px 35px #0003; font-size:calc(11px * var(--interface-text-scale,1)); }
+.upload-card-heading { display:flex; align-items:center; gap:10px; }.upload-card-heading > div { display:grid; flex:1; gap:3px; min-width:0; }.upload-card-heading strong { color:var(--text); }.upload-card-heading small { color:var(--text-muted); }
+.upload-current { display:block; overflow:hidden; margin:11px 0 7px; text-overflow:ellipsis; white-space:nowrap; }.upload-card progress { display:block; width:100%; height:6px; accent-color:var(--accent); }.upload-errors { max-height:100px; overflow:auto; margin:10px 0 0; padding-left:18px; color:var(--text-secondary); line-height:1.5; overflow-wrap:anywhere; }
+@media (max-width:600px) { .upload-stack { right:12px; bottom:70px; } }
+.capture-modal input[hidden] { display:none; }
+.whiteboard-shape-hint { display:inline-flex; align-items:center; gap:6px; color:var(--text-muted); font-size:calc(10px * var(--interface-text-scale,1)); }
+.whiteboard-toolbar .whiteboard-shape-hint button { min-height:26px; padding:3px 6px; border:0; background:transparent; color:var(--accent-ink); }

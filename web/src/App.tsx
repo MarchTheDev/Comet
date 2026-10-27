@@ -32,7 +32,8 @@ import { ColorMenu } from "./ColorMenu";
 import { SettingsPage } from "./SettingsPage";
 import { WorkspacePanel, type WorkspaceLayout } from "./WorkspacePanel";
 import { FileIcon } from "./FileIcon";
-import { MovePicker } from "./MovePicker";
+import { FolderTreePicker, MovePicker } from "./MovePicker";
+import { UploadProgress, type UploadInfo } from "./UploadProgress";
 import { MediaView } from "./MediaView";
 import { VideoEmbeds } from "./utils/videoEmbeds";
 import { SearchDialog } from "./SearchDialog";
@@ -184,6 +185,7 @@ function App() {
   const [bulkDelete, setBulkDelete] = useState<Entry[] | null>(null);
   const [selection, setSelection] = useState<Set<string>>(() => new Set());
   const selectionRef = useRef(selection); selectionRef.current = selection;
+  const selectionAnchorOpened = useRef(false);
   const selectionAnchor = useRef("");
   const [linkOpen, setLinkOpen] = useState(false);
   const [linkValue, setLinkValue] = useState("");
@@ -195,6 +197,19 @@ function App() {
   const [captureType, setCaptureType] = useState<CaptureType>("text");
   const [captureText, setCaptureText] = useState("");
   const [captureImage, setCaptureImage] = useState("");
+  const [captureFiles, setCaptureFiles] = useState<File[]>([]), [capturePaths, setCapturePaths] = useState<string[]>([]), [captureDragOver, setCaptureDragOver] = useState(false);
+  const [uploads, setUploads] = useState<UploadInfo[]>([]);
+  const captureInputRef = useRef<HTMLInputElement>(null);
+  const beginUpload = useCallback((total: number) => {
+    const id = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
+    setUploads((previous) => [...previous, { id, total, completed: 0, current: "", phase: "preparing" }]);
+    return id;
+  }, []);
+  const updateUpload = useCallback((id: string, patch: Partial<UploadInfo>) => setUploads((previous) => previous.map((item) => item.id === id ? { ...item, ...patch } : item)), []);
+  const finishUpload = useCallback((id: string, completed: number, errors: string[]) => {
+    updateUpload(id, { completed, errors, phase: errors.length ? "failed" : "done", current: "" });
+    if (!errors.length) window.setTimeout(() => setUploads((previous) => previous.filter((item) => item.id !== id)), 4500);
+  }, [updateUpload]);
   const [desktopInfoOpen, setDesktopInfoOpen] = useState(false);
   const [contextMenu, setContextMenu] = useState<ContextMenu | null>(null);
   const contextMenuRef = useRef<HTMLDivElement>(null);
@@ -275,7 +290,7 @@ function App() {
     return () => { controller.abort(); window.clearTimeout(timer); };
   }, []);
 
-  useEffect(() => { const next = new Set<string>(); selectionRef.current = next; setSelection(next); selectionAnchor.current = ""; }, [vaultPath]);
+  useEffect(() => { const next = new Set<string>(); selectionRef.current = next; setSelection(next); selectionAnchor.current = ""; selectionAnchorOpened.current = false; }, [vaultPath]);
   useEffect(() => {
     const next = metaCache.current[vaultPath] ?? readWorkspaceMeta(vaultPath);
     metaCache.current[vaultPath] = next;
@@ -333,9 +348,9 @@ function App() {
   useEffect(() => {
     const media = window.matchMedia?.("(prefers-color-scheme: dark)");
     const applyTheme = () => {
-      const resolved = settings.theme === "system" ? (!media || media.matches ? "dark" : "light") : settings.theme === "light" ? "light" : "dark";
+      const resolved = settings.theme === "system" ? (!media || media.matches ? "dark" : "light") : ["light", "0807-light"].includes(settings.theme) ? "light" : "dark";
       document.documentElement.dataset.theme = resolved;
-      document.documentElement.dataset.palette = ["emerald", "rubellite", "navy"].includes(settings.theme) ? settings.theme : "";
+      document.documentElement.dataset.palette = ["emerald", "rubellite", "navy", "0807-light", "0807-dark"].includes(settings.theme) ? settings.theme : "";
       document.documentElement.style.colorScheme = resolved;
       document.querySelector('meta[name="theme-color"]')?.setAttribute("content", resolved === "dark" ? "#11171d" : "#f5f7f8");
     };
@@ -1036,6 +1051,7 @@ function App() {
     setCaptureType("text");
     setCaptureText("");
     setCaptureImage("");
+    setCaptureFiles([]); setCapturePaths([]); setCaptureDragOver(false);
     setCaptureFolder(workspaceDestination);
     setDialogError("");
     setDialogBusy(false);
@@ -1063,10 +1079,25 @@ function App() {
     }
   };
 
+  const chooseCaptureFiles = async () => {
+    if (isSamplePath(vaultRef.current)) { captureInputRef.current?.click(); return; }
+    try {
+      const chosen = await open({ directory: false, multiple: true, title: "Choose files to capture" });
+      if (chosen) { setCapturePaths(Array.isArray(chosen) ? chosen : [chosen]); setCaptureFiles([]); setDialogError(""); }
+    } catch (error) { setDialogError(errorMessage(error)); }
+  };
+
   const submitCapture = async (event: FormEvent) => {
     event.preventDefault();
     if (dialogBusy) return;
-    if (captureType === "file") { setCaptureOpen(false); await upload(captureFolder); return; }
+    if (captureType === "file") {
+      if (!captureFiles.length && !capturePaths.length) { setDialogError("Choose or drop one or more files first."); return; }
+      if (captureFolder !== vaultRef.current && !entries.some((entry) => entry.kind === "folder" && entry.path === captureFolder)) { setDialogError("Choose a folder inside your current workspace."); return; }
+      setCaptureOpen(false);
+      if (capturePaths.length) void importPaths(capturePaths, captureFolder);
+      else void importBrowserFiles(captureFiles, captureFolder);
+      return;
+    }
     let body = captureText.trim();
     let captureTitle = captureType === "image" ? fileName(captureImage).replace(/\.[^.]+$/, "") : body.split(/\s+/).slice(0, 6).join(" ");
     if (captureType === "image" && !captureImage) {
@@ -1243,9 +1274,10 @@ function App() {
     const walk = (nodes: TreeNode[]) => { for (const node of nodes) { paths.push(node.path); if (node.kind === "folder" && expanded.has(node.path)) walk(node.children); } };
     walk(tree); return paths;
   }, [tree, expanded]);
-  const clearSelection = () => { const empty = new Set<string>(); selectionRef.current = empty; selectionAnchor.current = ""; setSelection(empty); };
+  const clearSelection = () => { const empty = new Set<string>(); selectionRef.current = empty; selectionAnchor.current = ""; selectionAnchorOpened.current = false; setSelection(empty); };
   const activateSelection = (event: MouseEvent, entry: Entry, ordered: string[]) => {
-    const next = selectRange(selectionRef.current, selectionAnchor.current, ordered, entry.path, event.ctrlKey || event.metaKey, event.shiftKey);
+    const next = selectRange(selectionRef.current, selectionAnchor.current, ordered, entry.path, event.ctrlKey || event.metaKey, event.shiftKey, selectionAnchorOpened.current);
+    selectionAnchorOpened.current = next.open;
     selectionRef.current = next.selected; selectionAnchor.current = next.anchor; setSelection(next.selected);
     if (next.open) { if (entry.kind === "folder") void showFolder(entry.path); else void selectNote(entry.path); }
   };
@@ -1360,57 +1392,74 @@ function App() {
   const importPaths = useCallback(async (paths: string[], folder: string) => {
     const vault = vaultRef.current;
     if (!paths.length || !isPathInside(folder, vault)) return;
+    const id = beginUpload(paths.length); let imported = 0;
+    const errors: string[] = [];
     try {
       await flushAll();
-      let imported = 0;
-      const errors: string[] = [];
       for (const path of paths) {
-        try { await importFile(vault, path, folder); imported++; }
+        if (vaultRef.current !== vault) { errors.push("The workspace changed; remaining files were left in place."); break; }
+        updateUpload(id, { current: fileName(path), phase: "copying", loaded: undefined, bytes: undefined });
+        try { await importFile(vault, path, folder); imported++; updateUpload(id, { completed: imported }); }
         catch (error) { errors.push(`${fileName(path)}: ${errorMessage(error)}`); }
       }
-      await refresh(vault);
-      if (vaultRef.current === vault) setExpanded((previous) => new Set([...previous, folder]));
-      setNotice(errors.length ? `${imported} imported. ${errors.join(" ")}` : `${imported} ${imported === 1 ? "file" : "files"} added.`);
-    } catch (error) { setNotice(`Couldn't import: ${errorMessage(error)}`); }
-  }, [flushAll, refresh]);
+      if (vaultRef.current === vault) {
+        await refresh(vault);
+        setExpanded((previous) => new Set([...previous, folder]));
+      }
+    } catch (error) { errors.push(`Couldn't import: ${errorMessage(error)}`); }
+    finishUpload(id, imported, errors);
+  }, [flushAll, refresh, beginUpload, updateUpload, finishUpload]);
 
   const importBrowserFiles = async (files: File[], folder: string) => {
     const vault = vaultRef.current;
-    if (!isPathInside(folder, vault)) return;
-    try { await flushAll(); } catch { setNotice("Couldn't save before importing. Retry the save first."); return; }
-    if (vaultRef.current !== vault) return;
-    let imported = 0;
+    if (!files.length || !isPathInside(folder, vault)) return;
+    const id = beginUpload(files.length); let imported = 0;
     const errors: string[] = [];
-    for (const file of files) {
-      try {
-        if (file.size > 20 * 1024 * 1024) throw new Error("Dropped files are limited to 20 MB; use Upload files for larger files.");
-        const checked = validEntryName(file.name, "file");
-        if (checked.error) throw new Error(checked.error);
-        if (isSamplePath(vault)) {
-          let value: string;
-          if (isTextFile(file.name) || ["link", "todo", "whiteboard"].includes(fileKind(file.name))) {
-            value = new TextDecoder("utf-8", { fatal: true }).decode(await file.arrayBuffer());
-            if (value.includes("\0")) throw new Error("This text file contains binary data.");
+    const readFile = (file: File, asDataUrl: boolean): Promise<ArrayBuffer | string> => new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onprogress = (event) => { if (event.lengthComputable) updateUpload(id, { phase: "reading", loaded: event.loaded, bytes: event.total }); };
+      reader.onload = () => reader.result !== null ? resolve(reader.result) : reject(new Error("Couldn't read file."));
+      reader.onerror = () => reject(reader.error ?? new Error("Couldn't read file."));
+      reader.onabort = () => reject(new Error("Reading the file was cancelled."));
+      if (asDataUrl) reader.readAsDataURL(file); else reader.readAsArrayBuffer(file);
+    });
+    try {
+      await flushAll();
+      for (const file of files) {
+        if (vaultRef.current !== vault) { errors.push("The workspace changed; remaining files were left in place."); break; }
+        updateUpload(id, { current: file.name, phase: "reading", loaded: undefined, bytes: undefined });
+        try {
+          if (file.size > 20 * 1024 * 1024) throw new Error(isSamplePath(vault) ? "Sample uploads are limited to 20 MB per file." : "Dropped files are limited to 20 MB; browse for larger files instead.");
+          const checked = validEntryName(file.name, "file");
+          if (checked.error) throw new Error(checked.error);
+          const text = isTextFile(file.name) || ["link", "todo", "whiteboard"].includes(fileKind(file.name));
+          const result = await readFile(file, isSamplePath(vault) && !text);
+          if (vaultRef.current !== vault) { errors.push("The workspace changed; remaining files were left in place."); break; }
+          updateUpload(id, { phase: "copying", loaded: undefined, bytes: undefined });
+          if (isSamplePath(vault)) {
+            let value: string;
+            if (text) {
+              if (!(result instanceof ArrayBuffer)) throw new Error("Couldn't read file.");
+              value = new TextDecoder("utf-8", { fatal: true }).decode(result);
+              if (value.includes("\0")) throw new Error("This text file contains binary data.");
+            } else {
+              if (typeof result !== "string") throw new Error("Couldn't read file.");
+              value = result;
+            }
+            sampleVault.createNote(joinPath(folder, checked.name), value);
           } else {
-            value = await new Promise<string>((resolve, reject) => {
-              const reader = new FileReader();
-              reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("Couldn't read file."));
-              reader.onerror = () => reject(reader.error ?? new Error("Couldn't read file."));
-              reader.readAsDataURL(file);
-            });
+            if (!(result instanceof ArrayBuffer)) throw new Error("Couldn't read file.");
+            await invoke("import_dropped_bytes", { vault, path: joinPath(folder, checked.name), bytes: Array.from(new Uint8Array(result)) });
           }
-          sampleVault.createNote(joinPath(folder, checked.name), value);
-        } else {
-          const bytes = Array.from(new Uint8Array(await file.arrayBuffer()));
-          await invoke("import_dropped_bytes", { vault, path: joinPath(folder, checked.name), bytes });
-        }
-        imported++;
-      } catch (error) { errors.push(`${file.name}: ${errorMessage(error)}`); }
-    }
-    await refresh(vault);
-    if (vaultRef.current === vault) setExpanded((previous) => new Set([...previous, folder]));
-    const temporary = isSamplePath(vault) && !sampleVault.isPersisted() ? " Browser storage is full or unavailable; sample changes last only for this session." : "";
-    setNotice((errors.length ? `${imported} imported. ${errors.join(" ")}` : `${imported} ${imported === 1 ? "file" : "files"} added.`) + temporary);
+          imported++; updateUpload(id, { completed: imported });
+        } catch (error) { errors.push(`${file.name}: ${errorMessage(error)}`); }
+      }
+      if (vaultRef.current === vault) {
+        await refresh(vault); setExpanded((previous) => new Set([...previous, folder]));
+      }
+      if (isSamplePath(vault) && !sampleVault.isPersisted()) errors.push("Browser storage is full or unavailable; sample changes last only for this session.");
+    } catch (error) { errors.push(`Couldn't import: ${errorMessage(error)}`); }
+    finishUpload(id, imported, errors);
   };
 
   const importLink = async (url: string, folder: string) => {
@@ -1491,7 +1540,7 @@ function App() {
     if (indicator.position === "into") { void moveItems(paths, item.path); return; }
     const targetParent = parentPath(item.path);
     const siblings = orderItems(entries.filter((entry) => parentPath(entry.path) === targetParent), targetParent).map((entry) => entry.path);
-    if (paths.length > 1 && paths.some((path) => normalizePath(parentPath(path)) !== normalizePath(targetParent))) {
+    if ((paths.length > 1 || paths[0] !== source) && paths.some((path) => normalizePath(parentPath(path)) !== normalizePath(targetParent))) {
       const vault = vaultRef.current;
       void moveItems(paths, targetParent).then((destinations) => { if (destinations && vaultRef.current === vault) commitMeta((current) => reorderChildrenGroup(current, targetParent, [...siblings, ...destinations], destinations, item.path, indicator.position === "after")); });
       return;
@@ -1601,7 +1650,7 @@ function App() {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        if (!modalOpen && selectionRef.current.size) { const empty = new Set<string>(); selectionRef.current = empty; selectionAnchor.current = ""; setSelection(empty); }
+        if (!modalOpen && selectionRef.current.size) { const empty = new Set<string>(); selectionRef.current = empty; selectionAnchor.current = ""; selectionAnchorOpened.current = false; setSelection(empty); }
         setContextMenu(null);
         if (!dialogBusy) {
           setCreateDialog(null); setPathCreateDialog(null); setRenameNode(null); setDeleteNode(null); setBulkDelete(null);
@@ -1746,7 +1795,7 @@ function App() {
               </form>
             <div className="topbar-actions">
               {!isSample && <button className="icon-button" type="button" aria-label="Show current path in file explorer" title="Show current path in file explorer" onClick={() => void revealPath(currentLocation)}><FolderOpen size={17} /></button>}
-              {selection.size > 0 && <button className="selection-clear icon-button" type="button" aria-label="Clear selection" title="Clear selection (Escape)" onClick={() => { const empty = new Set<string>(); selectionRef.current = empty; selectionAnchor.current = ""; setSelection(empty); }}><X size={15} /></button>}
+              {selection.size > 0 && <button className="selection-clear icon-button" type="button" aria-label="Clear selection" title="Clear selection (Escape)" onClick={() => { const empty = new Set<string>(); selectionRef.current = empty; selectionAnchor.current = ""; selectionAnchorOpened.current = false; setSelection(empty); }}><X size={15} /></button>}
               {selection.size > 0 && <button className="selection-trash icon-button" type="button" aria-label={`Delete ${selection.size} selected items`} title={`Delete ${selection.size} selected items`} onClick={openBulkDelete}><Trash2 size={17} /><span>{selection.size}</span></button>}
               {isSample && <span className="sample-badge" aria-label={desktopAvailable ? "Sample workspace" : "Interactive browser sample"} title={desktopAvailable ? "Sample workspace" : "Interactive browser sample, not local files"}><span /> Sample</span>}
               <button className="icon-button top-search-button" type="button" onClick={focusSearch} aria-label="Search notes" title={`Search (${shortcutLabel(settings.shortcuts.search, modifier === "⌘")})`}><Search size={18} /></button>
@@ -1822,6 +1871,7 @@ function App() {
 
       {updateNotice && availableUpdate && <div className="update-notice" role="status"><div><strong>Comet {availableUpdate.version} is available</strong><span>A new version is ready to review.</span></div><button type="button" className="secondary-button" onClick={() => setUpdateNotice(false)}>Later</button><button type="button" className="primary-button" onClick={() => { setUpdateNotice(false); setSettingsSection("updates"); void showSettings(); }}>Update</button></div>}
 
+      <UploadProgress uploads={uploads} onDismiss={(id) => setUploads((previous) => previous.filter((item) => item.id !== id))} />
       {notice && <div className="toast" role="status"><AlertCircle size={17} /> <span>{notice}</span><button type="button" onClick={() => setNotice("")} aria-label="Dismiss message"><X size={16} /></button></div>}
 
       {contextMenu && <div ref={contextMenuRef} className="context-menu" role="menu" style={{ left: contextMenu.x, top: contextMenu.y }} onClick={(event) => event.stopPropagation()}>
@@ -1943,10 +1993,18 @@ function App() {
           {captureType === "image" && <button className="image-picker" type="button" onClick={() => void chooseImage()}><ImageIcon size={17} /> {captureImage ? fileName(captureImage) : "Choose an image"}</button>}
           {captureType !== "file" && <><label className="modal-label" htmlFor="capture-content">{captureType === "link" ? "Link" : captureType === "image" ? "Add a note (optional)" : "Your thought"}</label>
           <textarea id="capture-content" autoFocus value={captureText} onChange={(event) => { setCaptureText(event.target.value); setDialogError(""); }} placeholder={captureType === "link" ? "https://example.com" : captureType === "image" ? "A few words about this image…" : "What would you like to remember?"} /></>}
-          <label className="modal-label" htmlFor="capture-destination">Save to path</label><select id="capture-destination" value={captureFolder} onChange={(event) => setCaptureFolder(event.target.value)}><option value={vaultPath}>Comet (workspace)</option>{entries.filter((entry) => entry.kind === "folder").map((folder) => <option key={folder.path} value={folder.path}>{displayWorkspacePath(folder.path, vaultPath)}</option>)}</select>
+          {captureType === "file" && <>
+            <input ref={captureInputRef} type="file" multiple hidden onChange={(event) => { const files = [...(event.currentTarget.files ?? [])]; event.currentTarget.value = ""; if (files.length) { setCaptureFiles(files); setCapturePaths([]); setDialogError(""); } }} />
+            <button type="button" className={`capture-dropzone${captureDragOver ? " drag-over" : ""}`} onClick={() => void chooseCaptureFiles()} onDragEnter={(event) => { event.preventDefault(); event.stopPropagation(); setCaptureDragOver(true); }} onDragOver={(event) => { event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = "copy"; setCaptureDragOver(true); }} onDragLeave={(event) => { event.preventDefault(); event.stopPropagation(); if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setCaptureDragOver(false); }} onDrop={(event) => { event.preventDefault(); event.stopPropagation(); setCaptureDragOver(false); const files = [...event.dataTransfer.files]; if (files.length) { setCaptureFiles(files); setCapturePaths([]); setDialogError(""); } else setDialogError("Drop files here, or choose files using the button."); }}>
+              <span className="capture-drop-icon"><Upload size={21} /></span><strong>Drop files here or click to browse</strong><small>{isSample ? "Up to 20 MB per file · browser storage may be smaller" : "Browse for files of any size · drops up to 20 MB"}</small>
+            </button>
+            {(captureFiles.length > 0 || capturePaths.length > 0) && <div className="capture-file-selection"><strong>{captureFiles.length || capturePaths.length} {(captureFiles.length || capturePaths.length) === 1 ? "file" : "files"} selected</strong><button type="button" onClick={() => { setCaptureFiles([]); setCapturePaths([]); }}>Clear</button><ul>{(captureFiles.length ? captureFiles.map((file) => file.name) : capturePaths.map(fileName)).map((name, index) => <li key={`${index}:${name}`} title={name}>{name}</li>)}</ul></div>}
+          </>}
+          <span className="modal-label capture-destination-label">Save to folder</span><FolderTreePicker tree={tree} vault={vaultPath} name={vaultName} destination={captureFolder} onDestination={setCaptureFolder} />
+          <div className="move-destination"><span>Saving to</span><strong title={displayWorkspacePath(captureFolder, vaultPath)}>{normalizePath(captureFolder) === normalizePath(vaultPath) ? vaultName : displayWorkspacePath(captureFolder, vaultPath)}</strong></div>
           <span className="input-hint">{captureType === "file" ? "Choose one or more files to copy into this folder." : <>Saved as a new {captureType === "link" ? "web shortcut (.url)" : "Markdown file"} in the selected folder{captureType === "image" && isSample ? ". Image capture requires a local folder." : "."}</>}</span>
           {dialogError && <div className="dialog-error" role="alert"><AlertCircle size={15} /> {dialogError}</div>}
-          <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setCaptureOpen(false)} disabled={dialogBusy}>Cancel</button><button type="submit" className="primary-button" disabled={dialogBusy}>{dialogBusy ? "Saving…" : captureType === "file" ? "Choose files" : "Save capture"}</button></div>
+          <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setCaptureOpen(false)} disabled={dialogBusy}>Cancel</button><button type="submit" className="primary-button" disabled={dialogBusy}>{dialogBusy ? "Saving…" : captureType === "file" ? "Add files" : "Save capture"}</button></div>
         </form>
       </div>}
 

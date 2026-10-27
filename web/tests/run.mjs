@@ -33,6 +33,8 @@ const checks = [
   'tests/passwordRecovery.test.mjs',
   'tests/googleInteractions.test.mjs',
   'tests/whiteboardInteractions.test.mjs',
+  'tests/uploadInteractions.test.mjs',
+  'tests/playerInteractions.test.mjs',
 ];
 try {
   for (const file of checks) {

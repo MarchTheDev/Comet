@@ -22,13 +22,17 @@ function useVolumeWheel(ref: React.RefObject<HTMLElement | null>, change: (delta
 }
 
 
-function usePlayerKeys(onKey: (key: string) => void) {
+function usePlayerKeys(player: React.RefObject<HTMLElement | null>, onKey: (key: string) => void) {
   const handler = useRef(onKey); handler.current = onKey;
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
-      if (event.defaultPrevented || event.repeat || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || target?.isContentEditable || /^(INPUT|TEXTAREA|SELECT|BUTTON|A)$/.test(target?.tagName ?? "") || document.querySelector('[role="dialog"][aria-modal="true"]')) return;
-      if (![" ", "ArrowLeft", "ArrowRight", "m", "M", "f", "F"].includes(event.key)) return;
+      const insidePlayer = !!target && !!player.current?.contains(target);
+      const playerRange = insidePlayer && target?.tagName === "INPUT" && (target as HTMLInputElement).type === "range";
+      const editing = target?.isContentEditable || /^(TEXTAREA|SELECT)$/.test(target?.tagName ?? "") || (target?.tagName === "INPUT" && !playerRange);
+      if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || editing || (!insidePlayer && /^(BUTTON|A)$/.test(target?.tagName ?? "")) || document.querySelector('[role="dialog"][aria-modal="true"]')) return;
+      if (event.repeat && !event.key.startsWith("Arrow")) return;
+      if (![" ", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "m", "M", "f", "F"].includes(event.key)) return;
       event.preventDefault(); handler.current(event.key);
     };
     window.addEventListener("keydown", key); return () => window.removeEventListener("keydown", key);
@@ -120,7 +124,8 @@ export function AudioPlayer({ url, name, autoCoverArt = true }: { url: string; n
   const [playing, setPlaying] = useState(false); const [current, setCurrent] = useState(0); const [duration, setDuration] = useState(0); const [volume, setVolume] = useState(1); const [failed, setFailed] = useState(""); const [fullPlayer, setFullPlayer] = useState(false);
   const info = useAudioInfo(url, name); const online = useOnlineCover(info, name, autoCoverArt); const artwork = info.artwork || online.cover;
   const changeVolume = (value: number) => { const next = boundVolume(value); if (audio.current) audio.current.volume = next; setVolume(next); };
-  useVolumeWheel(volumeArea, (delta) => setVolume((previous) => { const next = boundVolume(previous + delta); if (audio.current) audio.current.volume = next; return next; }));
+  const adjustVolume = (delta: number) => setVolume((previous) => { const next = boundVolume(previous + delta); if (audio.current) audio.current.volume = next; return next; });
+  useVolumeWheel(volumeArea, adjustVolume);
   const toggle = async () => {
     const element = audio.current; if (!element) return;
     if (!element.paused) { element.pause(); return; }
@@ -142,7 +147,7 @@ export function AudioPlayer({ url, name, autoCoverArt = true }: { url: string; n
   const seek = (value: number) => { const element = audio.current; if (!element || !Number.isFinite(element.duration)) return; element.currentTime = Math.min(Math.max(0, value), element.duration); setCurrent(element.currentTime); };
   const closeFullscreen = () => { setFullPlayer(false); if (document.fullscreenElement === player.current) void document.exitFullscreen().catch(() => undefined); nativeFullscreen.current = false; };
   const openFullscreen = () => { setFullPlayer(true); if (player.current?.requestFullscreen) void player.current.requestFullscreen().then(() => { nativeFullscreen.current = true; }).catch(() => undefined); };
-  usePlayerKeys((key) => { if (key === " ") void toggle(); else if (key === "ArrowLeft") seek(current - 10); else if (key === "ArrowRight") seek(current + 10); else if (key.toLowerCase() === "m") changeVolume(volume ? 0 : 1); else if (key.toLowerCase() === "f") fullPlayer ? closeFullscreen() : openFullscreen(); });
+  usePlayerKeys(player, (key) => { if (key === " ") void toggle(); else if (key === "ArrowLeft") seek((audio.current?.currentTime ?? current) - 10); else if (key === "ArrowRight") seek((audio.current?.currentTime ?? current) + 10); else if (key === "ArrowUp") adjustVolume(.05); else if (key === "ArrowDown") adjustVolume(-.05); else if (key.toLowerCase() === "m") changeVolume(volume ? 0 : 1); else if (key.toLowerCase() === "f") fullPlayer ? closeFullscreen() : openFullscreen(); });
   useEffect(() => { player.current?.focus({ preventScroll: true }); }, []);
   useEffect(() => {
     const change = () => { if (nativeFullscreen.current && document.fullscreenElement !== player.current) { nativeFullscreen.current = false; setFullPlayer(false); } };
@@ -178,7 +183,7 @@ export function AudioPlayer({ url, name, autoCoverArt = true }: { url: string; n
     draw(); return () => cancelAnimationFrame(frame);
   }, [playing, fullPlayer]);
   useEffect(() => () => { const currentContext = context.current; if (currentContext) void currentContext.close().catch(() => undefined); context.current = null; analyser.current = null; }, []);
-  return <div ref={player} className={`audio-stage audio-player${fullPlayer ? " audio-fullscreen" : ""}`} tabIndex={-1} role="group" aria-label={`Audio player: ${name}`} style={artwork ? { "--audio-cover": `url(${JSON.stringify(artwork)})` } as CSSProperties : undefined}>
+  return <div ref={player} className={`audio-stage audio-player${fullPlayer ? " audio-fullscreen" : ""}`} onPointerDown={(event) => { if (!(event.target as Element).closest("button,input,select,a")) event.currentTarget.focus({ preventScroll: true }); }} tabIndex={-1} role="group" aria-label={`Audio player: ${name}`} style={artwork ? { "--audio-cover": `url(${JSON.stringify(artwork)})` } as CSSProperties : undefined}>
     <div className={`audio-art${artwork ? " has-art" : ""}`}>{artwork ? <img src={artwork} alt={`Cover art for ${info.title || name}`} /> : <Music2 size={42} />}</div>
     <div className="audio-copy"><span>YOUR AUDIO</span><h3>{info.title || name}</h3><p className="audio-artist">{info.artist || "\u00a0"}</p><div className="audio-cover-slot">{!info.artwork && !online.cover && !info.loading && <button type="button" className="audio-cover-search" title="Search Apple’s music catalog using this track’s title and artist" disabled={online.searching} onClick={online.search}>{online.searching ? "Looking for cover…" : "Find cover online"}</button>}</div></div>
     <button type="button" className="audio-fullscreen-toggle" aria-label={fullPlayer ? "Exit full-screen player" : "Open full-screen player"} title={fullPlayer ? "Exit full screen" : "Full-screen player"} onClick={fullPlayer ? closeFullscreen : openFullscreen}>{fullPlayer ? <Minimize size={18} /> : <Maximize size={18} />}</button>
@@ -196,13 +201,14 @@ export function VideoPlayer({ url, name }: { url: string; name: string }) {
   const video = useRef<HTMLVideoElement>(null); const player = useRef<HTMLDivElement>(null); const volumeArea = useRef<HTMLDivElement>(null);
   const [playing, setPlaying] = useState(false); const [current, setCurrent] = useState(0); const [duration, setDuration] = useState(0); const [volume, setVolume] = useState(1); const [rate, setRate] = useState(1); const [failed, setFailed] = useState(false);
   const changeVolume = (value: number) => { const next = boundVolume(value); if (video.current) video.current.volume = next; setVolume(next); };
-  useVolumeWheel(volumeArea, (delta) => setVolume((previous) => { const next = boundVolume(previous + delta); if (video.current) video.current.volume = next; return next; }));
+  const adjustVolume = (delta: number) => setVolume((previous) => { const next = boundVolume(previous + delta); if (video.current) video.current.volume = next; return next; });
+  useVolumeWheel(volumeArea, adjustVolume);
   const toggle = () => { const element = video.current; if (!element) return; if (element.paused) void element.play().catch(() => setFailed(true)); else element.pause(); };
   const seek = (value: number) => { const element = video.current; if (!element || !Number.isFinite(element.duration)) return; element.currentTime = Math.min(Math.max(0, value), element.duration); setCurrent(element.currentTime); };
   const fullscreen = () => { if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined); else if (player.current?.requestFullscreen) void player.current.requestFullscreen().catch(() => undefined); };
-  usePlayerKeys((key) => { if (key === " ") toggle(); else if (key === "ArrowLeft") seek(current - 10); else if (key === "ArrowRight") seek(current + 10); else if (key.toLowerCase() === "m") changeVolume(volume ? 0 : 1); else if (key.toLowerCase() === "f") fullscreen(); });
+  usePlayerKeys(player, (key) => { if (key === " ") toggle(); else if (key === "ArrowLeft") seek((video.current?.currentTime ?? current) - 10); else if (key === "ArrowRight") seek((video.current?.currentTime ?? current) + 10); else if (key === "ArrowUp") adjustVolume(.05); else if (key === "ArrowDown") adjustVolume(-.05); else if (key.toLowerCase() === "m") changeVolume(volume ? 0 : 1); else if (key.toLowerCase() === "f") fullscreen(); });
   useEffect(() => { player.current?.focus({ preventScroll: true }); }, []);
-  return <div className="video-stage comet-video" ref={player} tabIndex={-1} role="group" aria-label={`Video player: ${name}`}>
+  return <div className="video-stage comet-video" ref={player} onPointerDown={(event) => { if (!(event.target as Element).closest("button,input,select,a")) event.currentTarget.focus({ preventScroll: true }); }} tabIndex={-1} role="group" aria-label={`Video player: ${name}`}>
     <video ref={video} playsInline preload="metadata" src={url} onClick={toggle} onLoadedMetadata={(event) => setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)} onDurationChange={(event) => setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)} onTimeUpdate={(event) => setCurrent(event.currentTarget.currentTime)} onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onEnded={() => setPlaying(false)} onError={() => setFailed(true)}>Your browser cannot play this video format.</video>
     {!playing && !failed && <button type="button" className="video-center-play" aria-label="Play video" onClick={toggle}><Play size={26} fill="currentColor" /></button>}
     <div className="video-controls"><input className="video-progress" aria-label="Video position" type="range" min="0" max={duration || 0} step="0.1" value={Math.min(current, duration || 0)} disabled={!duration} onChange={(event) => seek(Number(event.target.value))} /><div className="video-control-row"><button type="button" aria-label={playing ? "Pause video" : "Play video controls"} onClick={toggle}>{playing ? <Pause size={19} fill="currentColor" /> : <Play size={19} fill="currentColor" />}</button><button type="button" aria-label="Video back 10 seconds" onClick={() => seek(current - 10)}><RotateCcw size={16} /></button><span className="video-time">{time(current)} / {time(duration)}</span><span className="video-controls-spacer" /><div className="video-volume" ref={volumeArea} title="Scroll to change volume"><button type="button" aria-label={volume ? "Mute video" : "Unmute video"} onClick={() => changeVolume(volume ? 0 : 1)}>{volume ? <Volume2 size={17} /> : <VolumeX size={17} />}</button><input type="range" aria-label="Video volume" min="0" max="1" step="0.05" value={volume} onChange={(event) => changeVolume(Number(event.target.value))} /></div><select aria-label="Video playback speed" value={rate} onChange={(event) => { const next = Number(event.target.value); setRate(next); if (video.current) video.current.playbackRate = next; }}><option value="0.5">0.5×</option><option value="0.75">0.75×</option><option value="1">1×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option><option value="2">2×</option></select><button type="button" aria-label="Toggle video fullscreen" onClick={fullscreen}><Maximize size={17} /></button></div></div>

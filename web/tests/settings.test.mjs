@@ -22,7 +22,7 @@ check('legacy default adopts the larger new default', readSettings(storage).text
 memory.set(SETTINGS_KEY, JSON.stringify({ textScale: 80 }));
 check('other legacy text sizes migrate approximately without changing the look', readSettings(storage).textScale === 65);
 check('tray preferences round-trip as optional, off-by-default settings', saveSettings({ ...DEFAULT_SETTINGS, startInTray: true, closeToTray: true }, storage) && readSettings(storage).startInTray && readSettings(storage).closeToTray);
-check('accepts all additional color themes', ['emerald', 'rubellite', 'navy'].every(theme => { memory.set(SETTINGS_KEY, JSON.stringify({ theme })); return readSettings(storage).theme === theme; }));
+check('accepts all additional color themes', ['emerald', 'rubellite', 'navy', '0807-light', '0807-dark'].every(theme => { memory.set(SETTINGS_KEY, JSON.stringify({ theme })); return readSettings(storage).theme === theme; }));
 memory.set(SETTINGS_KEY, '{invalid');
 check('falls back safely for corrupt preferences', JSON.stringify(readSettings(storage)) === JSON.stringify(DEFAULT_SETTINGS));
 const unavailable = { getItem() { throw new Error('denied'); }, setItem() { throw new Error('denied'); } };

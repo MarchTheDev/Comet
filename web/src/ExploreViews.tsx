@@ -126,7 +126,9 @@ export function BrainExplore({ vault, name, entries, onOpen, onActivate, onConte
     const ordered = [...filtered].sort((a, b) => normalizePath(a.path).split("/").length - normalizePath(b.path).split("/").length);
     const root = positions[normalizePath(vault)] ?? { x: 600, y: 520 };
     const placed = new Map<string, Point>([[normalizePath(vault), root]]);
-    const occupied: Point[] = [root];
+    // Reserve explicit positions first, even when they appear later in the
+    // traversal, so newly revealed default nodes cannot displace them.
+    const occupied: Point[] = [root, ...ordered.map((entry) => positions[normalizePath(entry.path)]).filter((point): point is Point => Boolean(point))];
     const siblings = new Map<string, number>(), siblingCounts = new Map<string, number>();
     const rootPath = normalizePath(vault), visible = new Set(ordered.map((entry) => normalizePath(entry.path)));
     // When filtering hides folders, their notes become siblings of the root.
@@ -145,8 +147,9 @@ export function BrainExplore({ vault, name, entries, onOpen, onActivate, onConte
       // Keep at least one node's diameter between default siblings even for
       // the maximum 150 results; dense graphs can be panned to see outer nodes.
       const radius = rootChild ? 220 + Math.sqrt(sibling) * 45 : 155 + Math.floor(sibling / 7) * 55;
-      const desired = positions[normalizePath(entry.path)] ?? { x: origin.x + Math.cos(angle) * radius, y: origin.y + Math.sin(angle) * radius };
-      const point = graphPositionWithoutOverlap(desired, occupied); occupied.push(point);
+      const saved = positions[normalizePath(entry.path)];
+      const desired = { x: origin.x + Math.cos(angle) * radius, y: origin.y + Math.sin(angle) * radius };
+      const point = saved ?? graphPositionWithoutOverlap(desired, occupied); if (!saved) occupied.push(point);
       placed.set(normalizePath(entry.path), point);
       return { entry, ...point };
     });
@@ -193,7 +196,7 @@ export function BrainExplore({ vault, name, entries, onOpen, onActivate, onConte
       if (e.pointerId !== pointer) return;
       if (!moved && Math.hypot(e.clientX - startX, e.clientY - startY) < 4) return;
       moved = true; setDragging(true); const current = svgPoint(e.clientX, e.clientY);
-      if (node) { nextPoint = { x: Math.max(-99_999, Math.min(99_999, node.x + (current.x - start.x) / zoom)), y: Math.max(-99_999, Math.min(99_999, node.y + (current.y - start.y) / zoom)) }; setPositions((previous) => ({ ...frozen, ...previous, [key]: nextPoint! })); }
+      if (node) { nextPoint = { x: Math.max(-99_999, Math.min(99_999, node.x + (current.x - start.x) / zoom)), y: Math.max(-99_999, Math.min(99_999, node.y + (current.y - start.y) / zoom)) }; setPositions((previous) => ({ ...previous, ...frozen, [key]: nextPoint! })); }
       else setPan({ x: initialPan.x + current.x - start.x, y: initialPan.y + current.y - start.y });
     };
     const cleanup = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", end); window.removeEventListener("pointercancel", cancel); setDragging(false); };
@@ -204,11 +207,11 @@ export function BrainExplore({ vault, name, entries, onOpen, onActivate, onConte
         // Pointer-up can land outside the original node, in which case no
         // click follows. Do not swallow the user's next intentional click.
         window.setTimeout(() => { suppressClick.current = false; }, 0);
-        const saved = { ...frozen, ...positions, [key]: nextPoint };
+        const saved = { ...positions, ...frozen, [key]: nextPoint };
         try { localStorage.setItem(graphKey(vault), JSON.stringify(saved)); } catch { /* layout is optional */ }
       } else if (!node && !moved) onClearSelection();
     };
-    const cancel = (e: PointerEvent) => { if (e.pointerId === pointer) cleanup(); };
+    const cancel = (e: PointerEvent) => { if (e.pointerId === pointer) { cleanup(); if (node && moved) setPositions(positions); else if (!node && moved) setPan(initialPan); } };
     window.addEventListener("pointermove", move); window.addEventListener("pointerup", end); window.addEventListener("pointercancel", cancel);
   };
   return <section className="explore-card brain-card" aria-labelledby="brain-title"><div className="explore-heading"><span className="explore-heading-icon"><Network size={20} /></span><div><span className="section-eyebrow">EXPLORE YOUR SPACE</span><h2 id="brain-title">Brain view</h2><p>Click a folder to reveal its contents. Drag nodes or the background to arrange the graph; right-click a node for more actions.</p></div></div>
@@ -216,8 +219,8 @@ export function BrainExplore({ vault, name, entries, onOpen, onActivate, onConte
     <div className={`brain-stage${dragging ? " dragging" : ""}`}><svg ref={svg} viewBox="0 0 1200 1040" preserveAspectRatio="xMidYMid meet" role="group" aria-label={`Workspace graph for ${name}`} onPointerDown={(event) => startDrag(event)}>
       <g transform={`translate(${pan.x} ${pan.y}) translate(600 520) scale(${zoom}) translate(-600 -520)`}>
         <g className="brain-edges">{drawn.map((edge) => { const from = positionMap.get(normalizePath(edge.from))!, to = positionMap.get(normalizePath(edge.to))!; return <line key={`${edge.kind}:${edge.from}:${edge.to}`} className={edge.kind} x1={from.x} y1={from.y} x2={to.x} y2={to.y} />; })}</g>
-        <g className="brain-root" data-graph-root transform={`translate(${rootPosition.x} ${rootPosition.y})`} aria-label={`Drag ${name} workspace node`} onPointerDown={(event) => startDrag(event, { entry: { path: vault, name, kind: "folder" }, ...rootPosition })}><circle r="35" /><text textAnchor="middle" y="57" textLength={Math.min(200, Math.max(15, name.slice(0, 22).length * 11))} lengthAdjust="spacingAndGlyphs">{name.slice(0, 22)}</text></g>
-        {positioned.map((node) => { const { entry, x, y } = node; const folderOpen = expandedFolders.has(normalizePath(entry.path)); return <g className={`brain-node ${entry.kind}${selectedPaths.has(entry.path) ? " multi-selected" : ""}`} data-graph-path={entry.path} key={entry.path} transform={`translate(${x} ${y})`} role="button" tabIndex={0} aria-label={entry.kind === "folder" ? `${folderOpen ? "Collapse" : "Expand"} ${entry.name}` : `Open ${entry.name}`} aria-expanded={entry.kind === "folder" ? folderOpen : undefined} aria-pressed={entry.kind === "file" ? selectedPaths.has(entry.path) : undefined} onPointerDown={(event) => startDrag(event, node)} onContextMenu={(event) => onContext?.(event, entry)} onClick={(event) => { if (suppressClick.current) { suppressClick.current = false; return; } if (entry.kind === "folder" && !event.ctrlKey && !event.metaKey && !event.shiftKey) toggleFolder(entry.path); else onActivate(event, entry, positioned.map((item) => item.entry.path)); }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); if (entry.kind === "folder") toggleFolder(entry.path); else onOpen(entry); } }}><title>{entry.path}</title><circle className="brain-node-hit" r="36" /><circle r={entry.kind === "folder" ? 25 : 20} />{entry.kind === "folder" && <text className="brain-folder-glyph" textAnchor="middle" y="7">{folderOpen ? "−" : "+"}</text>}<text textAnchor="middle" y="45" textLength={Math.min(200, Math.max(15, (entry.kind === "folder" ? entry.name : isMarkdown(entry.path) ? noteTitle(entry.name) : displayEntryName(entry.name)).slice(0, 22).length * 11))} lengthAdjust="spacingAndGlyphs">{(entry.kind === "folder" ? entry.name : isMarkdown(entry.path) ? noteTitle(entry.name) : displayEntryName(entry.name)).slice(0, 22)}</text></g>; })}
+        <g className="brain-root" data-graph-root transform={`translate(${rootPosition.x} ${rootPosition.y})`} aria-label={`Drag ${name} workspace node`} onPointerDown={(event) => startDrag(event, { entry: { path: vault, name, kind: "folder" }, ...rootPosition })}><circle r="35" /><text textAnchor="middle" y="57">{name.slice(0, 22)}</text></g>
+        {positioned.map((node) => { const { entry, x, y } = node; const folderOpen = expandedFolders.has(normalizePath(entry.path)); return <g className={`brain-node ${entry.kind}${selectedPaths.has(entry.path) ? " multi-selected" : ""}`} data-graph-path={entry.path} key={entry.path} transform={`translate(${x} ${y})`} role="button" tabIndex={0} aria-label={entry.kind === "folder" ? `${folderOpen ? "Collapse" : "Expand"} ${entry.name}` : `Open ${entry.name}`} aria-expanded={entry.kind === "folder" ? folderOpen : undefined} aria-pressed={entry.kind === "file" ? selectedPaths.has(entry.path) : undefined} onPointerDown={(event) => startDrag(event, node)} onContextMenu={(event) => onContext?.(event, entry)} onClick={(event) => { if (suppressClick.current) { suppressClick.current = false; return; } if (entry.kind === "folder" && !event.ctrlKey && !event.metaKey && !event.shiftKey) toggleFolder(entry.path); else onActivate(event, entry, positioned.map((item) => item.entry.path)); }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); if (entry.kind === "folder") toggleFolder(entry.path); else onOpen(entry); } }}><title>{entry.path}</title><circle className="brain-node-hit" r="36" /><circle r={entry.kind === "folder" ? 25 : 20} />{entry.kind === "folder" && <text className="brain-folder-glyph" textAnchor="middle" y="7">{folderOpen ? "−" : "+"}</text>}<text textAnchor="middle" y="45">{(entry.kind === "folder" ? entry.name : isMarkdown(entry.path) ? noteTitle(entry.name) : displayEntryName(entry.name)).slice(0, 22)}</text></g>; })}
       </g>
     </svg></div>
     <div className="brain-caption"><span>{loading ? "Reading note links…" : `${drawn.filter((edge) => edge.kind === "link").length} note links`} · {positioned.length} items shown</span><span>{entries.length > 150 ? "Graph displays up to 150 matching items. " : ""}{notes.length > 120 ? "Links are read from the first 120 notes." : ""}</span></div>

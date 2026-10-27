@@ -41,6 +41,18 @@ const nodesAfter = [...document.querySelectorAll('[data-graph-path]')].map(node 
 check('dragging the brain root moves it but leaves all visible nodes in place', rootNode.getAttribute('transform') !== rootBefore && JSON.stringify(nodesBefore) === JSON.stringify(nodesAfter));
 const saved = JSON.parse(dom.window.localStorage.getItem(`comet:graph-layout:v1:${encodeURIComponent(common.vault)}`));
 check('the independent root and node positions persist together', !!saved[common.vault] && !!saved[folder.path] && !!saved[other.path]);
+const dragNode=document.querySelector(`[data-graph-path="${folder.path}"]`), otherNode=document.querySelector(`[data-graph-path="${other.path}"]`);
+const xy=node=>node.getAttribute('transform').match(/translate\(([-\d.]+) ([-\d.]+)\)/).slice(1).map(Number);
+const [ax,ay]=xy(dragNode),[bx,by]=xy(otherNode), otherBefore=otherNode.getAttribute('transform');
+await fire(dragNode,pointer('pointerdown',100,100));await fire(window,pointer('pointermove',100+bx-ax,100+by-ay));await fire(window,pointer('pointerup',100+bx-ax,100+by-ay));
+const [nx,ny]=xy(dragNode);
+check('a brain node stays exactly at the dragged location even when overlapping another',Math.abs(nx-bx)<.01&&Math.abs(ny-by)<.01&&otherNode.getAttribute('transform')===otherBefore);
+check('brain labels use normal glyph spacing rather than stretching the font',!dragNode.querySelector('text:not(.brain-folder-glyph)')?.hasAttribute('textLength'));
+const beforeCancel=dragNode.getAttribute('transform');
+await fire(dragNode,pointer('pointerdown',100,100));await fire(window,pointer('pointermove',150,150));await fire(window,pointer('pointercancel',150,150));
+check('cancelling a brain drag restores the original position',dragNode.getAttribute('transform')===beforeCancel);
+
+
 const many = Array.from({ length: 150 }, (_, i) => ({ name: `Note${i}.md`, path: `comet-sample://vault/workspace-2/Folder${i}/Note${i}.md`, kind: 'file' }));
 await act(async () => root.render(React.createElement(BrainExplore, { ...common, vault: 'comet-sample://vault/workspace-2', entries: many, key: 'dense' })));
 await fire([...document.querySelectorAll('.brain-controls button')].find(button => button.textContent === 'Notes only'), event('click'));

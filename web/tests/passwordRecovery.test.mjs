@@ -71,5 +71,26 @@ localStorage.removeItem(PASSWORD_STORAGE_KEY);const root4=createRoot(document.ge
 const fileInput=document.querySelector('.password-unlock input[type=file]');Object.defineProperty(fileInput,'files',{configurable:true,value:[{size:upgraded.length,text:async()=>upgraded}]});await act(async()=>fileInput.dispatchEvent(new dom.window.Event('change',{bubbles:true})));await wait(()=>document.querySelector('.password-unlock h2')?.textContent==='Unlock backup');
 await click(button('Forgot master password? Use recovery code'));inputs=document.querySelectorAll('.password-unlock input:not([type=file])');await fill(inputs[0],displayedCode);await fill(inputs[1],newMaster);await fill(inputs[2],newMaster);await submit();await wait(()=>!!button('Lock'));
 check('an encrypted backup can be imported through recovery without its old master password',!!button('Lock')&&document.querySelector('.password-list')?.textContent.includes('Test')&&(await unlockPasswordData(readPasswordStorage(localStorage.getItem(PASSWORD_STORAGE_KEY)).envelope,newMaster)).data.entries.length===1);
+check('site icons load automatically using only the website domain',document.querySelector('.password-item-icon img')?.getAttribute('src')?.includes('domain=example.com'));
+await click(document.querySelector('.password-list-tools input[type=checkbox]'));check('opting out of site icons is saved on the device',localStorage.getItem('comet:password-site-icons:v1')==='false'&&!document.querySelector('.password-item-icon img'));await click(document.querySelector('.password-list-tools input[type=checkbox]'));
+await click(button('Change master password'));let changeInputs=document.querySelectorAll('.password-recovery-panel input[type=password]');
+await fill(changeInputs[0],newMaster);await fill(changeInputs[1],master);await fill(changeInputs[2],master);
+const beforeChange=localStorage.getItem(PASSWORD_STORAGE_KEY);
+await act(async()=>document.querySelector('.password-recovery-panel form').dispatchEvent(new dom.window.Event('submit',{bubbles:true,cancelable:true})));await wait(()=>!!document.querySelector('.password-recovery-panel code'));
+const replacementCode=document.querySelector('.password-recovery-panel code')?.textContent;
+check('changing a master password shows a new recovery code before committing',!!replacementCode&&button('Confirm master password change').disabled&&localStorage.getItem(PASSWORD_STORAGE_KEY)===beforeChange);
+await click(document.querySelector('.password-recovery-panel input[type=checkbox]'));
+localStorage.setItem(PASSWORD_STORAGE_KEY,'updated by another window');await click(button('Confirm master password change'));
+check('master-password change refuses a concurrently changed vault',localStorage.getItem(PASSWORD_STORAGE_KEY)==='updated by another window'&&document.querySelector('[role=alert]')?.textContent.includes('elsewhere'));
+localStorage.setItem(PASSWORD_STORAGE_KEY,beforeChange);await click(button('Confirm master password change'));const changed=localStorage.getItem(PASSWORD_STORAGE_KEY);
+check('changing with the previous master keeps entries and activates the newly saved recovery code',changed!==beforeChange&&(await unlockPasswordData(readPasswordStorage(changed).envelope,master)).data.entries[0].password==='sensitive'&&(await unlockPasswordRecovery(changed,replacementCode)).data.entries.length===1);
+await click(button('Lock'));await click(button('Forgot both? Erase this vault'));
+check('forgotten-both reset warns about permanent deletion and requires explicit confirmation',document.querySelector('.password-warning')?.textContent.includes('permanently')&&button('Erase all passwords').disabled);
+await fill(document.querySelector('[aria-label="Type DELETE to confirm"]'),'DELETE');
+localStorage.setItem(PASSWORD_STORAGE_KEY,'updated by another window');await submit();
+check('destructive reset refuses a concurrently changed vault',localStorage.getItem(PASSWORD_STORAGE_KEY)==='updated by another window'&&document.querySelector('[role=alert]')?.textContent.includes('elsewhere'));
+localStorage.setItem(PASSWORD_STORAGE_KEY,changed);await submit();
+check('confirmed forgotten-both reset erases only the device vault, not the exported backup',localStorage.getItem(PASSWORD_STORAGE_KEY)===null&&document.querySelector('.password-unlock h2')?.textContent==='Create your vault'&&(await unlockPasswordRecovery(beforeChange,displayedCode)).data.entries.length===1);
+
 await act(async()=>root4.unmount());dom.window.close();delete globalThis.IS_REACT_ACT_ENVIRONMENT;delete globalThis.localStorage;
 globalThis.__cometFailures=(globalThis.__cometFailures??0)+failures;

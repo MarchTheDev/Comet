@@ -1,7 +1,7 @@
 import { isPathInside } from "./vault";
 
 /** One shared selection model for the sidebar and workspace lists. */
-export function selectRange(selected: Set<string>, anchor: string, ordered: string[], path: string, modifier: boolean, shift: boolean): { selected: Set<string>; anchor: string; open: boolean } {
+export function selectRange(selected: Set<string>, anchor: string, ordered: string[], path: string, modifier: boolean, shift: boolean, seedOpenAnchor = false): { selected: Set<string>; anchor: string; open: boolean } {
   if (shift) {
     const start = ordered.indexOf(anchor), end = ordered.indexOf(path);
     const range = start >= 0 && end >= 0 ? ordered.slice(Math.min(start, end), Math.max(start, end) + 1) : [path];
@@ -9,6 +9,7 @@ export function selectRange(selected: Set<string>, anchor: string, ordered: stri
   }
   if (modifier) {
     const next = new Set(selected);
+    if (seedOpenAnchor && !next.size && anchor && anchor !== path && ordered.includes(anchor)) next.add(anchor);
     if (next.has(path)) next.delete(path); else next.add(path);
     return { selected: next, anchor: path, open: false };
   }

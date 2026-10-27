@@ -24,7 +24,8 @@ Google Calendar and on-demand two-way Google Drive workspace sync are optional.
   and permanently delete the selection. Click blank space, press Escape, or use
   the X to clear it. A selected folder includes its descendants; failures are
   reported individually. A plain click opens an item without adding it to the
-  selection. Drag a selection to move or reorder it together; if a collision
+  selection. When Ctrl/Cmd-clicking another item after a plain click, the opened
+  item joins the group. Drag a selection to move or reorder it together; if a collision
   interrupts a batch, remaining items stay in place.
 - **Explore.** Expand the root and folder nodes in the left-to-right Tree view
   to reveal files. Brain view shows up to 150 items as a network: click a folder
@@ -47,8 +48,10 @@ Google Calendar and on-demand two-way Google Drive workspace sync are optional.
   or sample data; the sample can be added back from the dropdown.
 - **Navigation and appearance.** Use the back/forward arrows, mouse side
   buttons, or keyboard shortcuts to revisit places. Comet follows your system
-  theme by default; Settings also offers dark, light, emerald, rubellite and navy
-  themes, app and interface-text scaling, editor size, spell check, to-do
+  theme by default; Settings also offers dark, light, emerald, rubellite, navy,
+  and 0807 light and dark themes (inspired by the MIT-licensed
+  [0807 project](https://codeberg.org/Sauul/0807)), app and interface-text
+  scaling, editor size, spell check, to-do
   arrowheads, and reopening the last workspace. Scaling applies when a dragged
   slider is released. Drag the sidebar's right edge to change its width; the
   width is remembered on this device. The Matterhorn photo is always subtly
@@ -93,10 +96,10 @@ Names without an extension default to `.md`; names with an extension keep it.
 Markdown opens in the visual editor, source editor, or read-only view. Known
 UTF-8 text files such as `.txt`, `.json`, and `.csv` open in a plain-text editor.
 Text editing is limited to 16 MB. Images, PDFs, audio and video open in a preview
-or player; EPUB books open in a built-in reader with chapter navigation,
-page-by-page buttons and arrow keys, bookmarks, saved position, font/spacing
-controls and page colors. EPUB scripts and remote resources are blocked; DRM-protected
-books are unsupported. Playback depends on the codecs available on the system. Unknown
+or player; EPUB books open in a built-in reader with page-by-page buttons and
+arrow keys, saved position, font/spacing controls and page colors. Existing
+bookmark data is left on the device, although bookmark controls are not shown.
+EPUB scripts and remote resources are blocked; DRM-protected books are unsupported. Playback depends on the codecs available on the system. Unknown
 formats are not automatically decoded as text: open them with the system app or
 explicitly try UTF-8 text editing. Invalid UTF-8 and files containing NUL bytes
 are rejected for text editing.
@@ -109,7 +112,7 @@ video controls include seeking, volume, playback speed and fullscreen. The audio
 player shows embedded title, artist and cover art when available, a sound-driven
 visualizer, a fullscreen player, and a volume slider that responds to the mouse
 wheel. In the focused player, Space toggles playback, Left/Right seek by ten
-seconds, M mutes, and F toggles fullscreen. Keyboard shortcuts do not intercept
+seconds, Up/Down adjust volume, M mutes, and F toggles fullscreen. Keyboard shortcuts do not intercept
 text fields or dialogs.
 
 When a track has no embedded cover, Comet **automatically sends its title and
@@ -136,8 +139,12 @@ create only the missing folders. `Comet` is an alias for the current workspace;
 absolute paths and `..` traversal are rejected.
 
 Quick capture (`+` at the top) saves text as a new Markdown file, a web link
-as a standard `.url` shortcut, or copies selected files into the destination
-folder. An image capture copies
+as a standard `.url` shortcut, or copies selected files into a destination chosen
+from a folder tree. Drop files onto the file capture box or click it to browse.
+The uploader shows the current file and completed count; progress is indeterminate
+when the system copy operation does not report bytes. The browser sample is
+limited to 20 MB per file and may have a smaller storage quota; it warns if
+changes cannot be persisted. An image capture copies
 the image into that same folder and links it relatively; image capture requires
 a desktop workspace. Dropped links also become shortcuts; they do **not**
 download videos. YouTube and direct video links in Markdown automatically show
@@ -158,14 +165,16 @@ Ctrl/Cmd + scroll.
 
 Create a **whiteboard** from the New menu for a separate `.comet-whiteboard`
 canvas. Add text boxes, to-dos, shapes and images (PNG/JPEG/GIF/WebP up to 2 MB
-apiece), pick from the shape menu, or use the pen for freehand strokes. Drag an
+apiece), choose a shape and drag on blank canvas to size it, or use the pen for
+freehand strokes. Shape interiors are transparent. Drag an
 item's top bar to move it, its bottom-right handle to resize it, or its dot to
 connect it to another item. Select a connection to change its color or remove
 it. Clicking blank canvas clears focus; drag blank space to pan or use the zoom
 controls. Version 1 whiteboards open without being rewritten and migrate to
-version 2 on the first edit. Older versions of Comet may not understand edited
-version 2 boards. Boards autosave in the workspace; unknown or damaged formats
-are not overwritten.
+version 2 on the first edit. Shapes smaller than 160 × 110 use version 3, so
+older builds safely reject that board rather than misread it. Older versions of
+Comet may not understand edited version 2 or version 3 boards. Boards autosave
+in the workspace; unknown or damaged formats are not overwritten.
 
 Existing version 1 and version 2 to-do boards open without being changed on disk.
 On the first edit they migrate to version 3, preserving tasks, notes, categories and
@@ -214,10 +223,16 @@ can reset a forgotten master password; anyone with the code and an encrypted
 vault or backup can unlock its contents. **The code alone cannot restore a lost
 vault**: use Backup to save an encrypted copy. New recovery settings do not
 change earlier backups, which retain their original password and recovery code.
-Comet cannot decrypt the data if both the master password and recovery code are
-lost. Icons are optional: enabling them sends site domains (not usernames or
-passwords) to Google's favicon service. Comet's vault has not been independently
-security-audited and is not a replacement for an audited password manager. It
+To change the master password, unlock with the previous password and choose
+**Change master password**; entries are preserved. If recovery was enabled,
+Comet presents a new recovery code to save before committing the change. Old
+backups retain their previous password and recovery code. If both the password
+and recovery code are lost, the locked view offers an explicitly confirmed reset
+that permanently erases this device vault (not exported backups); the old
+passwords cannot be recovered without a usable backup and its password or code.
+Site icons load automatically, sending site domains (not usernames or passwords)
+to Google's favicon service; the option can be disabled in the Passwords view.
+Comet's vault has not been independently security-audited and is not a replacement for an audited password manager. It
 has no autofill or cloud sync and is not included in Drive revisions.
 
 In **Settings → Cloud**, a single Google connection uses the system browser and
@@ -228,7 +243,9 @@ Desktop OAuth client** before the Connect button works without setup. No such
 client is included in this source tree: the project owner must enable the
 Calendar and Drive APIs, configure the consent screen and any test users, and
 provide the public desktop client ID and optional desktop client secret at build
-time (see `docs/RELEASING.md`). In an unconfigured build, the advanced fields
+time (see `docs/RELEASING.md`). End users do not need to register their own
+client when the project owner has configured the build: they click Connect and
+sign in on a Google browser page. In an unconfigured build, the advanced fields
 also allow an existing Desktop OAuth client. Desktop client configuration is
 public, not a way to keep a secret. Use the same Google account and OAuth client
 on each device. Reconnect if Google revokes or expires authorization. Disconnect

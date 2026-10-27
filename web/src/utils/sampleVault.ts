@@ -17,9 +17,8 @@ function initialData(): SampleData {
   const start = joinPath(SAMPLE_ROOT, "Getting started");
   const notes = joinPath(SAMPLE_ROOT, "Notes");
   const projects = joinPath(SAMPLE_ROOT, "Projects");
-  const inbox = joinPath(SAMPLE_ROOT, "Inbox");
   return {
-    folders: [start, notes, projects, inbox],
+    folders: [start, notes, projects],
     files: {
       [SAMPLE_WELCOME]: `# A little space for big ideas.
 
@@ -172,6 +171,25 @@ export function createSampleVault(storage?: SampleStorage) {
       }
       save();
     },
+    move: (path: string, folder: string): string => {
+      if (path === SAMPLE_ROOT || !isPathInside(path, SAMPLE_ROOT) || (folder !== SAMPLE_ROOT && !data.folders.includes(folder))) throw new Error("Choose a folder inside the workspace.");
+      const isFolder = data.folders.includes(path);
+      const isFile = Object.prototype.hasOwnProperty.call(data.files, path);
+      if (!isFolder && !isFile) throw new Error("This item could not be found.");
+      if (isFolder && isPathInside(folder, path)) throw new Error("A folder cannot be moved into itself.");
+      const destination = joinPath(folder, fileName(path));
+      if (destination === path) return path;
+      if (data.folders.includes(destination) || Object.prototype.hasOwnProperty.call(data.files, destination)) throw new Error("An item with that name already exists.");
+      if (isFolder) {
+        data.folders = data.folders.map((item) => remapPath(item, path, destination));
+        data.files = Object.fromEntries(Object.entries(data.files).map(([item, content]) => [remapPath(item, path, destination), content]));
+      } else {
+        data.files[destination] = data.files[path];
+        delete data.files[path];
+      }
+      save();
+      return destination;
+    },
     remove: (path: string) => {
       if (path === SAMPLE_ROOT || !isPathInside(path, SAMPLE_ROOT)) throw new Error("The workspace itself cannot be deleted.");
       const folder = data.folders.includes(path);
@@ -189,11 +207,11 @@ export function createSampleVault(storage?: SampleStorage) {
       const needle = query.trim().toLowerCase();
       if (!needle) return [];
       return Object.entries(data.files)
-        .filter(([path, content]) => fileName(path).toLowerCase().includes(needle) || content.toLowerCase().includes(needle))
+        .filter(([path, content]) => fileName(path).toLowerCase().includes(needle) || (!/^data:[^,\s]*;base64,/i.test(content) && content.toLowerCase().includes(needle)))
         .map(([path, content]) => ({
           path,
           name: fileName(path),
-          snippet: content.split("\n").find((line) => line.toLowerCase().includes(needle))?.trim() || "Matching filename",
+          snippet: /^data:[^,\s]*;base64,/i.test(content) ? "Matching filename" : content.split("\n").find((line) => line.toLowerCase().includes(needle))?.trim() || "Matching filename",
         }))
         .sort((a, b) => a.name.localeCompare(b.name));
     },

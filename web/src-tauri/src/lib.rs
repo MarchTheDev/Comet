@@ -7,6 +7,7 @@ use std::io::Write;
 use std::path::{Component, PathBuf};
 use tauri::Manager;
 use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_opener::OpenerExt;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -76,9 +77,28 @@ async fn list_vault(path: String) -> Vec<VaultEntry> {
 }
 
 #[tauri::command]
+async fn open_vault_file(app: tauri::AppHandle, vault: String, path: String) -> Result<(), String> {
+    let file = checked_vault_entry(&vault, &path)?;
+    if !file.is_file() {
+        return Err("The selected item is not a file.".into());
+    }
+    app.opener()
+        .open_path(file.to_string_lossy().to_string(), None::<&str>)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 async fn read_note(vault: String, path: String) -> Result<String, String> {
     let note = checked_vault_entry(&vault, &path)?;
-    std::fs::read_to_string(note).map_err(|e| e.to_string())
+    let metadata = std::fs::metadata(&note).map_err(|e| e.to_string())?;
+    if !metadata.is_file() || metadata.len() > 16 * 1024 * 1024 {
+        return Err("This file is not a text file or is too large to edit (16 MB maximum).".into());
+    }
+    let content = std::fs::read_to_string(note).map_err(|_| "This file isn't UTF-8 text.".to_string())?;
+    if content.contains('\0') {
+        return Err("This file contains binary data and can't be edited as text.".into());
+    }
+    Ok(content)
 }
 
 #[tauri::command]
@@ -129,8 +149,7 @@ fn checked_vault_entry(vault: &str, path: &str) -> Result<PathBuf, String> {
     Ok(entry)
 }
 
-// Validate the nearest existing parent before creating missing Inbox/assets
-// directories. Canonical paths ensure a symlink cannot redirect creation to a
+// Validate the nearest existing parent before creating missing directories. Canonical paths ensure a symlink cannot redirect creation to a
 // location outside the selected workspace.
 fn checked_new_entry(vault: &str, path: &str, create_parent: bool) -> Result<PathBuf, String> {
     let root = std::fs::canonicalize(vault).map_err(|e| e.to_string())?;
@@ -180,7 +199,72 @@ async fn rename_entry(vault: String, path: String, new_name: String) -> Result<(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(error.to_string()),
     }
-    std::fs::rename(&source, &destination).map_err(|e| e.to_string())
+    rename_without_replace(&source, &destination).map_err(|e| e.to_string())
+}
+
+// A drag must never replace an existing item, including if another process
+// creates the destination after the UI has listed the folder.
+#[cfg(target_os = "linux")]
+fn rename_without_replace(source: &std::path::Path, destination: &std::path::Path) -> std::io::Result<()> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    unsafe extern "C" { fn renameat2(olddirfd: i32, oldpath: *const i8, newdirfd: i32, newpath: *const i8, flags: u32) -> i32; }
+    let from = CString::new(source.as_os_str().as_bytes()).map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+    let to = CString::new(destination.as_os_str().as_bytes()).map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+    // AT_FDCWD and RENAME_NOREPLACE. A filesystem without support fails safely.
+    if unsafe { renameat2(-100, from.as_ptr(), -100, to.as_ptr(), 1) } == 0 { Ok(()) } else { Err(std::io::Error::last_os_error()) }
+}
+
+#[cfg(target_os = "macos")]
+fn rename_without_replace(source: &std::path::Path, destination: &std::path::Path) -> std::io::Result<()> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    unsafe extern "C" { fn renamex_np(from: *const i8, to: *const i8, flags: u32) -> i32; }
+    let from = CString::new(source.as_os_str().as_bytes()).map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+    let to = CString::new(destination.as_os_str().as_bytes()).map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+    if unsafe { renamex_np(from.as_ptr(), to.as_ptr(), 4) } == 0 { Ok(()) } else { Err(std::io::Error::last_os_error()) }
+}
+
+#[cfg(windows)]
+fn rename_without_replace(source: &std::path::Path, destination: &std::path::Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    #[link(name = "kernel32")]
+    unsafe extern "system" { fn MoveFileW(from: *const u16, to: *const u16) -> i32; }
+    let from: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
+    let to: Vec<u16> = destination.as_os_str().encode_wide().chain(Some(0)).collect();
+    if unsafe { MoveFileW(from.as_ptr(), to.as_ptr()) } != 0 { Ok(()) } else { Err(std::io::Error::last_os_error()) }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+fn rename_without_replace(_source: &std::path::Path, _destination: &std::path::Path) -> std::io::Result<()> {
+    Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "Safe moves are not available on this platform."))
+}
+
+#[tauri::command]
+async fn move_entry(vault: String, path: String, folder: String) -> Result<String, String> {
+    let source = checked_vault_entry(&vault, &path)?;
+    let root = std::fs::canonicalize(&vault).map_err(|e| e.to_string())?;
+    let destination_folder = if PathBuf::from(&folder) == PathBuf::from(&vault) {
+        PathBuf::from(&vault)
+    } else {
+        checked_vault_entry(&vault, &folder)?
+    };
+    let resolved_folder = std::fs::canonicalize(&destination_folder).map_err(|e| e.to_string())?;
+    if !resolved_folder.is_dir() || !resolved_folder.starts_with(&root) {
+        return Err("Choose a folder inside the workspace.".into());
+    }
+    let resolved_source = std::fs::canonicalize(&source).map_err(|e| e.to_string())?;
+    if source.is_dir() && resolved_folder.starts_with(&resolved_source) {
+        return Err("A folder cannot be moved into itself.".into());
+    }
+    let name = source.file_name().ok_or("The item has no name.")?;
+    let destination = destination_folder.join(name);
+    if destination == source { return Ok(path); }
+    checked_new_entry(&vault, &destination.to_string_lossy(), false)?;
+    rename_without_replace(&source, &destination).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::AlreadyExists { "An item with that name already exists.".to_string() } else { e.to_string() }
+    })?;
+    Ok(destination.to_string_lossy().to_string())
 }
 
 #[tauri::command]
@@ -216,6 +300,7 @@ async fn create_note(vault: String, path: String, content: String) -> Result<(),
 async fn copy_asset(vault: String, src: String, dest: String) -> Result<(), String> {
     let asset = checked_new_entry(&vault, &dest, true)?;
     let mut source = std::fs::File::open(&src).map_err(|e| e.to_string())?;
+    if !source.metadata().map_err(|e| e.to_string())?.is_file() { return Err("Only files can be imported.".into()); }
     let mut destination = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -276,8 +361,8 @@ async fn search_vault(vault: String, query: String) -> Vec<SearchHit> {
             if !path.is_file() || !path
                 .extension()
                 .and_then(|e| e.to_str())
-                .map(|e| e.eq_ignore_ascii_case("md"))
-                .unwrap_or(false)
+                .map(|e| matches!(e.to_ascii_lowercase().as_str(), "md" | "markdown" | "txt" | "text" | "log" | "csv" | "tsv" | "json" | "jsonl" | "xml" | "yaml" | "yml" | "toml" | "ini" | "cfg" | "conf" | "html" | "htm" | "css" | "js" | "jsx" | "ts" | "tsx" | "py" | "rs" | "sh" | "sql" | "tex" | "rst"))
+                .unwrap_or(true)
             {
                 continue;
             }
@@ -286,9 +371,10 @@ async fn search_vault(vault: String, query: String) -> Vec<SearchHit> {
                 .and_then(|n| n.to_str())
                 .unwrap_or("")
                 .to_string();
+            if std::fs::metadata(&path).map(|m| m.len() > 16 * 1024 * 1024).unwrap_or(true) { continue; }
             let content = match std::fs::read_to_string(&path) {
-                Ok(c) => c,
-                Err(_) => continue,
+                Ok(c) if !c.contains('\0') => c,
+                _ => continue,
             };
             if !name.to_lowercase().contains(&q) && !content.to_lowercase().contains(&q) {
                 continue;
@@ -317,11 +403,13 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             list_vault,
+            open_vault_file,
             read_note,
             write_note,
             open_vault,
             restore_vault_access,
             rename_entry,
+            move_entry,
             delete_entry,
             create_dir,
             create_note,
@@ -377,6 +465,41 @@ mod tests {
         fs::remove_dir_all(base).unwrap();
     }
 
+    #[test]
+    fn moves_and_imports_never_replace_existing_files() {
+        use super::{copy_asset, move_entry, read_note};
+        let unique = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let base = std::env::temp_dir().join(format!("comet-move-test-{}-{unique}", std::process::id()));
+        let vault = base.join("vault");
+        let source_folder = vault.join("source");
+        let destination_folder = vault.join("destination");
+        fs::create_dir_all(&source_folder).unwrap();
+        fs::create_dir_all(&destination_folder).unwrap();
+        let source = source_folder.join("note.md");
+        let destination = destination_folder.join("note.md");
+        let external = base.join("upload.bin");
+        fs::write(&source, "original").unwrap();
+        fs::write(&destination, "existing").unwrap();
+        fs::write(&external, [0, 255, 1]).unwrap();
+        let path = |item: &std::path::Path| item.to_string_lossy().to_string();
+        let root = path(&vault);
+        tauri::async_runtime::block_on(async {
+            assert!(move_entry(root.clone(), path(&source), path(&destination_folder)).await.is_err());
+            assert_eq!(fs::read_to_string(&source).unwrap(), "original");
+            assert_eq!(fs::read_to_string(&destination).unwrap(), "existing");
+            fs::remove_file(&destination).unwrap();
+            assert_eq!(move_entry(root.clone(), path(&source), path(&destination_folder)).await.unwrap(), path(&destination));
+            assert_eq!(fs::read_to_string(&destination).unwrap(), "original");
+            assert!(move_entry(root.clone(), path(&destination_folder), path(&destination_folder)).await.is_err());
+            assert!(copy_asset(root.clone(), path(&external), path(&destination)).await.is_err());
+            assert_eq!(fs::read_to_string(&destination).unwrap(), "original");
+            let binary = destination_folder.join("upload.bin");
+            copy_asset(root.clone(), path(&external), path(&binary)).await.unwrap();
+            assert!(read_note(root.clone(), path(&binary)).await.is_err());
+        });
+        fs::remove_dir_all(base).unwrap();
+    }
+
     #[cfg(unix)]
     #[test]
     fn vault_commands_skip_external_links_and_cycles() {
@@ -391,6 +514,8 @@ mod tests {
         let note = vault.join("Notes/Alpha.md");
         let secret = outside.join("secret.md");
         fs::write(&note, "inside").unwrap();
+        fs::write(vault.join("Notes/data.jsonl"), "searchable structured content").unwrap();
+        fs::write(vault.join("Notes/binary"), [0, 255, 2]).unwrap();
         fs::write(&secret, "secret outside").unwrap();
         symlink(&outside, vault.join("External")).unwrap();
         symlink(&vault, vault.join("Cycle")).unwrap();
@@ -402,6 +527,7 @@ mod tests {
             assert!(entries.iter().any(|entry| entry.name == "Alpha.md"));
             assert!(!entries.iter().any(|entry| entry.name == "Cycle" || entry.name == "External" || entry.name == "secret.md"));
             assert_eq!(search_vault(root.clone(), "inside".into()).await.len(), 1);
+            assert_eq!(search_vault(root.clone(), "structured content".into()).await.len(), 1);
             assert!(search_vault(root.clone(), "secret".into()).await.is_empty());
             let external = vault.join("External/secret.md");
             assert!(read_note(root.clone(), path(&external)).await.is_err());

@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type MouseEvent } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type FormEvent, type MouseEvent } from "react";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -7,10 +7,10 @@ import { EditorContent, useEditor, useEditorState } from "@tiptap/react";
 import {
   AlertCircle, ArrowRight, Bold, BookOpen, CheckCircle2,
   ChevronDown, ChevronRight, Code2, FileCode2, FilePlus2, FileText, Folder,
-  FolderOpen, FolderPlus, Image as ImageIcon, Inbox, Italic, Link2, List,
-  ListChecks, LoaderCircle, LockKeyhole, MapPin, Maximize2, Minimize2,
+  FolderOpen, FolderPlus, Image as ImageIcon, Italic, Link2, List,
+  ListChecks, LoaderCircle, Maximize2, Minimize2,
   MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pencil, Plus, Quote, Redo2,
-  Search, Settings2, Sparkles, Trash2, Undo2, X, type LucideIcon,
+  Search, Settings2, Sparkles, Star, Pin, Tag, Upload, Underline, Strikethrough, Highlighter, ListOrdered, Trash2, Undo2, X, type LucideIcon,
 } from "lucide-react";
 import type { EditorProps } from "@tiptap/pm/view";
 import Image from "@tiptap/extension-image";
@@ -19,6 +19,14 @@ import StarterKit from "@tiptap/starter-kit";
 import { Markdown } from "@tiptap/markdown";
 import { APP_VERSION } from "virtual:comet-version";
 import { SettingsPage } from "./SettingsPage";
+import { WorkspacePanel, type WorkspaceLayout } from "./WorkspacePanel";
+import { MediaView, YouTubeEmbeds } from "./MediaView";
+import { SearchDialog } from "./SearchDialog";
+import { TagDialog } from "./TagDialog";
+import { isTextFile } from "./utils/fileTypes";
+import { richTextExtensions } from "./utils/richText";
+import { itemMeta, readWorkspaceMeta, saveWorkspaceMeta, updateItem, renameMeta, removeMeta, reorderChildren, type WorkspaceMeta } from "./utils/workspaceMeta";
+import { readVaultList, saveVaultList, vaultLabel } from "./utils/vaultList";
 import { countWords } from "./utils/markdown";
 import { displayWorkspacePath, planWorkspacePath, type PathPlan } from "./utils/pathNavigation";
 import { readSettings, saveSettings, type Settings } from "./utils/settings";
@@ -50,6 +58,8 @@ import {
   desktopAvailable,
   isSamplePath,
   listVault,
+  importFile,
+  moveEntry,
   readNote,
   renameEntry,
   restoreVaultAccess,
@@ -58,20 +68,25 @@ import {
 } from "./utils/vaultBridge";
 
 type ViewMode = "write" | "source" | "read";
-type WorkspaceView = "note" | "all" | "inbox" | "folder" | "settings";
+type WorkspaceView = "note" | "file" | "all" | "folder" | "pinned" | "favorites" | "settings";
 type CaptureType = "text" | "link" | "image";
 type CreateDialog = { kind: "note" | "folder"; folder: string };
 type PathCreateDialog = Extract<PathPlan, { kind: "create" }> & { vault: string };
-type ContextMenu = { x: number; y: number; node: TreeNode };
+type ContextMenu = { x: number; y: number; node?: TreeNode; folder: string };
 
 function initialSample() {
   const entries = sampleVault.list();
   const previous = readSampleSelection();
-  const selected = entries.find((entry) => entry.path === previous && entry.kind === "file" && isMarkdown(entry.path))
+  const selected = entries.find((entry) => entry.path === previous && entry.kind === "file")
     ?? entries.find((entry) => entry.path === SAMPLE_WELCOME)
-    ?? entries.find((entry) => entry.kind === "file" && isMarkdown(entry.path));
-  return { entries, path: selected?.path ?? "", content: selected ? sampleVault.read(selected.path) : "" };
+    ?? entries.find((entry) => entry.kind === "file" && isTextFile(entry.path));
+  const path = selected?.path ?? "";
+  const raw = path ? sampleVault.read(path) : "";
+  const editable = Boolean(path && isTextFile(path) && !isSampleDataUrl(raw) && !raw.includes("\0"));
+  return { entries, path, editable, content: editable ? raw : "", mediaUrl: isSampleDataUrl(raw) ? raw : "" };
 }
+
+function isSampleDataUrl(value: string): boolean { return /^data:[^,\s]*;base64,/i.test(value); }
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -87,12 +102,25 @@ function App() {
   const [entries, setEntries] = useState<Entry[]>(sampleStart.entries);
   const [selectedPath, setSelectedPath] = useState(sampleStart.path);
   const [content, setContent] = useState(sampleStart.content);
-  const [workspaceView, setWorkspaceView] = useState<WorkspaceView>(sampleStart.path ? "note" : "all");
+  const [workspaceView, setWorkspaceView] = useState<WorkspaceView>(sampleStart.path ? (sampleStart.editable ? "note" : "file") : "all");
   const [folderPath, setFolderPath] = useState("");
+  const [mediaUrl, setMediaUrl] = useState(sampleStart.mediaUrl);
+  const [layout, setLayout] = useState<WorkspaceLayout>(() => { try { return localStorage.getItem("comet:workspace-layout") === "gallery" ? "gallery" : "list"; } catch { return "list"; } });
+  const [iconSize, setIconSize] = useState(() => { try { const size = Number(localStorage.getItem("comet:workspace-icon-size")); return size >= 24 && size <= 72 ? size : 32; } catch { return 32; } });
+  const [metadata, setMetadata] = useState<WorkspaceMeta>(() => readWorkspaceMeta(SAMPLE_ROOT));
+  const [vaults, setVaults] = useState(readVaultList);
+  const [vaultMenuOpen, setVaultMenuOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [tagDialogOpen, setTagDialogOpen] = useState(false);
+  const [tagTarget, setTagTarget] = useState<string | null>(null);
+  const [moveDialog, setMoveDialog] = useState<TreeNode | null>(null);
+  const [moveFolder, setMoveFolder] = useState(SAMPLE_ROOT);
+  const [uploadFolder, setUploadFolder] = useState(SAMPLE_ROOT);
+  const [captureFolder, setCaptureFolder] = useState(SAMPLE_ROOT);
   const [pathDraft, setPathDraft] = useState("");
   const [pathEditing, setPathEditing] = useState(false);
   const [pathCreateDialog, setPathCreateDialog] = useState<PathCreateDialog | null>(null);
-  const [viewMode, setViewMode] = useState<ViewMode>("write");
+  const [viewMode, setViewMode] = useState<ViewMode>(sampleStart.path && !isMarkdown(sampleStart.path) ? "source" : "write");
   const [focusMode, setFocusMode] = useState(false);
   const [saveState, setSaveState] = useState<SaveState>("saved");
   const [loading, setLoading] = useState(false);
@@ -121,6 +149,10 @@ function App() {
   const [contextMenu, setContextMenu] = useState<ContextMenu | null>(null);
   const [notice, setNotice] = useState("");
 
+  const metaRef = useRef(metadata);
+  const metaCache = useRef<Record<string, WorkspaceMeta>>({ [SAMPLE_ROOT]: metadata });
+  metaRef.current = metadata;
+  const uploadInputRef = useRef<HTMLInputElement>(null);
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
   const selectedRef = useRef(selectedPath);
@@ -129,7 +161,6 @@ function App() {
   const initialEditorContent = useRef(content);
   const modeRef = useRef(viewMode);
   const loadingRef = useRef(false);
-  const searchRef = useRef<HTMLInputElement>(null);
   const pathInputRef = useRef<HTMLInputElement>(null);
   const sourceRef = useRef<HTMLTextAreaElement>(null);
   const workspaceScrollRef = useRef<HTMLDivElement>(null);
@@ -143,24 +174,56 @@ function App() {
   const queueSaveRef = useRef<(path: string, value: string) => void>(() => {});
   const selectNoteRef = useRef<(path: string) => void>(() => {});
 
-  const tree = useMemo(() => buildTree(entries, vaultPath), [entries, vaultPath]);
-  const notes = useMemo(() => entries.filter((entry) => entry.kind === "file" && isMarkdown(entry.name))
-    .sort((a, b) => a.name.localeCompare(b.name)), [entries]);
-  const inboxNotes = useMemo(() => notes.filter((entry) => relativePath(entry.path, vaultPath).toLowerCase().startsWith("inbox/")), [notes, vaultPath]);
+  const orderItems = useCallback(<T extends Entry>(items: T[], parent: string) => {
+    const order = metadata.order[normalizePath(parent)] ?? [];
+    return [...items].sort((a, b) => {
+      const ai = order.indexOf(normalizePath(a.path)), bi = order.indexOf(normalizePath(b.path));
+      if (ai >= 0 || bi >= 0) return (ai < 0 ? Number.MAX_SAFE_INTEGER : ai) - (bi < 0 ? Number.MAX_SAFE_INTEGER : bi);
+      return a.kind === b.kind ? a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }) : a.kind === "folder" ? -1 : 1;
+    });
+  }, [metadata.order]);
+  const tree = useMemo(() => {
+    const sort = (items: TreeNode[], parent: string): TreeNode[] => orderItems(items, parent).map((item) => ({ ...item, children: sort(item.children, item.path) }));
+    return sort(buildTree(entries, vaultPath), vaultPath);
+  }, [entries, vaultPath, orderItems]);
+  const notes = useMemo(() => entries.filter((entry) => entry.kind === "file"), [entries]);
   const noteCount = notes.length;
   const words = useMemo(() => countWords(content), [content]);
   const isSample = isSamplePath(vaultPath);
   const vaultName = isSample ? "Sample workspace" : fileName(vaultPath);
   const selectedName = selectedPath ? fileName(selectedPath) : "";
   const modifier = typeof navigator !== "undefined" && /Mac|iPhone|iPad/i.test(navigator.userAgent) ? "⌘" : "Ctrl";
-  const inboxPath = joinPath(vaultPath, "Inbox");
-  const currentLocation = workspaceView === "note" ? selectedPath : workspaceView === "folder" ? folderPath : workspaceView === "inbox" && entries.some((entry) => entry.path === inboxPath && entry.kind === "folder") ? inboxPath : vaultPath;
+  const currentLocation = workspaceView === "note" || workspaceView === "file" ? selectedPath : workspaceView === "folder" ? folderPath : vaultPath;
   const displayedPath = displayWorkspacePath(currentLocation, vaultPath);
   const pathPlan = useMemo(() => planWorkspacePath(pathDraft, vaultPath, entries), [pathDraft, vaultPath, entries]);
-  const folderEntries = useMemo(() => entries.filter((entry) => parentPath(entry.path) === folderPath)
-    .sort((a, b) => a.kind === b.kind ? a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }) : a.kind === "folder" ? -1 : 1), [entries, folderPath]);
+  const folderEntries = useMemo(() => orderItems(entries.filter((entry) => parentPath(entry.path) === folderPath), folderPath), [entries, folderPath, orderItems]);
   const folderParent = parentPath(folderPath);
   const folderParentIsRoot = normalizePath(folderParent) === normalizePath(vaultPath);
+  const workspaceDestination = workspaceView === "folder" ? folderPath : (workspaceView === "note" || workspaceView === "file") && selectedPath ? parentPath(selectedPath) || vaultPath : vaultPath;
+  const workspaceEntries = workspaceView === "folder" ? folderEntries : workspaceView === "pinned" ? entries.filter((entry) => itemMeta(metadata, entry.path).pinned) : workspaceView === "favorites" ? entries.filter((entry) => itemMeta(metadata, entry.path).favorite) : orderItems(entries, vaultPath);
+
+  useEffect(() => {
+    const next = metaCache.current[vaultPath] ?? readWorkspaceMeta(vaultPath);
+    metaCache.current[vaultPath] = next;
+    metaRef.current = next;
+    setMetadata(next);
+  }, [vaultPath]);
+  useEffect(() => { try { localStorage.setItem("comet:workspace-layout", layout); localStorage.setItem("comet:workspace-icon-size", String(iconSize)); } catch {} }, [layout, iconSize]);
+  const commitMeta = useCallback((change: (current: WorkspaceMeta) => WorkspaceMeta) => {
+    const next = change(metaRef.current);
+    metaRef.current = next;
+    metaCache.current[vaultRef.current] = next;
+    setMetadata(next);
+    if (!saveWorkspaceMeta(vaultRef.current, next)) setNotice("Organization changes will last for this session only.");
+  }, []);
+  const rememberVault = useCallback((path: string) => {
+    if (isSamplePath(path)) return;
+    setVaults((previous) => {
+      const next = [path, ...previous.filter((item) => item !== path)].slice(0, 20);
+      saveVaultList(next);
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     if (workspaceScrollRef.current) workspaceScrollRef.current.scrollTop = 0;
@@ -228,6 +291,7 @@ function App() {
     StarterKit.configure({ link: { openOnClick: false } }),
     TaskList,
     TaskItem.configure({ nested: true }),
+    ...richTextExtensions,
     localImage,
     Markdown,
   ], [localImage]);
@@ -269,7 +333,7 @@ function App() {
     contentType: "markdown",
     editorProps,
     onUpdate: ({ editor: currentEditor }) => {
-      if (loadingRef.current || !selectedRef.current || modeRef.current !== "write") return;
+      if (loadingRef.current || !selectedRef.current || modeRef.current !== "write" || !isMarkdown(selectedRef.current)) return;
       const next = currentEditor.getMarkdown();
       contentRef.current = next;
       setContent(next);
@@ -280,15 +344,21 @@ function App() {
   editorRef.current = editor;
   useEffect(() => {
     if (!editor) return;
-    loadMarkdownNote(editor, contentRef.current);
-    editor.setEditable(modeRef.current === "write", false);
+    if (isMarkdown(selectedRef.current)) loadMarkdownNote(editor, contentRef.current);
+    editor.setEditable(modeRef.current === "write" && isMarkdown(selectedRef.current), false);
   }, [editor]);
   const formatting = useEditorState({
     editor,
     selector: ({ editor: current }) => ({
       bold: current?.isActive("bold") ?? false,
       italic: current?.isActive("italic") ?? false,
-      heading: current?.isActive("heading", { level: 2 }) ?? false,
+      headingLevel: [1, 2, 3].find((level) => current?.isActive("heading", { level })) ?? 0,
+      underline: current?.isActive("underline") ?? false,
+      strike: current?.isActive("strike") ?? false,
+      highlight: current?.isActive("highlight") ?? false,
+      orderedList: current?.isActive("orderedList") ?? false,
+      fontSize: String(current?.getAttributes("textStyle").fontSize || ""),
+      textColor: String(current?.getAttributes("textStyle").color || "#e6a17f"),
       bulletList: current?.isActive("bulletList") ?? false,
       taskList: current?.isActive("taskList") ?? false,
       quote: current?.isActive("blockquote") ?? false,
@@ -321,14 +391,8 @@ function App() {
   }, []);
 
   const selectNote = useCallback(async (path: string) => {
-    if (!isMarkdown(path)) {
-      setNotice("Comet edits Markdown notes. This file is kept safely in your vault.");
-      return;
-    }
-    if (path === selectedRef.current && !loadingRef.current) {
-      ++loadRequest.current;
-      setWorkspaceView("note");
-      if (window.innerWidth <= 760) setExplorerOpen(false);
+    if (!isPathInside(path, vaultRef.current) || normalizePath(path) === normalizePath(vaultRef.current)) {
+      setNotice("Choose a file inside the current workspace.");
       return;
     }
     const request = ++loadRequest.current;
@@ -337,26 +401,34 @@ function App() {
       if (request !== loadRequest.current) return;
       loadingRef.current = true;
       setLoading(true);
-      const next = await readNote(vaultRef.current, path);
+      const text = isTextFile(path);
+      const next = text ? await readNote(vaultRef.current, path) : "";
+      if (text && ((isSamplePath(vaultRef.current) && isSampleDataUrl(next)) || next.includes("\0"))) throw new Error("This file contains binary data, not editable text.");
+      const asset = text ? "" : isSamplePath(vaultRef.current) ? sampleVault.read(path) : convertFileSrc(path);
       if (request !== loadRequest.current) return;
+      const previousWasMarkdown = isMarkdown(selectedRef.current);
       selectedRef.current = path;
       contentRef.current = next;
       setSelectedPath(path);
       setContent(next);
-      setWorkspaceView("note");
-      loadMarkdownNote(editorRef.current, next);
+      setMediaUrl(asset);
+      setWorkspaceView(text ? "note" : "file");
+      if (text) {
+        const mode: ViewMode = isMarkdown(path) ? (previousWasMarkdown ? modeRef.current : "write") : "source";
+        modeRef.current = mode;
+        setViewMode(mode);
+        if (isMarkdown(path)) loadMarkdownNote(editorRef.current, next);
+        editorRef.current?.setEditable(mode === "write" && isMarkdown(path), false);
+      }
       if (isSamplePath(vaultRef.current)) saveSampleSelection(path);
       else persistSession(vaultRef.current, path);
       setSaveState("saved");
       expandParents(path, vaultRef.current);
       if (window.innerWidth <= 760) setExplorerOpen(false);
     } catch (error) {
-      if (request === loadRequest.current) setNotice(`Couldn't open note: ${errorMessage(error)}`);
+      if (request === loadRequest.current) setNotice(`Couldn't open file: ${errorMessage(error)}`);
     } finally {
-      if (request === loadRequest.current) {
-        loadingRef.current = false;
-        setLoading(false);
-      }
+      if (request === loadRequest.current) { loadingRef.current = false; setLoading(false); }
     }
   }, [expandParents, flushAll, persistSession]);
   selectNoteRef.current = (path) => { void selectNote(path); };
@@ -371,10 +443,10 @@ function App() {
       try {
         await restoreVaultAccess(lastSession.vault);
         const nextEntries = await listVault(lastSession.vault);
-        let nextPath = nextEntries.some((entry) => entry.path === lastSession.note && entry.kind === "file" && isMarkdown(entry.path))
+        let nextPath = nextEntries.some((entry) => entry.path === lastSession.note && entry.kind === "file")
           ? lastSession.note : "";
         let nextContent = "";
-        if (nextPath) {
+        if (nextPath && isTextFile(nextPath)) {
           try { nextContent = await readNote(lastSession.vault, nextPath); } catch { nextPath = ""; }
         }
         if (!active || request !== loadRequest.current) return;
@@ -385,11 +457,15 @@ function App() {
         setEntries(nextEntries);
         setSelectedPath(nextPath);
         setContent(nextContent);
-        setWorkspaceView(nextPath ? "note" : "all");
+        setMediaUrl(nextPath && !isTextFile(nextPath) ? convertFileSrc(nextPath) : "");
+        setWorkspaceView(nextPath ? (isTextFile(nextPath) ? "note" : "file") : "all");
+        modeRef.current = nextPath && !isMarkdown(nextPath) ? "source" : "write";
+        setViewMode(modeRef.current);
         setExpanded(new Set());
         if (nextPath) expandParents(nextPath, lastSession.vault);
-        loadMarkdownNote(editorRef.current, nextContent);
+        loadMarkdownNote(editorRef.current, isMarkdown(nextPath) ? nextContent : "");
         persistSession(lastSession.vault, nextPath);
+        rememberVault(lastSession.vault);
       } catch {
         if (!active || request !== loadRequest.current) return;
         clearSession();
@@ -403,7 +479,7 @@ function App() {
       }
     })();
     return () => { active = false; };
-  }, [lastSession, expandParents, persistSession]);
+  }, [lastSession, expandParents, persistSession, rememberVault]);
 
   const changeMode = useCallback((mode: ViewMode) => {
     if (modeRef.current === "source" && mode !== "source") {
@@ -417,31 +493,24 @@ function App() {
     if (mode === "write") window.setTimeout(() => editorRef.current?.commands.focus(), 0);
   }, []);
 
-  const openVault = useCallback(async () => {
-    if (!desktopAvailable) {
-      setDesktopInfoOpen(true);
-      return;
-    }
-    let request = 0;
+  const activateVault = useCallback(async (path: string, restore: boolean) => {
+    const request = ++loadRequest.current;
     try {
-      const path = await open({ directory: true, multiple: false, title: "Open your Comet vault" });
-      if (!path || Array.isArray(path)) return;
-      request = ++loadRequest.current;
       await flushAll();
       if (request !== loadRequest.current) return;
       loadingRef.current = true;
       setLoading(true);
+      if (restore) await restoreVaultAccess(path);
       const next = await listVault(path);
       if (request !== loadRequest.current) return;
       vaultRef.current = path;
       selectedRef.current = "";
       contentRef.current = "";
-      loadingRef.current = false;
-      setLoading(false);
       setVaultPath(path);
       setEntries(next);
       setSelectedPath("");
       setContent("");
+      setMediaUrl("");
       setWorkspaceView("all");
       setFolderPath("");
       setExpanded(new Set());
@@ -449,16 +518,39 @@ function App() {
       setSaveState("saved");
       loadMarkdownNote(editorRef.current, "");
       persistSession(path, "");
-      setNotice("Workspace opened. Choose a note or create one to get started.");
+      rememberVault(path);
+      setVaultMenuOpen(false);
+      setNotice("Workspace opened.");
     } catch (error) {
-      setNotice(`Couldn't open vault: ${errorMessage(error)}`);
+      if (request === loadRequest.current) setNotice(`Couldn't open workspace: ${errorMessage(error)}`);
     } finally {
-      if (request && request === loadRequest.current) {
-        loadingRef.current = false;
-        setLoading(false);
-      }
+      if (request === loadRequest.current) { loadingRef.current = false; setLoading(false); }
     }
-  }, [flushAll, persistSession]);
+  }, [flushAll, persistSession, rememberVault]);
+
+  const openVault = useCallback(async () => {
+    if (!desktopAvailable) { setDesktopInfoOpen(true); setVaultMenuOpen(false); return; }
+    try {
+      const path = await open({ directory: true, multiple: false, title: "Open your Comet vault" });
+      if (path && !Array.isArray(path)) await activateVault(path, false);
+    } catch (error) { setNotice(`Couldn't open workspace: ${errorMessage(error)}`); }
+  }, [activateVault]);
+
+  const activateSample = useCallback(async () => {
+    const request = ++loadRequest.current;
+    try {
+      await flushAll();
+      if (request !== loadRequest.current) return;
+      const sample = initialSample();
+      vaultRef.current = SAMPLE_ROOT; selectedRef.current = sample.path; contentRef.current = sample.content;
+      setVaultPath(SAMPLE_ROOT); setEntries(sample.entries); setSelectedPath(sample.path); setContent(sample.content); setMediaUrl(sample.mediaUrl);
+      setExpanded(new Set()); setFolderPath(""); setVaultMenuOpen(false);
+      modeRef.current = sample.path && !isMarkdown(sample.path) ? "source" : "write";
+      setViewMode(modeRef.current);
+      setWorkspaceView(sample.path ? (sample.editable ? "note" : "file") : "all");
+      loadMarkdownNote(editorRef.current, isMarkdown(sample.path) ? sample.content : "");
+    } catch (error) { setNotice(`Couldn't switch workspace: ${errorMessage(error)}`); }
+  }, [flushAll]);
 
   const openCreate = useCallback((kind: "note" | "folder", folder: string) => {
     setEntryName("");
@@ -499,7 +591,7 @@ function App() {
     }
   };
 
-  const showOverview = useCallback(async (view: "all" | "inbox") => {
+  const showOverview = useCallback(async (view: "all" | "pinned" | "favorites") => {
     const request = ++loadRequest.current;
     try {
       await flushAll();
@@ -625,7 +717,7 @@ function App() {
   };
 
   const openRename = (node: TreeNode) => {
-    setEntryName(node.kind === "file" && isMarkdown(node.name) ? noteTitle(node.name) : node.name);
+    setEntryName(node.name);
     setDialogError("");
     setDialogBusy(false);
     setContextMenu(null);
@@ -635,7 +727,7 @@ function App() {
   const submitRename = async (event: FormEvent) => {
     event.preventDefault();
     if (!renameNode || dialogBusy) return;
-    const kind = renameNode.kind === "folder" ? "folder" : isMarkdown(renameNode.name) ? "note" : "file";
+    const kind = renameNode.kind === "folder" ? "folder" : "file";
     const { name, error } = validEntryName(entryName, kind);
     if (error) { setDialogError(error); return; }
     const destination = joinPath(parentPath(renameNode.path), name);
@@ -645,21 +737,27 @@ function App() {
     try {
       await flushAll();
       await renameEntry(vaultRef.current, renameNode.path, destination);
+      let selectedToReload = "";
       if (selectedRef.current && isPathInside(selectedRef.current, renameNode.path)) {
         const nextPath = remapPath(selectedRef.current, renameNode.path, destination);
         selectedRef.current = nextPath;
         setSelectedPath(nextPath);
-        // Relative image URLs are resolved from the note's current location.
-        loadMarkdownNote(editorRef.current, contentRef.current);
+        if (workspaceView === "note" || workspaceView === "file") {
+          selectedToReload = nextPath;
+          loadingRef.current = true;
+          setLoading(true);
+        }
         if (isSamplePath(vaultRef.current)) saveSampleSelection(nextPath);
         else persistSession(vaultRef.current, nextPath);
       }
       setFolderPath((previous) => previous ? remapPath(previous, renameNode.path, destination) : previous);
+      commitMeta((current) => renameMeta(current, renameNode.path, destination));
       setExpanded((previous) => new Set([...previous].map((path) => remapPath(path, renameNode.path, destination))));
       setSearchQuery("");
       await refresh(vaultRef.current);
       setRenameNode(null);
       setNotice(`Renamed to “${name}”.`);
+      if (selectedToReload) await selectNote(selectedToReload);
     } catch (error) {
       setDialogError(errorMessage(error));
     } finally {
@@ -696,6 +794,7 @@ function App() {
         if (workspaceView === "folder") setWorkspaceView("all");
         else if (workspaceView === "settings" && previousWorkspaceView.current === "folder") previousWorkspaceView.current = "all";
       }
+      commitMeta((current) => removeMeta(current, deleteNode.path));
       setExpanded((previous) => new Set([...previous].filter((path) => !isPathInside(path, deleteNode.path))));
       setSearchQuery("");
       await refresh(vaultRef.current);
@@ -739,11 +838,12 @@ function App() {
     setCaptureType("text");
     setCaptureText("");
     setCaptureImage("");
+    setCaptureFolder(workspaceDestination);
     setDialogError("");
     setDialogBusy(false);
     setContextMenu(null);
     setCaptureOpen(true);
-  }, []);
+  }, [workspaceDestination]);
 
   const chooseImage = async () => {
     if (isSamplePath(vaultRef.current)) {
@@ -789,26 +889,30 @@ function App() {
         return;
       }
     }
+    if (captureFolder !== vaultRef.current && !entries.some((entry) => entry.kind === "folder" && entry.path === captureFolder)) {
+      setDialogError("Choose a folder inside your current workspace.");
+      return;
+    }
     setDialogBusy(true);
     setDialogError("");
     try {
+      await flushAll();
       const stamp = new Date().toISOString().replace(/[:.]/g, "-");
       if (captureType === "image") {
         const name = `${stamp}-${fileName(captureImage).replace(/[^a-zA-Z0-9._-]/g, "-")}`;
-        const dest = joinPath(joinPath(vaultRef.current, "assets"), name);
+        const dest = joinPath(captureFolder, name);
         await invoke("copy_asset", { vault: vaultRef.current, src: captureImage, dest });
-        body = `![${fileName(captureImage).replace(/[\[\]]/g, "")}](../assets/${name})${body ? `\n\n${body}` : ""}`;
+        body = `![${fileName(captureImage).replace(/[\[\]]/g, "")}](./${name})${body ? `\n\n${body}` : ""}`;
       }
-      const inbox = joinPath(vaultRef.current, "Inbox");
       const title = captureTitle.replace(/[\\/:*?"<>|\x00-\x1f]/g, "").slice(0, 45).trim() || "Quick capture";
-      const path = joinPath(inbox, `${title} - ${stamp}.md`);
+      const path = joinPath(captureFolder, `${title} - ${stamp}.md`);
       await createNote(vaultRef.current, path, body);
       await refresh(vaultRef.current);
-      setExpanded((previous) => new Set([...previous, inbox]));
+      setExpanded((previous) => new Set([...previous, captureFolder]));
       setCaptureOpen(false);
       changeMode("write");
       await selectNote(path);
-      setNotice("Captured to Inbox.");
+      setNotice(`Captured to ${captureFolder === vaultRef.current ? "workspace" : fileName(captureFolder)}.`);
     } catch (error) {
       setDialogError(errorMessage(error));
     } finally {
@@ -818,34 +922,30 @@ function App() {
 
   useEffect(() => {
     const query = searchQuery.trim();
-    if (!query) {
-      setSearchResults([]);
-      setSearching(false);
-      return;
-    }
+    if (!query || !searchOpen) { setSearchResults([]); setSearching(false); return; }
     let active = true;
     setSearching(true);
     const timer = window.setTimeout(() => {
       void (async () => {
-        try {
-          await flushAll();
-        } catch {
-          if (active) setNotice("Couldn't save; search may not include your latest changes.");
-        }
-        return searchVault(vaultPath, query);
-      })().then((results) => {
-        if (active) setSearchResults(results);
-      }).catch(() => {
-        if (active) setNotice("Search couldn't finish. Please try again.");
-      }).finally(() => {
-        if (active) setSearching(false);
-      });
+        try { await flushAll(); } catch { if (active) setNotice("Couldn't save; search may not include your latest changes."); }
+        const tagOnly = query.startsWith("#");
+        const term = (tagOnly ? query.slice(1) : query).trim().toLowerCase();
+        const matchingTags = metadata.tags.filter((tag) => tag.name.toLowerCase().includes(term));
+        const ids = new Set(matchingTags.map((tag) => tag.id));
+        const matched = entries.filter((entry) => {
+          const hasTag = itemMeta(metadata, entry.path).tags.some((id) => ids.has(id));
+          return tagOnly ? hasTag : entry.name.toLowerCase().includes(term) || hasTag;
+        }).map((entry) => ({ path: entry.path, name: entry.name, snippet: itemMeta(metadata, entry.path).tags.map((id) => metadata.tags.find((tag) => tag.id === id)?.name).filter(Boolean).map((name) => `#${name}`).join(" ") || (entry.kind === "folder" ? "Folder" : "File") }));
+        const contentResults = tagOnly ? [] : await searchVault(vaultPath, query);
+        const combined = new Map<string, SearchHit>();
+        for (const result of [...matched, ...contentResults]) combined.set(result.path, result);
+        return [...combined.values()].slice(0, 100);
+      })().then((results) => { if (active) setSearchResults(results); })
+        .catch(() => { if (active) setNotice("Search couldn't finish. Please try again."); })
+        .finally(() => { if (active) setSearching(false); });
     }, 180);
-    return () => {
-      active = false;
-      window.clearTimeout(timer);
-    };
-  }, [flushAll, searchQuery, vaultPath]);
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [entries, flushAll, metadata, searchOpen, searchQuery, vaultPath]);
 
   useEffect(() => {
     if (!notice) return;
@@ -878,12 +978,12 @@ function App() {
     };
   }, [flushAll]);
 
-  const modalOpen = Boolean(createDialog || pathCreateDialog || renameNode || deleteNode || linkOpen || captureOpen || desktopInfoOpen);
+  const modalOpen = Boolean(createDialog || pathCreateDialog || renameNode || deleteNode || linkOpen || captureOpen || desktopInfoOpen || searchOpen || tagDialogOpen || moveDialog);
   useEffect(() => {
     if (!modalOpen) return;
     const dialog = document.querySelector<HTMLElement>('[role="dialog"][aria-modal="true"]');
     if (!dialog) return;
-    const focusable = () => [...dialog.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])')]
+    const focusable = () => [...dialog.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), a[href], [tabindex]:not([tabindex="-1"])')]
       .filter((element) => element.getClientRects().length > 0);
     if (!dialog.contains(document.activeElement)) focusable()[0]?.focus();
     const trapTab = (event: KeyboardEvent) => {
@@ -898,7 +998,7 @@ function App() {
     };
     document.addEventListener("keydown", trapTab, true);
     return () => document.removeEventListener("keydown", trapTab, true);
-  }, [modalOpen]);
+  }, [modalOpen, searchOpen, tagDialogOpen, moveDialog]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -912,16 +1012,19 @@ function App() {
           setLinkOpen(false);
           setCaptureOpen(false);
           setDesktopInfoOpen(false);
+          setSearchOpen(false);
+          setTagDialogOpen(false);
+          setMoveDialog(null);
+          setVaultMenuOpen(false);
         }
         return;
       }
-      if (createDialog || pathCreateDialog || renameNode || deleteNode || linkOpen || captureOpen || desktopInfoOpen || restoring) return;
+      if (createDialog || pathCreateDialog || renameNode || deleteNode || linkOpen || captureOpen || desktopInfoOpen || searchOpen || tagDialogOpen || moveDialog || restoring) return;
       const command = event.metaKey || event.ctrlKey;
       const key = event.key.toLowerCase();
       if (command && key === "k" && !event.shiftKey) {
         event.preventDefault();
-        setExplorerOpen(true);
-        window.setTimeout(() => searchRef.current?.focus(), 0);
+        setSearchOpen(true);
       } else if (command && key === "k" && event.shiftKey) {
         event.preventDefault();
         openCapture();
@@ -947,12 +1050,9 @@ function App() {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("pagehide", onPageHide);
     };
-  }, [captureOpen, createDialog, pathCreateDialog, renameNode, deleteNode, linkOpen, desktopInfoOpen, dialogBusy, restoring, flushAll, flushPending, openCapture, openCreate]);
+  }, [captureOpen, createDialog, pathCreateDialog, renameNode, deleteNode, linkOpen, desktopInfoOpen, searchOpen, tagDialogOpen, moveDialog, dialogBusy, restoring, flushAll, flushPending, openCapture, openCreate]);
 
-  const focusSearch = () => {
-    setExplorerOpen(true);
-    window.setTimeout(() => searchRef.current?.focus(), 0);
-  };
+  const focusSearch = () => { setSearchOpen(true); };
 
   const toggleFolder = useCallback((path: string) => {
     setExpanded((previous) => {
@@ -971,67 +1071,242 @@ function App() {
     const bounds = event.currentTarget.getBoundingClientRect();
     const x = event.clientX || bounds.right;
     const y = event.clientY || bounds.bottom;
-    setContextMenu({ x: Math.max(8, Math.min(x, window.innerWidth - 220)), y: Math.max(8, Math.min(y, window.innerHeight - 210)), node: item });
+    setContextMenu({ x: Math.max(8, Math.min(x, window.innerWidth - 240)), y: Math.max(8, Math.min(y, window.innerHeight - 390)), node: item, folder: item.kind === "folder" ? item.path : parentPath(item.path) || vaultRef.current });
   }, []);
+
+  const openNewMenu = (event: MouseEvent, folder: string) => {
+    event.preventDefault(); event.stopPropagation();
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const x = event.clientX || bounds.left, y = event.clientY || bounds.bottom;
+    setContextMenu({ x: Math.max(8, Math.min(x, window.innerWidth - 240)), y: Math.max(8, Math.min(y, window.innerHeight - 190)), folder });
+  };
+  const entryContext = (event: MouseEvent, entry: Entry) => handleTreeContext(event, { ...entry, children: [] });
+  const openEntry = (entry: Entry) => { if (entry.kind === "folder") void showFolder(entry.path); else void selectNote(entry.path); };
+  const toggleProperty = (path: string, property: "pinned" | "favorite") => {
+    commitMeta((current) => updateItem(current, path, { [property]: !itemMeta(current, path)[property] }));
+    setContextMenu(null);
+  };
+  const openTags = (path: string | null = null) => { setTagTarget(path); setTagDialogOpen(true); setContextMenu(null); };
+  const createTag = (name: string, color: string): string => {
+    const clean = name.trim();
+    if (!clean || clean.length > 40) return "Use a tag name between 1 and 40 characters.";
+    if (metaRef.current.tags.some((tag) => tag.name.toLowerCase() === clean.toLowerCase())) return "A tag with this name already exists.";
+    const tag = { id: globalThis.crypto?.randomUUID?.() ?? `tag-${Date.now()}-${Math.random().toString(36).slice(2)}`, name: clean, color };
+    commitMeta((current) => {
+      const next = { ...current, tags: [...current.tags, tag] };
+      return tagTarget ? updateItem(next, tagTarget, { tags: [...itemMeta(next, tagTarget).tags, tag.id] }) : next;
+    });
+    return "";
+  };
+  const deleteTag = (id: string) => commitMeta((current) => ({
+    ...current,
+    tags: current.tags.filter((tag) => tag.id !== id),
+    items: Object.fromEntries(Object.entries(current.items).map(([path, item]) => [path, { ...item, tags: item.tags.filter((tag) => tag !== id) }])),
+  }));
+  const toggleTag = (path: string, id: string) => commitMeta((current) => {
+    const tags = itemMeta(current, path).tags;
+    return updateItem(current, path, { tags: tags.includes(id) ? tags.filter((tag) => tag !== id) : [...tags, id] });
+  });
+
+  const moveItem = useCallback(async (source: string, folder: string) => {
+    if (!isPathInside(source, vaultRef.current) || !isPathInside(folder, vaultRef.current)) return;
+    const request = ++loadRequest.current;
+    const vault = vaultRef.current;
+    try {
+      await flushAll();
+      if (request !== loadRequest.current || vaultRef.current !== vault) return;
+      const next = await moveEntry(vault, source, folder);
+      if (vaultRef.current !== vault) {
+        const updated = renameMeta(metaCache.current[vault] ?? readWorkspaceMeta(vault), source, next);
+        metaCache.current[vault] = updated;
+        saveWorkspaceMeta(vault, updated);
+        return;
+      }
+      commitMeta((current) => renameMeta(current, source, next));
+      setExpanded((previous) => new Set([...previous].map((path) => remapPath(path, source, next))));
+      setFolderPath((previous) => remapPath(previous, source, next));
+      if (selectedRef.current && isPathInside(selectedRef.current, source)) {
+        const selected = remapPath(selectedRef.current, source, next);
+        selectedRef.current = selected;
+        setSelectedPath(selected);
+        if (isMarkdown(selected)) loadMarkdownNote(editorRef.current, contentRef.current);
+        if (!isTextFile(selected)) setMediaUrl(isSamplePath(vaultRef.current) ? sampleVault.read(selected) : convertFileSrc(selected));
+        if (isSamplePath(vaultRef.current)) saveSampleSelection(selected); else persistSession(vaultRef.current, selected);
+      }
+      await refresh(vaultRef.current);
+      setExpanded((previous) => new Set([...previous, folder]));
+      setMoveDialog(null);
+      setNotice(`Moved to ${folder === vaultRef.current ? "workspace" : fileName(folder)}. Links in other notes are unchanged.`);
+    } catch (error) { setNotice(`Couldn't move: ${errorMessage(error)}`); }
+  }, [commitMeta, flushAll, persistSession, refresh]);
+
+  const importPaths = useCallback(async (paths: string[], folder: string) => {
+    const vault = vaultRef.current;
+    if (!paths.length || !isPathInside(folder, vault)) return;
+    try {
+      await flushAll();
+      let imported = 0;
+      const errors: string[] = [];
+      for (const path of paths) {
+        try { await importFile(vault, path, folder); imported++; }
+        catch (error) { errors.push(`${fileName(path)}: ${errorMessage(error)}`); }
+      }
+      await refresh(vault);
+      if (vaultRef.current === vault) setExpanded((previous) => new Set([...previous, folder]));
+      setNotice(errors.length ? `${imported} imported. ${errors.join(" ")}` : `${imported} ${imported === 1 ? "file" : "files"} added.`);
+    } catch (error) { setNotice(`Couldn't import: ${errorMessage(error)}`); }
+  }, [flushAll, refresh]);
+
+  const importBrowserFiles = async (files: File[], folder: string) => {
+    if (!isSamplePath(vaultRef.current)) { setNotice("Use the desktop file picker to import files into your workspace."); return; }
+    let imported = 0;
+    const errors: string[] = [];
+    for (const file of files) {
+      try {
+        if (file.size > 20 * 1024 * 1024) throw new Error("The browser sample supports files up to 20 MB; use the desktop app for larger files.");
+        const checked = validEntryName(file.name, "file");
+        if (checked.error) throw new Error(checked.error);
+        let value: string;
+        if (isTextFile(file.name)) {
+          value = new TextDecoder("utf-8", { fatal: true }).decode(await file.arrayBuffer());
+          if (value.includes("\0")) throw new Error("This text file contains binary data.");
+        } else {
+          value = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("Couldn't read file."));
+            reader.onerror = () => reject(reader.error ?? new Error("Couldn't read file."));
+            reader.readAsDataURL(file);
+          });
+        }
+        sampleVault.createNote(joinPath(folder, checked.name), value);
+        imported++;
+      } catch (error) { errors.push(`${file.name}: ${errorMessage(error)}`); }
+    }
+    await refresh(vaultRef.current);
+    setExpanded((previous) => new Set([...previous, folder]));
+    const temporary = !sampleVault.isPersisted() ? " Browser storage is full or unavailable; sample changes last only for this session." : "";
+    setNotice((errors.length ? `${imported} imported. ${errors.join(" ")}` : `${imported} ${imported === 1 ? "file" : "files"} added to the sample.`) + temporary);
+  };
+
+  const upload = async (folder: string) => {
+    setContextMenu(null);
+    if (isSamplePath(vaultRef.current)) { setUploadFolder(folder); uploadInputRef.current?.click(); return; }
+    try {
+      const paths = await open({ directory: false, multiple: true, title: "Add files to your workspace" });
+      if (paths) await importPaths(Array.isArray(paths) ? paths : [paths], folder);
+    } catch (error) { setNotice(`Couldn't choose files: ${errorMessage(error)}`); }
+  };
+  const dragStart = (event: DragEvent, entry: Entry) => {
+    event.dataTransfer.setData("application/x-comet-entry", JSON.stringify({ vault: vaultRef.current, path: entry.path }));
+    event.dataTransfer.effectAllowed = "move";
+  };
+  const draggedPath = (event: DragEvent): string => {
+    try {
+      const data = JSON.parse(event.dataTransfer.getData("application/x-comet-entry"));
+      return data.vault === vaultRef.current && typeof data.path === "string" ? data.path : "";
+    } catch { return ""; }
+  };
+  const dropToFolder = (event: DragEvent, folder: string) => {
+    event.preventDefault(); event.stopPropagation();
+    const path = draggedPath(event);
+    if (path) void moveItem(path, folder);
+    else if (event.dataTransfer.files.length) void importBrowserFiles([...event.dataTransfer.files], folder);
+  };
+  const dropOnTree = (event: DragEvent, item: TreeNode) => {
+    event.preventDefault(); event.stopPropagation();
+    const source = draggedPath(event);
+    if (!source) { if (item.kind === "folder" && event.dataTransfer.files.length) void importBrowserFiles([...event.dataTransfer.files], item.path); return; }
+    if (source === item.path) return;
+    const sourceParent = parentPath(source), targetParent = parentPath(item.path);
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const before = event.clientY < bounds.top + bounds.height / 2;
+    const nearEdge = event.clientY < bounds.top + bounds.height * 0.25 || event.clientY > bounds.bottom - bounds.height * 0.25;
+    if (sourceParent === targetParent && (item.kind !== "folder" || nearEdge)) {
+      const siblings = orderItems(entries.filter((entry) => parentPath(entry.path) === targetParent), targetParent).map((entry) => entry.path);
+      commitMeta((current) => reorderChildren(current, targetParent, siblings, source, item.path, !before));
+    } else if (item.kind === "folder") void moveItem(source, item.path);
+    else setNotice("Drop on a folder to move an item, or on a sibling to reorder it.");
+  };
+
+  useEffect(() => {
+    if (!desktopAvailable || isSamplePath(vaultPath)) return;
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    void getCurrentWindow().onDragDropEvent((event) => {
+      if (event.payload.type !== "drop") return;
+      const scale = window.devicePixelRatio || 1;
+      const target = document.elementFromPoint(event.payload.position.x / scale, event.payload.position.y / scale);
+      const folder = target?.closest<HTMLElement>("[data-drop-folder]")?.dataset.dropFolder;
+      if (folder) void importPaths(event.payload.paths, folder);
+      else setNotice("Drop files on a workspace or folder to import them.");
+    }).then((off) => { if (disposed) off(); else unlisten = off; }).catch(() => undefined);
+    return () => { disposed = true; unlisten?.(); };
+  }, [vaultPath, importPaths]);
+
+  const openUnknownAsText = async () => {
+    try {
+      let next = await readNote(vaultRef.current, selectedRef.current);
+      if (isSamplePath(vaultRef.current) && isSampleDataUrl(next)) {
+        // Browser sample uploads are stored as data URLs; decode only after the
+        // user explicitly asks to try text, and reject invalid UTF-8.
+        try { next = new TextDecoder("utf-8", { fatal: true }).decode(await (await fetch(next)).arrayBuffer()); }
+        catch { throw new Error("This file contains binary data and cannot be edited as text."); }
+      }
+      if (next.includes("\0")) throw new Error("This file contains binary data and cannot be edited as text.");
+      contentRef.current = next; setContent(next);
+      modeRef.current = "source"; setViewMode("source"); setWorkspaceView("note");
+    } catch (error) { setNotice(`Couldn't open as text: ${errorMessage(error)}`); }
+  };
+  const openExternal = async () => {
+    try { await invoke("open_vault_file", { vault: vaultRef.current, path: selectedRef.current }); }
+    catch (error) { setNotice(`Couldn't open file: ${errorMessage(error)}`); }
+  };
 
   const saveLabel = saveState === "error" ? "Save failed" : saveState === "saving" ? "Saving…" : saveState === "unsaved" ? "Unsaved changes" : "Saved";
 
   return (
-    <div className={`comet-root${focusMode ? " focus-mode" : ""}`} style={{ "--editor-font-size": `${settings.editorFontSize}px` } as CSSProperties} onClick={() => contextMenu && setContextMenu(null)}>
+    <div className={`comet-root${focusMode ? " focus-mode" : ""}${settings.showCover ? " mountain-visible" : ""}`} style={{ "--editor-font-size": `${settings.editorFontSize}px` } as CSSProperties} onClick={(event) => { if (contextMenu) setContextMenu(null); if (vaultMenuOpen && !(event.target as Element).closest(".workspace-switcher")) setVaultMenuOpen(false); }}>
       <div className="app-shell">
         {explorerOpen && <button className="sidebar-scrim" type="button" aria-label="Close sidebar" onClick={() => setExplorerOpen(false)} />}
         {explorerOpen && <aside className="sidebar" aria-label="Workspace navigation">
           <div className="sidebar-brand">
-            <div className="brand-mark" aria-hidden="true"><Sparkles size={19} strokeWidth={2.2} /></div>
+            <div className="brand-mark" aria-hidden="true"><img src="/comet.svg" alt="" /></div>
             <div className="brand-name">comet<span>.</span></div>
             <button className="sidebar-close-mobile icon-button" type="button" aria-label="Close sidebar" onClick={() => setExplorerOpen(false)}><X size={18} /></button>
           </div>
 
-          <button className="workspace-picker" type="button" onClick={() => void openVault()} aria-label="Open another workspace" title="Open a local folder">
-            <span className="workspace-avatar">{isSample ? "S" : vaultName.slice(0, 1).toUpperCase()}</span>
-            <span className="workspace-picker-copy"><strong>{vaultName}</strong><small>{isSample ? (desktopAvailable ? "Sample data" : "Interactive browser sample") : "Local workspace"}</small></span>
-            <ChevronDown size={16} className="workspace-chevron" aria-hidden="true" />
-          </button>
+          <div className="workspace-switcher">
+            <button className="workspace-picker" type="button" onClick={() => setVaultMenuOpen((value) => !value)} aria-label="Switch workspace" aria-expanded={vaultMenuOpen}>
+              <span className="workspace-avatar">{isSample ? "S" : vaultName.slice(0, 1).toUpperCase()}</span>
+              <span className="workspace-picker-copy"><strong>{vaultName}</strong><small>{isSample ? (desktopAvailable ? "Sample data" : "Interactive browser sample") : "Local workspace"}</small></span>
+              <ChevronDown size={16} className="workspace-chevron" aria-hidden="true" />
+            </button>
+            {vaultMenuOpen && <div className="vault-dropdown">
+              <span className="dropdown-label">WORKSPACES</span>
+              <button type="button" className={isSample ? "vault-option selected" : "vault-option"} onClick={() => void activateSample()}><span className="vault-mini-avatar">S</span><span>Sample workspace</span>{isSample && <CheckCircle2 size={14} />}</button>
+              {vaults.map((path) => <div className="vault-option-row" key={path}><button type="button" className={path === vaultPath ? "vault-option selected" : "vault-option"} onClick={() => void activateVault(path, true)} title={path}><span className="vault-mini-avatar">{vaultLabel(path).slice(0, 1).toUpperCase()}</span><span>{vaultLabel(path)}</span>{path === vaultPath && <CheckCircle2 size={14} />}</button><button type="button" className="icon-button vault-remove" title="Remove from list (files stay on disk)" aria-label={`Remove ${vaultLabel(path)} from workspace list`} onClick={() => { const next = vaults.filter((item) => item !== path); setVaults(next); saveVaultList(next); }}><X size={14} /></button></div>)}
+              <div className="context-divider" /><button type="button" className="vault-add" onClick={() => void openVault()}><Plus size={16} /> Add workspace</button>
+            </div>}
+          </div>
 
-          <button className="new-note-button" type="button" onClick={() => openCreate("note", vaultPath)}><Plus size={18} /> <span>New note</span><kbd>{modifier} N</kbd></button>
-
-          <label className="sidebar-search">
-            <Search size={16} aria-hidden="true" />
-            <input ref={searchRef} value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="Search notes" aria-label="Search notes" spellCheck={false} />
-            {searchQuery ? <button type="button" onClick={() => setSearchQuery("")} aria-label="Clear search"><X size={15} /></button> : <kbd>{modifier} K</kbd>}
-          </label>
-
-          {!searchQuery.trim() && <nav className="primary-nav" aria-label="Library">
-            <button className={workspaceView === "all" ? "nav-item active" : "nav-item"} type="button" aria-current={workspaceView === "all" ? "page" : undefined} onClick={() => void showOverview("all")}><BookOpen size={17} /><span>All notes</span><small>{noteCount}</small></button>
-            <button className={workspaceView === "inbox" ? "nav-item active" : "nav-item"} type="button" aria-current={workspaceView === "inbox" ? "page" : undefined} onClick={() => void showOverview("inbox")}><Inbox size={17} /><span>Inbox</span><small>{inboxNotes.length}</small></button>
-          </nav>}
-
+          <button className="sidebar-search" type="button" onClick={focusSearch} aria-label="Search files and tags"><Search size={16} /><span>Search anything</span><kbd>{modifier} K</kbd></button>
+          <nav className="primary-nav" aria-label="Library">
+            <button className={workspaceView === "all" ? "nav-item active" : "nav-item"} type="button" aria-current={workspaceView === "all" ? "page" : undefined} onClick={() => void showOverview("all")}><BookOpen size={17} /><span>All files</span><small>{noteCount}</small></button>
+            <button className={workspaceView === "pinned" ? "nav-item active" : "nav-item"} type="button" aria-current={workspaceView === "pinned" ? "page" : undefined} onClick={() => void showOverview("pinned")}><Pin size={17} /><span>Pinned</span><small>{entries.filter((entry) => itemMeta(metadata, entry.path).pinned).length}</small></button>
+            <button className={workspaceView === "favorites" ? "nav-item active" : "nav-item"} type="button" aria-current={workspaceView === "favorites" ? "page" : undefined} onClick={() => void showOverview("favorites")}><Star size={17} /><span>Favorites</span><small>{entries.filter((entry) => itemMeta(metadata, entry.path).favorite).length}</small></button>
+            <button className="nav-item" type="button" onClick={() => openTags()}><Tag size={17} /><span>Manage tags</span><ChevronRight size={14} className="settings-nav-arrow" /></button>
+          </nav>
           <div className="sidebar-section-heading">
-            <span>{searchQuery.trim() ? "Search results" : "Your folders"}</span>
-            {!searchQuery.trim() && <button type="button" className="icon-button section-add" onClick={() => openCreate("folder", vaultPath)} aria-label="New folder" title="New folder"><FolderPlus size={16} /></button>}
+            <span>YOUR FILES</span>
+            <div className="section-actions"><button type="button" className="icon-button section-add" onClick={() => openCreate("folder", vaultPath)} aria-label="New folder" title="New folder"><FolderPlus size={16} /></button><button type="button" className="icon-button section-add" onClick={(event) => openNewMenu(event, vaultPath)} aria-label="Add file or upload" title="New file, folder, or upload"><Plus size={18} /></button></div>
           </div>
-          <div className="tree-scroll">
-            {searchQuery.trim() ? <div className="search-results" aria-live="polite">
-              {searching && <div className="tree-message">Searching your notes…</div>}
-              {!searching && searchResults.length === 0 && <div className="tree-message">No notes found.<br /><span>Try a different search.</span></div>}
-              {!searching && searchResults.map((result) => <button className="search-result" type="button" key={result.path} onClick={() => { setSearchQuery(""); void selectNote(result.path); }}>
-                <span className="search-result-name"><FileText size={15} /> {noteTitle(result.name)}</span>
-                <span className="search-result-snippet">{result.snippet}</span>
-              </button>)}
-            </div> : <>
-              {tree.length === 0 && <div className="tree-message">Nothing here yet.<br /><span>Create a note to get started.</span></div>}
-              <div className="tree-list">{tree.map((node) => <TreeNodeView key={node.path} node={node} depth={0} selectedPath={workspaceView === "note" ? selectedPath : workspaceView === "folder" ? folderPath : ""} expanded={expanded} onToggle={toggleFolder} onSelect={handleTreeSelect} onOpenFolder={handleTreeFolder} onContext={handleTreeContext} />)}</div>
-            </>}
+          <div className="tree-scroll" data-drop-folder={vaultPath} onContextMenu={(event) => { if (event.target === event.currentTarget || (event.target as Element).classList.contains("tree-list")) openNewMenu(event, vaultPath); }} onDragOver={(event) => event.preventDefault()} onDrop={(event) => dropToFolder(event, vaultPath)}>
+            {tree.length === 0 && <div className="tree-message">Nothing here yet.<br /><span>Create a file to get started.</span></div>}
+            <div className="tree-list">{tree.map((node) => <TreeNodeView key={node.path} node={node} depth={0} selectedPath={workspaceView === "note" || workspaceView === "file" ? selectedPath : workspaceView === "folder" ? folderPath : ""} expanded={expanded} metadata={metadata} onToggle={toggleFolder} onSelect={handleTreeSelect} onOpenFolder={handleTreeFolder} onContext={handleTreeContext} onDragStart={dragStart} onDrop={dropOnTree} />)}</div>
           </div>
-
           <div className="sidebar-bottom">
             <button className={workspaceView === "settings" ? "nav-item settings-nav active" : "nav-item settings-nav"} type="button" aria-current={workspaceView === "settings" ? "page" : undefined} onClick={() => void showSettings()}><Settings2 size={17} /><span>Settings</span><ChevronRight size={14} className="settings-nav-arrow" /></button>
-            <div className="privacy-card">
-              <div className="privacy-icon"><LockKeyhole size={15} /></div>
-              <div><strong>{isSample ? "You're in a sample" : "Your notes stay yours"}</strong><p>{isSample ? (sampleVault.isPersisted() ? (desktopAvailable ? "Changes stay in this app." : "Changes stay in this browser.") : "Changes last for this session.") : "Just Markdown files, right on your device."}</p></div>
-              {isSample && <button type="button" onClick={() => void openVault()}>Open your folder <ArrowRight size={14} /></button>}
-            </div>
-            <div className="sidebar-footer"><span>Made for clear thinking</span><span>v{APP_VERSION}</span></div>
+            <div className="sidebar-footer"><span>{isSample ? (sampleVault.isPersisted() ? "Sample · saved here" : "Sample · temporary") : "Local workspace"}</span><span>v{APP_VERSION}</span></div>
           </div>
         </aside>}
 
@@ -1039,7 +1314,7 @@ function App() {
           <header className="app-topbar">
             <div className="topbar-left">
               <button className="icon-button sidebar-toggle" type="button" onClick={() => { setExplorerOpen((value) => !value); if (focusMode) setFocusMode(false); }} aria-label={explorerOpen ? "Hide sidebar" : "Show sidebar"} aria-expanded={explorerOpen} title={`Toggle sidebar (${modifier}+\\)`}>{explorerOpen ? <PanelLeftClose size={19} /> : <PanelLeftOpen size={19} />}</button>
-              <span className="topbar-divider" />
+            </div>
               <form className="pathbar" onSubmit={submitPath} onBlur={(event) => { if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) setPathEditing(false); }}>
                 <div className="pathbar-field">
                   <FolderOpen size={16} aria-hidden="true" />
@@ -1049,68 +1324,66 @@ function App() {
                 </div>
                 {pathEditing && <div className="path-popover" id="path-hint" aria-live="polite">
                   <div className="path-popover-heading"><span>GO TO A PATH</span><span>IN THIS WORKSPACE</span></div>
-                  <p>Type a folder or note path, then press Enter.</p>
+                  <p>Type a folder or file path, then press Enter.</p>
                   {pathPlan.kind === "error" ? <div className="path-feedback error"><AlertCircle size={16} /><span>{pathPlan.message}</span></div> : <button className="path-feedback" type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => goToPath(pathPlan)}>
                     <span className="path-feedback-icon">{pathPlan.kind === "folder" || pathPlan.kind === "root" ? <FolderOpen size={16} /> : pathPlan.kind === "create" ? <FilePlus2 size={16} /> : <FileText size={16} />}</span>
-                    <span><strong>{pathPlan.kind === "root" ? "Open all notes" : pathPlan.kind === "folder" ? "Open folder" : pathPlan.kind === "note" ? "Open note" : "Create a new note"}</strong><small>{pathPlan.kind === "root" ? "Comet" : displayWorkspacePath(pathPlan.path, vaultPath)}</small></span>
+                    <span><strong>{pathPlan.kind === "root" ? "Open all files" : pathPlan.kind === "folder" ? "Open folder" : pathPlan.kind === "note" ? "Open file" : "Create a new file"}</strong><small>{pathPlan.kind === "root" ? "Comet" : displayWorkspacePath(pathPlan.path, vaultPath)}</small></span>
                     <kbd>↵</kbd>
                   </button>}
-                  <div className="path-popover-foot">Use / or {"\\"} · New folders are created with your note.</div>
+                  <div className="path-popover-foot">Use / or {"\\"} · New folders are created with your file.</div>
                 </div>}
               </form>
-            </div>
             <div className="topbar-actions">
               {isSample && <span className="sample-badge" aria-label={desktopAvailable ? "Sample workspace" : "Interactive browser sample"} title={desktopAvailable ? "Sample workspace" : "Interactive browser sample, not local files"}><span /> Sample</span>}
               <button className="icon-button top-search-button" type="button" onClick={focusSearch} aria-label="Search notes" title={`Search (${modifier}+K)`}><Search size={18} /></button>
-              <button className="capture-button" type="button" onClick={openCapture} title={`${modifier}+Shift+K`}><Sparkles size={15} /><span>Quick capture</span></button>
+              <button className="capture-icon" type="button" onClick={openCapture} aria-label="Quick capture" title={`Quick capture (${modifier}+Shift+K)`}><Plus size={18} /></button>
             </div>
           </header>
 
-          <div ref={workspaceScrollRef} className={`workspace-scroll${focusMode || !settings.showCover || workspaceView === "settings" ? " without-cover" : ""}`}>
-            {!focusMode && settings.showCover && workspaceView !== "settings" && <section className="cover-card" aria-label="The Matterhorn">
-              <div className="cover-copy">
-                <span className="cover-eyebrow"><Sparkles size={13} /> A LITTLE SPACE TO THINK</span>
-                <h1>Make space for<br />what matters.</h1>
-                <p>A quieter place for all your ideas.</p>
-              </div>
-              <div className="cover-location"><MapPin size={13} /> The Matterhorn, Switzerland</div>
-            </section>}
-
-            {workspaceView === "settings" ? <SettingsPage settings={settings} persisted={settingsPersisted} isSample={isSample} modifier={modifier} onChange={updateSettings} onBack={() => setWorkspaceView(previousWorkspaceView.current)} onOpenVault={() => void openVault()} /> : workspaceView === "note" && selectedPath ? <section className="note-card" aria-label={`Note: ${noteTitle(selectedName)}`}>
+          <div ref={workspaceScrollRef} className="workspace-scroll without-cover" data-drop-folder={workspaceDestination} onDragOver={(event) => event.preventDefault()} onDrop={(event) => dropToFolder(event, workspaceDestination)} onContextMenu={(event) => { if (event.target === event.currentTarget) openNewMenu(event, workspaceDestination); }}>
+            {workspaceView === "settings" ? <SettingsPage settings={settings} persisted={settingsPersisted} isSample={isSample} modifier={modifier} onChange={updateSettings} onBack={() => setWorkspaceView(previousWorkspaceView.current)} onOpenVault={() => void openVault()} /> : workspaceView === "note" && selectedPath ? <section className="note-card" aria-label={`File: ${selectedName}`}>
               <div className="document-header">
                 <div className="document-heading">
                   <div className="document-icon"><FileText size={20} /></div>
-                  <div className="document-heading-copy"><span>YOUR NOTE</span><h2 title={selectedName}>{noteTitle(selectedName)}</h2></div>
+                  <div className="document-heading-copy"><span>{isMarkdown(selectedPath) ? "YOUR NOTE" : "YOUR FILE"}</span><h2 title={selectedName}>{isMarkdown(selectedPath) ? noteTitle(selectedName) : selectedName}</h2></div>
                 </div>
                 <div className="document-actions">
                   <div className={`save-indicator ${saveState}`} role="status">{saveState === "error" ? <AlertCircle size={15} /> : saveState === "saving" ? <LoaderCircle size={15} className="spin" /> : <CheckCircle2 size={15} />}<span>{saveLabel}</span>{saveState === "error" && <button type="button" onClick={() => void flushAll().catch(() => setNotice("Still couldn't save. Please check the folder and try again."))}>Retry</button>}</div>
-                  <div className="view-tabs" role="tablist" aria-label="Note view">
+                  {isMarkdown(selectedPath) && <div className="view-tabs" role="tablist" aria-label="Note view">
                     {(["write", "source", "read"] as const).map((mode) => <button key={mode} role="tab" type="button" aria-selected={viewMode === mode} disabled={loading} className={viewMode === mode ? "active" : ""} onClick={() => changeMode(mode)}>{mode === "source" ? "Markdown" : mode === "write" ? "Write" : "Read"}</button>)}
-                  </div>
+                  </div>}
+                  <button className={`icon-button doc-action ${itemMeta(metadata, selectedPath).pinned ? "active" : ""}`} type="button" aria-label={itemMeta(metadata, selectedPath).pinned ? "Unpin file" : "Pin file"} aria-pressed={itemMeta(metadata, selectedPath).pinned} title="Pin file" onClick={() => toggleProperty(selectedPath, "pinned")}><Pin size={17} /></button>
+                  <button className={`icon-button doc-action ${itemMeta(metadata, selectedPath).favorite ? "active" : ""}`} type="button" aria-label={itemMeta(metadata, selectedPath).favorite ? "Remove from favorites" : "Add to favorites"} aria-pressed={itemMeta(metadata, selectedPath).favorite} title="Favorite" onClick={() => toggleProperty(selectedPath, "favorite")}><Star size={17} /></button>
+                  <button className="icon-button doc-action" type="button" aria-label="Edit file tags" title="Tags" onClick={() => openTags(selectedPath)}><Tag size={17} /></button>
                   <button className="icon-button focus-button" type="button" onClick={toggleFocus} aria-label={focusMode ? "Exit focus mode" : "Enter focus mode"} title={focusMode ? "Exit focus mode" : "Focus mode"}>{focusMode ? <Minimize2 size={17} /> : <Maximize2 size={17} />}</button>
                   <button className="icon-button document-more" type="button" aria-label={`More options for ${selectedName}`} title="Note options" onClick={(event) => handleTreeContext(event, { name: selectedName, path: selectedPath, kind: "file", children: [] })}><MoreHorizontal size={19} /></button>
                 </div>
               </div>
               <div className="format-toolbar" aria-label="Formatting toolbar">
-                {viewMode === "write" ? <>
-                  <button className={formatting?.heading ? "format-button active heading-button" : "format-button heading-button"} type="button" title="Heading" aria-label="Heading" aria-pressed={formatting?.heading} disabled={!editor || loading} onMouseDown={(event) => event.preventDefault()} onClick={() => editor?.chain().focus().toggleHeading({ level: 2 }).run()}>H<span>2</span></button>
+                {viewMode === "write" && isMarkdown(selectedPath) ? <>
+                  <label className="toolbar-select" title="Paragraph style"><span className="sr-only">Paragraph style</span><select aria-label="Paragraph style" value={formatting?.headingLevel ?? 0} onChange={(event) => { const level = Number(event.target.value); if (!level) editor?.chain().focus().setParagraph().run(); else editor?.chain().focus().setHeading({ level: level as 1 | 2 | 3 }).run(); }}><option value="0">Text</option><option value="1">Heading 1</option><option value="2">Heading 2</option><option value="3">Heading 3</option></select></label>
+                  <label className="toolbar-select size-select" title="Text size"><span className="sr-only">Text size</span><select aria-label="Text size" value={formatting?.fontSize ?? ""} onChange={(event) => event.target.value ? editor?.chain().focus().setFontSize(event.target.value).run() : editor?.chain().focus().unsetFontSize().run()}><option value="">Size</option>{[12, 14, 16, 18, 20, 24, 32, 40, 48].map((size) => <option key={size} value={`${size}px`}>{size}px</option>)}</select></label>
                   <span className="format-divider" />
                   <ToolButton label="Bold" icon={Bold} active={formatting?.bold} disabled={!editor || loading} onClick={() => editor?.chain().focus().toggleBold().run()} />
                   <ToolButton label="Italic" icon={Italic} active={formatting?.italic} disabled={!editor || loading} onClick={() => editor?.chain().focus().toggleItalic().run()} />
+                  <ToolButton label="Underline" icon={Underline} active={formatting?.underline} disabled={!editor || loading} onClick={() => editor?.chain().focus().toggleUnderline().run()} />
+                  <ToolButton label="Strikethrough" icon={Strikethrough} active={formatting?.strike} disabled={!editor || loading} onClick={() => editor?.chain().focus().toggleStrike().run()} />
+                  <ToolButton label="Highlight" icon={Highlighter} active={formatting?.highlight} disabled={!editor || loading} onClick={() => editor?.chain().focus().toggleHighlight().run()} />
+                  <label className="toolbar-color" title="Text color"><span>A</span><input type="color" aria-label="Text color" value={/^#[0-9a-f]{6}$/i.test(formatting?.textColor || "") ? formatting!.textColor : "#e6a17f"} onChange={(event) => editor?.chain().focus().setColor(event.target.value).run()} /></label>
                   <ToolButton label="Add link" icon={Link2} active={formatting?.link} disabled={!editor || loading} onClick={openLink} />
                   <span className="format-divider" />
                   <ToolButton label="Bullet list" icon={List} active={formatting?.bulletList} disabled={!editor || loading} onClick={() => editor?.chain().focus().toggleBulletList().run()} />
+                  <ToolButton label="Numbered list" icon={ListOrdered} active={formatting?.orderedList} disabled={!editor || loading} onClick={() => editor?.chain().focus().toggleOrderedList().run()} />
                   <ToolButton label="Task list" icon={ListChecks} active={formatting?.taskList} disabled={!editor || loading} onClick={() => editor?.chain().focus().toggleTaskList().run()} />
                   <ToolButton label="Quote" icon={Quote} active={formatting?.quote} disabled={!editor || loading} onClick={() => editor?.chain().focus().toggleBlockquote().run()} />
                   <ToolButton label="Inline code" icon={Code2} disabled={!editor || loading} onClick={() => editor?.chain().focus().toggleCode().run()} />
                   <span className="format-divider" />
                   <ToolButton label="Undo" icon={Undo2} disabled={!formatting?.undo || loading} onClick={() => editor?.chain().focus().undo().run()} />
                   <ToolButton label="Redo" icon={Redo2} disabled={!formatting?.redo || loading} onClick={() => editor?.chain().focus().redo().run()} />
-                  <span className="toolbar-end-hint">Make it yours</span>
-                </> : <span className="mode-hint">{viewMode === "source" ? <><FileCode2 size={15} /> You're editing the plain Markdown file</> : <><BookOpen size={15} /> Reading view · select Write to make changes</>}</span>}
+                </> : <span className="mode-hint">{viewMode === "source" ? <><FileCode2 size={15} /> Editing the {isMarkdown(selectedPath) ? "plain Markdown" : "UTF-8 text"} file</> : <><BookOpen size={15} /> Reading view · select Write to make changes</>}</span>}
               </div>
               <div className="document-body">
-                {loading ? <div className="document-loading"><LoaderCircle size={18} className="spin" /> Opening your note…</div> : viewMode === "source" ? <textarea ref={sourceRef} className="source-editor" aria-label="Markdown source" spellCheck={settings.spellcheck} value={content} placeholder="Start writing in Markdown…" onChange={(event) => {
+                {loading ? <div className="document-loading"><LoaderCircle size={18} className="spin" /> Opening your note…</div> : viewMode === "source" ? <textarea ref={sourceRef} className="source-editor" aria-label={isMarkdown(selectedPath) ? "Markdown source" : "Text editor"} spellCheck={settings.spellcheck} value={content} placeholder={isMarkdown(selectedPath) ? "Start writing in Markdown…" : "Start writing…"} onChange={(event) => {
                   const next = event.target.value;
                   contentRef.current = next;
                   setContent(next);
@@ -1121,34 +1394,15 @@ function App() {
                   {!content && viewMode === "read" && <p className="empty-note">This note is empty. Switch to Write to get started.</p>}
                 </div>}
               </div>
-              <div className="document-footer"><div><span>{words} {words === 1 ? "word" : "words"}</span><span className="footer-dot" /> <span>Markdown</span></div><span>{isSample ? (sampleVault.isPersisted() ? (desktopAvailable ? "Sample saved in this app" : "Sample saved in this browser") : "Temporary sample") : "Saved locally"}</span></div>
-            </section> : workspaceView === "folder" ? <section className="overview-card folder-card" aria-label={`Folder: ${fileName(folderPath)}`}>
-              <button className="folder-parent" type="button" onClick={() => folderParentIsRoot ? void showOverview("all") : void showFolder(folderParent)}><ArrowRight size={14} /> {folderParentIsRoot ? "All notes" : fileName(folderParent)}</button>
-              <div className="overview-heading">
-                <div><span className="section-eyebrow">YOUR FOLDER</span><h2>{fileName(folderPath)}</h2><p>{folderEntries.length} {folderEntries.length === 1 ? "item" : "items"} in this folder.</p></div>
-                <button className="primary-button overview-create" type="button" onClick={() => openCreate("note", folderPath)}><Plus size={16} /> New note here</button>
-              </div>
-              {folderEntries.length ? <div className="overview-list">
-                <div className="overview-list-heading"><span>Name</span><span>Type</span></div>
-                {folderEntries.map((entry) => <button className="overview-row" type="button" key={entry.path} onClick={() => entry.kind === "folder" ? void showFolder(entry.path) : void selectNote(entry.path)}>
-                  <span className="overview-row-name"><span className="overview-file-icon">{entry.kind === "folder" ? <Folder size={17} /> : <FileText size={17} />}</span><strong>{entry.kind === "file" && isMarkdown(entry.name) ? noteTitle(entry.name) : entry.name}</strong></span>
-                  <span className="overview-row-location">{entry.kind === "folder" ? "Folder" : isMarkdown(entry.name) ? "Markdown note" : "File"}</span><ArrowRight size={16} className="overview-row-arrow" />
-                </button>)}
-              </div> : <div className="overview-empty"><div className="overview-empty-icon"><FolderOpen size={24} /></div><h3>A little space to fill</h3><p>There’s nothing in this folder yet. Start with a note.</p><button type="button" className="secondary-button" onClick={() => openCreate("note", folderPath)}>Create a note <ArrowRight size={15} /></button></div>}
-            </section> : <section className="overview-card">
-              <div className="overview-heading">
-                <div><span className="section-eyebrow">YOUR WORKSPACE</span><h2>{workspaceView === "inbox" ? "Inbox" : "All notes"}</h2><p>{workspaceView === "inbox" ? "A landing spot for everything you want to remember." : "All your ideas, together in one place."}</p></div>
-                <button className="primary-button overview-create" type="button" onClick={() => workspaceView === "inbox" ? openCapture() : openCreate("note", vaultPath)}><Plus size={16} /> {workspaceView === "inbox" ? "Quick capture" : "New note"}</button>
-              </div>
-              {(workspaceView === "inbox" ? inboxNotes : notes).length ? <div className="overview-list">
-                <div className="overview-list-heading"><span>Name</span><span>Location</span></div>
-                {(workspaceView === "inbox" ? inboxNotes : notes).map((entry) => <button className="overview-row" type="button" key={entry.path} onClick={() => void selectNote(entry.path)}>
-                  <span className="overview-row-name"><span className="overview-file-icon"><FileText size={17} /></span><strong>{noteTitle(entry.name)}</strong></span>
-                  <span className="overview-row-location">{parentPath(entry.path) === vaultPath ? "Workspace" : relativePath(parentPath(entry.path), vaultPath)}</span><ArrowRight size={16} className="overview-row-arrow" />
-                </button>)}
-              </div> : <div className="overview-empty"><div className="overview-empty-icon">{workspaceView === "inbox" ? <Inbox size={24} /> : <FilePlus2 size={24} />}</div><h3>{workspaceView === "inbox" ? "Your inbox is clear" : "A fresh start"}</h3><p>{workspaceView === "inbox" ? "Quick captures will appear here when you save them." : "Create your first note and let the ideas flow."}</p><button type="button" className="secondary-button" onClick={() => workspaceView === "inbox" ? openCapture() : openCreate("note", vaultPath)}>{workspaceView === "inbox" ? "Make a quick capture" : "Create a note"} <ArrowRight size={15} /></button></div>}
-            </section>}
-            {workspaceView !== "settings" && <div className="workspace-endnote"><Sparkles size={13} /> A little room for your best ideas.</div>}
+              {isMarkdown(selectedPath) && <YouTubeEmbeds key={selectedPath} markdown={content} />}
+              <div className="document-footer"><div><span>{words} {words === 1 ? "word" : "words"}</span><span className="footer-dot" /> <span>{isMarkdown(selectedPath) ? "Markdown" : "Plain text"}</span></div><span>{isSample ? (sampleVault.isPersisted() ? (desktopAvailable ? "Sample saved in this app" : "Sample saved in this browser") : "Temporary sample") : "Saved locally"}</span></div>
+            </section> : workspaceView === "file" && selectedPath ? <div className="media-workspace">
+              <div className="media-top-actions"><button className={`icon-button ${itemMeta(metadata, selectedPath).pinned ? "active" : ""}`} type="button" aria-label={itemMeta(metadata, selectedPath).pinned ? "Unpin file" : "Pin file"} onClick={() => toggleProperty(selectedPath, "pinned")}><Pin size={17} /></button><button className={`icon-button ${itemMeta(metadata, selectedPath).favorite ? "active" : ""}`} type="button" aria-label={itemMeta(metadata, selectedPath).favorite ? "Remove from favorites" : "Add to favorites"} onClick={() => toggleProperty(selectedPath, "favorite")}><Star size={17} /></button><button className="icon-button" type="button" aria-label="Edit file tags" onClick={() => openTags(selectedPath)}><Tag size={17} /></button><button className="icon-button" type="button" aria-label={`More options for ${selectedName}`} onClick={(event) => handleTreeContext(event, { name: selectedName, path: selectedPath, kind: "file", children: [] })}><MoreHorizontal size={19} /></button></div>
+              <MediaView key={selectedPath} path={selectedPath} url={mediaUrl} sample={isSample} onOpenExternal={() => void openExternal()} onEditAsText={() => void openUnknownAsText()} />
+            </div> : <>
+              {workspaceView === "folder" && <button className="folder-parent workspace-parent" type="button" onClick={() => folderParentIsRoot ? void showOverview("all") : void showFolder(folderParent)}><ArrowRight size={14} /> {folderParentIsRoot ? "All files" : fileName(folderParent)}</button>}
+              <WorkspacePanel title={workspaceView === "folder" ? fileName(folderPath) : workspaceView === "pinned" ? "Pinned" : workspaceView === "favorites" ? "Favorites" : "All files"} description={workspaceView === "folder" ? "Everything in this folder, together." : workspaceView === "pinned" ? "The things you want close at hand." : workspaceView === "favorites" ? "A little collection of your favorites." : "All your files and folders, in one place."} entries={workspaceEntries} vault={vaultPath} destination={workspaceDestination} metadata={metadata} layout={layout} iconSize={iconSize} onLayout={setLayout} onIconSize={setIconSize} onOpen={openEntry} onMenu={entryContext} onBackgroundMenu={openNewMenu} onCreate={openNewMenu} onDragStart={dragStart} onDrop={dropToFolder} />
+            </>}
           </div>
         </main>
       </div>
@@ -1156,35 +1410,52 @@ function App() {
       {notice && <div className="toast" role="status"><AlertCircle size={17} /> <span>{notice}</span><button type="button" onClick={() => setNotice("")} aria-label="Dismiss message"><X size={16} /></button></div>}
 
       {contextMenu && <div className="context-menu" role="menu" style={{ left: contextMenu.x, top: contextMenu.y }} onClick={(event) => event.stopPropagation()}>
-        <div className="context-heading" title={contextMenu.node.name}>{contextMenu.node.name}</div>
-        <button role="menuitem" type="button" onClick={() => openCreate("note", contextMenu.node.kind === "folder" ? contextMenu.node.path : parentPath(contextMenu.node.path) || vaultPath)}><FilePlus2 size={16} /> New note here</button>
-        <button role="menuitem" type="button" onClick={() => openCreate("folder", contextMenu.node.kind === "folder" ? contextMenu.node.path : parentPath(contextMenu.node.path) || vaultPath)}><FolderPlus size={16} /> New folder here</button>
-        <div className="context-divider" />
-        <button role="menuitem" type="button" onClick={() => openRename(contextMenu.node)}><Pencil size={16} /> Rename</button>
-        <button role="menuitem" type="button" className="danger" onClick={() => openDelete(contextMenu.node)}><Trash2 size={16} /> Delete</button>
+        <div className="context-heading" title={contextMenu.node?.name ?? contextMenu.folder}>{contextMenu.node?.name ?? `Add to ${contextMenu.folder === vaultPath ? "workspace" : fileName(contextMenu.folder)}`}</div>
+        <button role="menuitem" type="button" onClick={() => openCreate("note", contextMenu.folder)}><FilePlus2 size={16} /> New file</button>
+        <button role="menuitem" type="button" onClick={() => openCreate("folder", contextMenu.folder)}><FolderPlus size={16} /> New folder</button>
+        <button role="menuitem" type="button" onClick={() => void upload(contextMenu.folder)}><Upload size={16} /> Upload files</button>
+        {contextMenu.node && <>
+          <div className="context-divider" />
+          <button role="menuitem" type="button" onClick={() => toggleProperty(contextMenu.node!.path, "pinned")}><Pin size={16} /> {itemMeta(metadata, contextMenu.node.path).pinned ? "Unpin" : "Pin"}</button>
+          <button role="menuitem" type="button" onClick={() => toggleProperty(contextMenu.node!.path, "favorite")}><Star size={16} /> {itemMeta(metadata, contextMenu.node.path).favorite ? "Remove favorite" : "Add favorite"}</button>
+          <button role="menuitem" type="button" onClick={() => openTags(contextMenu.node!.path)}><Tag size={16} /> Edit tags</button>
+          <button role="menuitem" type="button" onClick={() => { setMoveDialog(contextMenu.node!); setMoveFolder(vaultPath); setContextMenu(null); }}><FolderOpen size={16} /> Move to…</button>
+          <button role="menuitem" type="button" onClick={() => openRename(contextMenu.node!)}><Pencil size={16} /> Rename</button>
+          <button role="menuitem" type="button" className="danger" onClick={() => openDelete(contextMenu.node!)}><Trash2 size={16} /> Delete</button>
+        </>}
       </div>}
+
+      {searchOpen && <SearchDialog query={searchQuery} results={searchResults} searching={searching} entries={entries} tags={metadata.tags} onQuery={setSearchQuery} onOpen={(entry) => { setSearchOpen(false); openEntry(entry); }} onClose={() => setSearchOpen(false)} />}
+      {tagDialogOpen && <TagDialog metadata={metadata} target={tagTarget} onClose={() => setTagDialogOpen(false)} onCreate={createTag} onToggle={toggleTag} onDelete={deleteTag} onSearch={(name) => { setTagDialogOpen(false); setSearchQuery(`#${name}`); setSearchOpen(true); }} />}
+      {moveDialog && <div className="modal-backdrop" onMouseDown={() => setMoveDialog(null)}><form className="modal" role="dialog" aria-modal="true" aria-labelledby="move-title" onSubmit={(event) => { event.preventDefault(); void moveItem(moveDialog.path, moveFolder); }} onMouseDown={(event) => event.stopPropagation()}>
+        <div className="modal-icon"><FolderOpen size={20} /></div><button className="modal-close icon-button" type="button" aria-label="Close move dialog" onClick={() => setMoveDialog(null)}><X size={18} /></button>
+        <h2 id="move-title">Move {moveDialog.name}</h2><p>Choose a destination. Existing files won't be overwritten; links in other notes won't be updated.</p>
+        <label className="modal-label" htmlFor="move-folder">Destination</label><select id="move-folder" value={moveFolder} onChange={(event) => setMoveFolder(event.target.value)}><option value={vaultPath}>Comet (workspace)</option>{entries.filter((entry) => entry.kind === "folder" && !isPathInside(entry.path, moveDialog.path)).map((folder) => <option key={folder.path} value={folder.path}>{displayWorkspacePath(folder.path, vaultPath)}</option>)}</select>
+        <div className="modal-actions"><button className="secondary-button" type="button" onClick={() => setMoveDialog(null)}>Cancel</button><button className="primary-button" type="submit">Move</button></div>
+      </form></div>}
+      <input ref={uploadInputRef} type="file" multiple hidden onChange={(event) => { const files = [...(event.currentTarget.files ?? [])]; event.currentTarget.value = ""; void importBrowserFiles(files, uploadFolder); }} />
 
       {pathCreateDialog && <div className="modal-backdrop" onMouseDown={() => !dialogBusy && setPathCreateDialog(null)}>
         <form className="modal" role="dialog" aria-modal="true" aria-labelledby="path-create-title" onSubmit={(event) => void confirmPathCreate(event)} onMouseDown={(event) => event.stopPropagation()}>
           <div className="modal-icon"><FilePlus2 size={20} /></div><button className="modal-close icon-button" type="button" onClick={() => setPathCreateDialog(null)} aria-label="Close dialog" disabled={dialogBusy}><X size={18} /></button>
-          <h2 id="path-create-title">Create this note?</h2><p>We'll create a new Markdown note at this path. Existing files are never overwritten.</p>
+          <h2 id="path-create-title">Create this file?</h2><p>We'll create a file at this path. Names without an extension use .md; existing files are never overwritten.</p>
           <div className="path-create-location"><FileText size={16} /><span>{displayWorkspacePath(pathCreateDialog.path, pathCreateDialog.vault)}</span></div>
           {pathCreateDialog.missingFolders.length > 0 && <p className="path-create-folders"><FolderPlus size={15} /> {pathCreateDialog.missingFolders.length === 1 ? "1 new folder will be created" : `${pathCreateDialog.missingFolders.length} new folders will be created`} along the way.</p>}
           {dialogError && <div className="dialog-error" role="alert"><AlertCircle size={15} /> {dialogError}</div>}
-          <div className="modal-actions"><button type="button" className="secondary-button" autoFocus onClick={() => setPathCreateDialog(null)} disabled={dialogBusy}>Cancel</button><button type="submit" className="primary-button" disabled={dialogBusy}>{dialogBusy ? "Creating…" : "Create note"}</button></div>
+          <div className="modal-actions"><button type="button" className="secondary-button" autoFocus onClick={() => setPathCreateDialog(null)} disabled={dialogBusy}>Cancel</button><button type="submit" className="primary-button" disabled={dialogBusy}>{dialogBusy ? "Creating…" : "Create file"}</button></div>
         </form>
       </div>}
 
       {createDialog && <div className="modal-backdrop" onMouseDown={() => !dialogBusy && setCreateDialog(null)}>
         <form className="modal" role="dialog" aria-modal="true" aria-labelledby="create-title" onSubmit={(event) => void submitCreate(event)} onMouseDown={(event) => event.stopPropagation()}>
           <div className="modal-icon"><FilePlus2 size={20} /></div><button className="modal-close icon-button" type="button" onClick={() => setCreateDialog(null)} aria-label="Close dialog" disabled={dialogBusy}><X size={18} /></button>
-          <h2 id="create-title">New {createDialog.kind}</h2>
-          <p>Give your {createDialog.kind} a name. It will be saved in <strong>{createDialog.folder === vaultPath ? vaultName : relativePath(createDialog.folder, vaultPath)}</strong>.</p>
-          <label className="modal-label" htmlFor="entry-name">{createDialog.kind === "note" ? "Note name" : "Folder name"}</label>
-          <input id="entry-name" autoFocus value={entryName} onChange={(event) => { setEntryName(event.target.value); setDialogError(""); }} placeholder={createDialog.kind === "note" ? "Give your note a name" : "Give your folder a name"} autoComplete="off" />
-          {createDialog.kind === "note" && <span className="input-hint">Saved as a Markdown (.md) file.</span>}
+          <h2 id="create-title">New {createDialog.kind === "note" ? "file" : "folder"}</h2>
+          <p>Give your {createDialog.kind === "note" ? "file" : "folder"} a name. It will be saved in <strong>{createDialog.folder === vaultPath ? vaultName : relativePath(createDialog.folder, vaultPath)}</strong>.</p>
+          <label className="modal-label" htmlFor="entry-name">{createDialog.kind === "note" ? "File name" : "Folder name"}</label>
+          <input id="entry-name" autoFocus value={entryName} onChange={(event) => { setEntryName(event.target.value); setDialogError(""); }} placeholder={createDialog.kind === "note" ? "e.g. ideas.md or list.txt" : "Give your folder a name"} autoComplete="off" />
+          {createDialog.kind === "note" && <span className="input-hint">Use any extension. Names without one are saved as .md.</span>}
           {dialogError && <div className="dialog-error" role="alert"><AlertCircle size={15} /> {dialogError}</div>}
-          <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setCreateDialog(null)} disabled={dialogBusy}>Cancel</button><button type="submit" className="primary-button" disabled={dialogBusy}>{dialogBusy ? "Creating…" : `Create ${createDialog.kind}`}</button></div>
+          <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setCreateDialog(null)} disabled={dialogBusy}>Cancel</button><button type="submit" className="primary-button" disabled={dialogBusy}>{dialogBusy ? "Creating…" : `Create ${createDialog.kind === "note" ? "file" : "folder"}`}</button></div>
         </form>
       </div>}
 
@@ -1193,7 +1464,7 @@ function App() {
           <div className="modal-icon"><Pencil size={20} /></div><button className="modal-close icon-button" type="button" onClick={() => setRenameNode(null)} aria-label="Close dialog" disabled={dialogBusy}><X size={18} /></button>
           <h2 id="rename-title">Rename {renameNode.kind === "folder" ? "folder" : "file"}</h2><p>Choose a new name for <strong>{renameNode.name}</strong>. Links in other notes won't be updated automatically.</p>
           <label className="modal-label" htmlFor="rename-name">Name</label><input id="rename-name" autoFocus value={entryName} onChange={(event) => { setEntryName(event.target.value); setDialogError(""); }} autoComplete="off" />
-          {renameNode.kind === "file" && isMarkdown(renameNode.name) && <span className="input-hint">The .md extension will be kept.</span>}
+          {renameNode.kind === "file" && <span className="input-hint">Include the extension you want to keep.</span>}
           {dialogError && <div className="dialog-error" role="alert"><AlertCircle size={15} /> {dialogError}</div>}
           <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setRenameNode(null)} disabled={dialogBusy}>Cancel</button><button type="submit" className="primary-button" disabled={dialogBusy}>{dialogBusy ? "Renaming…" : "Rename"}</button></div>
         </form>
@@ -1228,9 +1499,10 @@ function App() {
           {captureType === "image" && <button className="image-picker" type="button" onClick={() => void chooseImage()}><ImageIcon size={17} /> {captureImage ? fileName(captureImage) : "Choose an image"}</button>}
           <label className="modal-label" htmlFor="capture-content">{captureType === "link" ? "Link" : captureType === "image" ? "Add a note (optional)" : "Your thought"}</label>
           <textarea id="capture-content" autoFocus value={captureText} onChange={(event) => { setCaptureText(event.target.value); setDialogError(""); }} placeholder={captureType === "link" ? "https://example.com" : captureType === "image" ? "A few words about this image…" : "What would you like to remember?"} />
-          <span className="input-hint">Saved as a new Markdown note in Inbox{captureType === "image" && isSample ? ". Image capture requires a local folder." : "."}</span>
+          <label className="modal-label" htmlFor="capture-destination">Save to path</label><select id="capture-destination" value={captureFolder} onChange={(event) => setCaptureFolder(event.target.value)}><option value={vaultPath}>Comet (workspace)</option>{entries.filter((entry) => entry.kind === "folder").map((folder) => <option key={folder.path} value={folder.path}>{displayWorkspacePath(folder.path, vaultPath)}</option>)}</select>
+          <span className="input-hint">Saved as a new Markdown file in the selected folder{captureType === "image" && isSample ? ". Image capture requires a local folder." : "."}</span>
           {dialogError && <div className="dialog-error" role="alert"><AlertCircle size={15} /> {dialogError}</div>}
-          <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setCaptureOpen(false)} disabled={dialogBusy}>Cancel</button><button type="submit" className="primary-button" disabled={dialogBusy}>{dialogBusy ? "Saving…" : "Save to inbox"}</button></div>
+          <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setCaptureOpen(false)} disabled={dialogBusy}>Cancel</button><button type="submit" className="primary-button" disabled={dialogBusy}>{dialogBusy ? "Saving…" : "Save capture"}</button></div>
         </form>
       </div>}
 
@@ -1263,26 +1535,30 @@ interface TreeNodeViewProps {
   depth: number;
   selectedPath: string;
   expanded: Set<string>;
+  metadata: WorkspaceMeta;
   onToggle: (path: string) => void;
   onSelect: (path: string) => void;
   onOpenFolder: (path: string) => void;
   onContext: (event: MouseEvent, node: TreeNode) => void;
+  onDragStart: (event: DragEvent, entry: Entry) => void;
+  onDrop: (event: DragEvent, node: TreeNode) => void;
 }
 
-const TreeNodeView = memo(function TreeBranch({ node, depth, selectedPath, expanded, onToggle, onSelect, onOpenFolder, onContext }: TreeNodeViewProps) {
+const TreeNodeView = memo(function TreeBranch({ node, depth, selectedPath, expanded, metadata, onToggle, onSelect, onOpenFolder, onContext, onDragStart, onDrop }: TreeNodeViewProps) {
   const folder = node.kind === "folder";
   const openFolder = expanded.has(node.path);
   const selected = node.path === selectedPath;
+  const meta = itemMeta(metadata, node.path);
   return <div className="tree-branch">
-    <div className={selected ? "tree-row selected" : "tree-row"} style={{ paddingLeft: `${8 + depth * 14}px` }}>
+    <div className={selected ? "tree-row selected" : "tree-row"} style={{ paddingLeft: `${8 + depth * 14}px` }} draggable data-drop-folder={folder ? node.path : undefined} onDragStart={(event) => { event.stopPropagation(); onDragStart(event, node); }} onDragOver={(event) => { event.preventDefault(); event.stopPropagation(); }} onDrop={(event) => onDrop(event, node)} onContextMenu={(event) => onContext(event, node)}>
       {folder ? <button type="button" className="tree-disclosure" aria-label={`${openFolder ? "Collapse" : "Expand"} ${node.name}`} aria-expanded={openFolder} onClick={() => onToggle(node.path)}>{openFolder ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</button> : <span className="tree-disclosure" aria-hidden="true" />}
-      <button type="button" className="tree-item" onClick={() => folder ? onOpenFolder(node.path) : onSelect(node.path)} onContextMenu={(event) => onContext(event, node)} aria-current={selected ? "page" : undefined} title={node.name}>
+      <button type="button" className="tree-item" onClick={() => folder ? onOpenFolder(node.path) : onSelect(node.path)} aria-current={selected ? "page" : undefined} title={node.name}>
         {folder ? (openFolder ? <FolderOpen className="tree-icon folder" size={16} /> : <Folder className="tree-icon folder" size={16} />) : <FileText className="tree-icon" size={16} />}
-        <span className="tree-name">{!folder && isMarkdown(node.name) ? noteTitle(node.name) : node.name}</span>
+        <span className="tree-name">{!folder && isMarkdown(node.name) ? noteTitle(node.name) : node.name}</span>{meta.pinned && <Pin size={11} className="tree-badge" />}{meta.favorite && <Star size={11} className="tree-badge" />}
       </button>
       <button type="button" className="tree-action" aria-label={`More options for ${node.name}`} title={`More options for ${node.name}`} onClick={(event) => onContext(event, node)}><MoreHorizontal size={16} /></button>
     </div>
-    {folder && openFolder && node.children.map((child) => <TreeNodeView key={child.path} node={child} depth={depth + 1} selectedPath={selectedPath} expanded={expanded} onToggle={onToggle} onSelect={onSelect} onOpenFolder={onOpenFolder} onContext={onContext} />)}
+    {folder && openFolder && node.children.map((child) => <TreeNodeView key={child.path} node={child} depth={depth + 1} selectedPath={selectedPath} expanded={expanded} metadata={metadata} onToggle={onToggle} onSelect={onSelect} onOpenFolder={onOpenFolder} onContext={onContext} onDragStart={onDragStart} onDrop={onDrop} />)}
   </div>;
 });
 

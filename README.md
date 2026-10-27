@@ -1,81 +1,101 @@
 # Comet
 
-Comet is a local-first desktop app for notes, ideas, and everything in between.
-Your workspace is a folder on your computer, and your notes are ordinary Markdown
-files. There is no account, database, or built-in sync service.
+Comet is a local-first desktop workspace for notes and other files. Choose a
+folder on your computer; Comet works with the files there without an account or
+a built-in sync service.
 
-## Features
+## Workspace
 
-- **A calm workspace.** A photographic Matterhorn cover, a searchable folder
-  sidebar, an all-notes view, and a distraction-free focus mode.
-- **Make it yours.** Dark appearance by default, with light and system themes,
-  editor text size, spell check, and other preferences in Settings.
-- **Local Markdown.** Create, edit, rename, and delete notes and folders directly
-  in your chosen workspace. You can choose whether your last workspace and note
-  are reopened when available.
-- **Flexible editing.** Write with the formatting toolbar, edit plain Markdown,
-  or switch to a read-only view. Changes save automatically.
-- **Quick capture.** Send a thought, link, or image to your Inbox for later.
-- **Search.** Find notes by filename or contents.
+- **Organize your files.** Browse all files, folders, pins and favorites. Use the
+  list or gallery layout and the size slider to adjust file icons. Create files
+  and folders or upload files from the `+` menus, or right-click the workspace or
+  an item for more actions.
+- **Move and arrange.** Drag an item onto a folder to move it, or drag between
+  siblings in the sidebar to change their display order. Drop files from your
+  computer onto a folder or the workspace to import copies. Existing files are
+  not intentionally overwritten; renames, moves, and imports reject collisions.
+  Moving or renaming does not rewrite links in other notes.
+- **Tags and search.** Manage tags from the sidebar and attach them to files or
+  folders through an item's menu. Search filenames, supported text contents,
+  and tags in the central search window; prefix a tag name with `#` to narrow
+  the results.
+- **Multiple workspaces.** Use the workspace dropdown to add or switch folders.
+  Removing a workspace from this list does not delete its files.
+- **Appearance.** Comet starts in dark mode. Settings offers light and system
+  themes, an optional ASCII Matterhorn background, editor size, spell check,
+  and reopening the last workspace.
 
-## Using the workspace
+Tags, pins, favorites, sidebar ordering, remembered workspaces, and preferences
+are stored in Comet's local webview storage on this device, **not in the files**.
+They survive moves and renames performed in Comet, but do not travel with the
+vault to a different device or follow an externally moved vault folder. Back up
+your workspace files independently. If local storage is unavailable, these
+preferences last only for the current session.
 
-In the desktop app, open a folder to use as your workspace. Select **All notes**
-to browse everything, or use the sidebar to navigate folders. Create a note
-with **New note**. Use a folder's or file's `…` menu (or right-click it) to
-create items inside a folder, rename, or delete. Deletion is permanent and does
-not move files to the system trash; Comet asks for confirmation first. Renaming
-or deleting files does not rewrite links in other notes.
+## Files and editing
 
-The top path bar is editable. Enter a workspace-relative path such as
-`Comet\Folder\text.md` (or `Comet/Folder/text.md`) and press Enter to open an
-existing note or folder. For a new note, Comet asks for confirmation and creates
-any missing parent folders; it never overwrites an existing file. You can omit
-`.md` from a new note name. `Comet` is an alias for the current workspace, not
-an absolute filesystem path; paths containing `..` or pointing outside the
-workspace are rejected.
+Names without an extension default to `.md`; names with an extension keep it.
+Markdown opens in the visual editor, source editor, or read-only view. Known
+UTF-8 text files such as `.txt`, `.json`, and `.csv` open in a plain-text editor.
+Text editing is limited to 16 MB in the desktop app. Images, audio, and video
+open in a preview or player; playback depends on the codecs available on the
+system. Unknown formats are not automatically decoded as text: open them with
+the system app or explicitly try UTF-8 text editing. Invalid UTF-8 and files
+containing NUL bytes are rejected for text editing.
 
-Open **Settings** in the sidebar to change the theme, Matterhorn cover, editor
-size, spell check, or workspace reopening. Preferences are stored on this device
-when local storage is available; resetting them does not delete notes.
+The visual Markdown toolbar includes headings, sizes, color, highlighting,
+links, lists, and other formatting. Markdown has no standard text-size or color
+syntax, so Comet stores these as inline HTML spans. Highlighting uses HTML
+`<mark>` tags and underlining uses extension syntax. Other Markdown applications
+may display them differently.
+For documents containing unsupported Markdown/HTML constructs, use **Markdown**
+source mode to avoid visual-editor normalization.
 
-Edits are saved automatically. If a save fails, the edit remains in the app and
-can be retried. Comet also waits for pending saves before switching notes,
-renaming or deleting items, or closing the desktop window.
+The centered path bar accepts workspace-relative paths such as
+`Comet\Folder\text.md` or `Comet/Folder/text.txt`. Press Enter to open an
+existing file or folder, or confirm creation of a new file and any missing
+folders. `Comet` is an alias for the current workspace; absolute paths and
+`..` traversal are rejected.
 
-Quick captures become Markdown notes in `Inbox`. Captured images are copied to
-`assets` and linked using a relative path. Image capture requires a real desktop
-workspace.
+Quick capture (`+` at the top) saves a new Markdown file in the destination
+folder you choose. An image capture copies the image into that same folder and
+links it relatively; image capture requires a desktop workspace. YouTube links
+in Markdown are offered as playable embeds, but no video is loaded and no
+connection to YouTube is made until you choose **Load video**.
 
-The browser development preview is a clearly labelled **sample workspace**,
-not a view of local files. It is interactive and saves sample changes in browser
-storage when available; clearing that storage removes the sample changes. Open
-an actual folder in the desktop app to work with files on disk.
+Edits save automatically. If a save fails, the edit remains in the app and can
+be retried. Comet waits for pending saves before switching notes or workspaces,
+moving, renaming, deleting, or closing the desktop window. Deletion requires
+confirmation and is permanent; it does not use the system trash.
+
+The browser development preview is an interactive **sample**, not a view of
+local files. Sample data is saved in browser storage when possible; large media
+can exceed the storage quota, in which case changes are temporary. The sample
+file picker accepts files up to 20 MB; the desktop app imports files directly.
+Clearing browser storage removes sample data.
 
 | Shortcut | Action |
 | --- | --- |
-| Ctrl/Cmd + K | Search notes |
+| Ctrl/Cmd + K | Search files, contents, and tags |
 | Ctrl/Cmd + L | Focus the workspace path bar |
 | Ctrl/Cmd + Shift + K | Quick capture |
-| Ctrl/Cmd + N | New note |
+| Ctrl/Cmd + N | New file |
 | Ctrl/Cmd + \\ | Toggle sidebar |
 | Ctrl/Cmd + S | Save immediately |
 
-## Development
+## Development and releases
 
-The app uses Tauri 2 for the desktop backend and React, TypeScript, and Vite for
-the interface. Install the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/),
-then run:
+The app uses Tauri 2, React, TypeScript, and Vite. Install the
+[Tauri prerequisites](https://v2.tauri.app/start/prerequisites/), then:
 
 ```sh
 cd web
-npm install
+npm ci
 npm run tauri dev
 ```
 
-For the interactive browser sample, run `npm run dev` instead. Run the utility
-tests with `npm test` and create the production web bundle with `npm run build`.
-
-## Releasing
-
-See [docs/RELEASING.md](docs/RELEASING.md).
+Use `npm run dev` for the browser sample, `npm test` for the utility and editor
+checks, and `npm run build` for the production web bundle. The icon source is
+in [`assets/icon`](assets/icon); Windows installer artwork is in
+[`packaging/windows`](packaging/windows). See [releasing](docs/RELEASING.md)
+for the Windows setup, MSI, standalone, and portable builds.

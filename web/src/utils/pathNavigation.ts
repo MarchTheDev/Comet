@@ -1,4 +1,4 @@
-import { isMarkdown, joinPath, normalizePath, relativePath, validEntryName, type Entry } from "./vault";
+import { joinPath, normalizePath, relativePath, validEntryName, type Entry } from "./vault";
 
 /** All paths shown in the address bar are relative to the open workspace. */
 export function displayWorkspacePath(path: string, vault: string): string {
@@ -63,14 +63,9 @@ export function planWorkspacePath(input: string, vault: string, entries: Entry[]
   if (existing?.kind === "folder") return { kind: "folder", path: existing.path };
   if (existing?.kind === "file") {
     if (trailingSlash) return { kind: "error", message: `“${name}” is a file, not a folder.` };
-    return isMarkdown(existing.name)
-      ? { kind: "note", path: existing.path }
-      : { kind: "error", message: "Comet opens Markdown notes (.md), not this file type." };
+    return { kind: "note", path: existing.path };
   }
   if (trailingSlash) return { kind: "error", message: "That folder doesn't exist yet. Enter a note name after it to create both." };
-  if (/\.[^.]+$/.test(name) && !isMarkdown(name)) {
-    return { kind: "error", message: "Use a .md filename, or leave the extension off." };
-  }
   const validated = validEntryName(name, "note");
   if (validated.error) return { kind: "error", message: validated.error };
   const path = joinPath(folder, validated.name);

@@ -1,5 +1,4 @@
-import { ArrowLeft, Check, FolderOpen, Keyboard, LockKeyhole, Monitor, Moon, RotateCcw, Sun } from "lucide-react";
-import { APP_VERSION } from "virtual:comet-version";
+import { ArrowLeft, Check, FolderOpen, Keyboard, Monitor, Moon, RotateCcw, Sun } from "lucide-react";
 import { DEFAULT_SETTINGS, type Settings, type ThemePreference } from "./utils/settings";
 
 interface SettingsPageProps {
@@ -42,8 +41,8 @@ export function SettingsPage({ settings, persisted, isSample, modifier, onChange
             </div>
           </fieldset>
           <label className="setting-row">
-            <span className="setting-copy"><strong>Matterhorn cover</strong><small>Show the mountain above your notes.</small></span>
-            <input className="setting-toggle" type="checkbox" aria-label="Matterhorn cover" checked={settings.showCover} onChange={(event) => onChange({ showCover: event.target.checked })} />
+            <span className="setting-copy"><strong>Matterhorn background</strong><small>Show the mountain behind your workspace.</small></span>
+            <input className="setting-toggle" type="checkbox" aria-label="Matterhorn background" checked={settings.showCover} onChange={(event) => onChange({ showCover: event.target.checked })} />
           </label>
         </section>
 
@@ -68,15 +67,14 @@ export function SettingsPage({ settings, persisted, isSample, modifier, onChange
             <input className="setting-toggle" type="checkbox" aria-label="Reopen last workspace" checked={settings.reopenWorkspace} onChange={(event) => onChange({ reopenWorkspace: event.target.checked })} />
           </label>
           <div className="setting-row">
-            <span className="setting-copy"><strong>{isSample ? "Sample workspace" : "Local workspace"}</strong><small>{isSample ? "Your sample is separate from your local files." : "Your notes are stored as Markdown files on this device."}</small></span>
+            <span className="setting-copy"><strong>{isSample ? "Sample workspace" : "Local workspace"}</strong><small>{isSample ? "Your sample is separate from your local files." : "Files are stored in your folder on this device."}</small></span>
             <button type="button" className="secondary-button settings-open-folder" onClick={onOpenVault}><FolderOpen size={15} /> Open folder</button>
           </div>
         </section>
       </div>
 
       <aside className="settings-aside" aria-label="Settings information">
-        <div className="settings-aside-card shortcut-card"><div className="settings-aside-icon"><Keyboard size={18} /></div><h3>Little shortcuts</h3><p>A few ways to move a little faster.</p><dl><div><dt>Go to path</dt><dd><kbd>{modifier} L</kbd></dd></div><div><dt>Search notes</dt><dd><kbd>{modifier} K</kbd></dd></div><div><dt>New note</dt><dd><kbd>{modifier} N</kbd></dd></div><div><dt>Quick capture</dt><dd><kbd>{modifier} ⇧ K</kbd></dd></div></dl></div>
-        <div className="settings-aside-card local-card"><div className="settings-aside-icon"><LockKeyhole size={17} /></div><h3>Made to stay yours.</h3><p>No account, no cloud required. Your notes live in your own folder.</p><span>COMET · V{APP_VERSION}</span></div>
+        <div className="settings-aside-card shortcut-card"><div className="settings-aside-icon"><Keyboard size={18} /></div><h3>Little shortcuts</h3><p>A few ways to move a little faster.</p><dl><div><dt>Go to path</dt><dd><kbd>{modifier} L</kbd></dd></div><div><dt>Search files</dt><dd><kbd>{modifier} K</kbd></dd></div><div><dt>New file</dt><dd><kbd>{modifier} N</kbd></dd></div><div><dt>Quick capture</dt><dd><kbd>{modifier} ⇧ K</kbd></dd></div></dl></div>
         <button className="reset-settings" type="button" onClick={() => onChange({ ...DEFAULT_SETTINGS })}><RotateCcw size={15} /> Reset preferences</button>
       </aside>
     </div>

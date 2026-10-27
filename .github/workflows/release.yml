@@ -1,4 +1,4 @@
-﻿name: Release
+name: Release
 
 # Builds everything Comet ships as, and puts it on a draft release for review.
 #
@@ -41,6 +41,10 @@ on:
       # both change what ends up inside the installers.
       - 'web/src-tauri/tauri.conf.json'
       - 'web/src-tauri/capabilities/**'
+      - 'web/src-tauri/icons/**'
+      - 'assets/icon/**'
+      - 'packaging/windows/**'
+      - 'web/public/**'
       # The app itself. A change to what it does is a change to what is inside
       # the installers, and this is the only way to get those built: the manual
       # button needs this file on the default branch. It costs a few minutes of
@@ -141,19 +145,26 @@ jobs:
           }
 
           # The standalone program: one exe, the interface already inside it.
-          $exe = Get-ChildItem "$release/*.exe" | Select-Object -First 1
-          Copy-Item $exe.FullName "$out/Comet.exe"
+          $exe = Join-Path $release "comet.exe"
+          if (-not (Test-Path -PathType Leaf $exe)) { throw "Expected standalone executable not found: $exe" }
+          Add-Type -AssemblyName System.Drawing
+          $appIcon = [System.Drawing.Icon]::ExtractAssociatedIcon((Resolve-Path $exe).Path)
+          if ($null -eq $appIcon) { throw "The standalone executable has no embedded application icon." }
+          $appIcon.Dispose()
+          Copy-Item $exe "$out/Comet.exe"
 
           # The portable folder: the same program, with a line saying so.
           $portable = "artifacts/portable"
           New-Item -ItemType Directory -Force -Path $portable | Out-Null
-          Copy-Item $exe.FullName "$portable/Comet.exe"
+          Copy-Item $exe "$portable/Comet.exe"
+          if ((Get-FileHash "$portable/Comet.exe").Hash -ne (Get-FileHash $exe).Hash) { throw "Portable executable differs from standalone." }
           $readme = @(
             "Comet $version, portable",
             "",
-            "Run Comet.exe. Nothing is installed and nothing is written next to",
-            "it: your library and settings live in %APPDATA%\Comet, and removing",
-            "this folder removes the program.",
+            "Run Comet.exe; no installer is required. Your files remain in the",
+            "workspace folder you choose. Preferences and organization are kept",
+            "in the application's local profile, not alongside this executable.",
+            "Removing this folder removes the program, not your files or profile.",
             "",
             "Windows 10 and 11 already have the WebView2 runtime that Comet draws",
             "its interface with. On an older or stripped-down Windows, install it",

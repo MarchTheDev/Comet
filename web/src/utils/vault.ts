@@ -41,12 +41,12 @@ export function relativePath(path: string, vault: string): string {
 }
 
 export function isMarkdown(path: string): boolean {
-  return /\.md$/i.test(path);
+  return /\.(?:md|markdown)$/i.test(path);
 }
 
 /** A friendly label while the actual filename remains unchanged on disk. */
 export function noteTitle(name: string): string {
-  return name.replace(/\.md$/i, "");
+  return name.replace(/\.(?:md|markdown)$/i, "");
 }
 
 export function isPathInside(path: string, parent: string): boolean {
@@ -129,5 +129,6 @@ export function validEntryName(value: string, kind: "note" | "folder" | "file"):
   if (name === "." || name === ".." || /[\\/:*?"<>|\u0000-\u001f]/.test(name)) {
     return { name: "", error: "Use a name without slashes or special file characters." };
   }
-  return { name: kind === "note" && !isMarkdown(name) ? `${name}.md` : name, error: "" };
+  // A name without an extension defaults to Markdown; an explicit extension is preserved.
+  return { name: kind === "note" && !/\.[^.]+$/.test(name) ? `${name}.md` : name, error: "" };
 }

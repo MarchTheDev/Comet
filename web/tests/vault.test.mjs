@@ -30,6 +30,7 @@ check('sorts folders before notes and ignores paths outside the vault', tree.len
 check('handles Windows paths', relativePath('C:\\Notes\\Ideas\\child.md', 'C:\\Notes') === 'Ideas/child.md' && joinPath('C:\\Notes', 'new.md') === 'C:\\Notes\\new.md' && parentPath('C:\\Notes\\new.md') === 'C:\\Notes');
 check('handles Unix paths', fileName('/notes/a.md') === 'a.md' && joinPath('/notes/', 'b.md') === '/notes/b.md');
 check('adds a Markdown extension without duplicating existing ones', validEntryName('thought', 'note').name === 'thought.md' && validEntryName('thought.MD', 'note').name === 'thought.MD');
+check('preserves explicit extensions for new files', validEntryName('notes.txt', 'note').name === 'notes.txt' && validEntryName('song.mp3', 'note').name === 'song.mp3' && validEntryName('readme.markdown', 'note').name === 'readme.markdown');
 check('rejects empty and unsafe names', Boolean(validEntryName('  ', 'note').error) && Boolean(validEntryName('../escape', 'folder').error) && Boolean(validEntryName('a\\b', 'note').error));
 check('keeps non-Markdown file extensions when renaming', validEntryName('photo.png', 'file').name === 'photo.png' && noteTitle('Welcome.MD') === 'Welcome');
 check('detects descendants without matching sibling names', isPathInside('/vault/Notes/a.md', '/vault/Notes') && !isPathInside('/vault/Notes 2/a.md', '/vault/Notes'));

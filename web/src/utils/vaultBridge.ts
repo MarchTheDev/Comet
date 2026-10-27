@@ -1,6 +1,6 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { sampleVault, SAMPLE_ROOT } from "./sampleVault";
-import { fileName, type Entry, type SearchHit } from "./vault";
+import { fileName, joinPath, type Entry, type SearchHit } from "./vault";
 
 export const desktopAvailable = isTauri();
 export const isSamplePath = (path: string) => path === SAMPLE_ROOT || path.startsWith(`${SAMPLE_ROOT}/`);
@@ -35,6 +35,15 @@ export async function restoreVaultAccess(path: string): Promise<void> {
 export async function renameEntry(vault: string, path: string, destination: string): Promise<void> {
   if (isSamplePath(vault)) sampleVault.rename(path, destination);
   else await invoke("rename_entry", { vault, path, newName: fileName(destination) });
+}
+
+export async function moveEntry(vault: string, path: string, folder: string): Promise<string> {
+  return isSamplePath(vault) ? sampleVault.move(path, folder) : invoke<string>("move_entry", { vault, path, folder });
+}
+
+export async function importFile(vault: string, src: string, dest: string): Promise<void> {
+  if (isSamplePath(vault)) throw new Error("Use the browser file picker to add files to the sample.");
+  await invoke("copy_asset", { vault, src, dest: joinPath(dest, fileName(src)) });
 }
 
 export async function deleteEntry(vault: string, path: string): Promise<void> {

@@ -20,6 +20,8 @@ const checks = [
   'tests/settings.test.mjs',
   'tests/session.test.mjs',
   'tests/editor.test.mjs',
+  'tests/organization.test.mjs',
+  'tests/richText.test.mjs',
   'tests/saveQueue.test.mjs',
 ];
 try {

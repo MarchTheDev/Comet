@@ -4,7 +4,7 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { AudioPlayer } from '../src/MediaPlayer.tsx';
 import { zipSync, strToU8 } from 'fflate';
-import { boundedEpubResponse, validateEpubArchive } from '../src/utils/epubSafety.ts';
+import { boundedEpubResponse, resolveEpubSection, validateEpubArchive } from '../src/utils/epubSafety.ts';
 import { newWhiteboard, newWhiteboardItem, parseWhiteboard, serializeWhiteboard } from '../src/utils/whiteboard.ts';
 import { derivePasswordKey, encryptPasswordData, unlockPasswordData, parsePasswordEnvelope, validPasswordData, faviconUrl, makePassword } from '../src/utils/passwords.ts';
 import { parseGoogleEvents, googleEventPatch } from '../src/utils/googleCalendar.ts';
@@ -20,7 +20,7 @@ check('audio player reserves artwork metadata and lookup space while loading', a
 const board = newWhiteboard(), a = newWhiteboardItem('text', 5, 8), b = newWhiteboardItem('todo', 250, 8);
 board.items.push(a, b); board.connections.push({ from:a.id, to:b.id, color:'#8899aa' });
 check('whiteboards round-trip content and connections', parseWhiteboard(serializeWhiteboard(board))?.connections.length === 1);
-check('whiteboards reject dangling connections and unknown future fields', !parseWhiteboard(JSON.stringify({ ...board, connections:[{from:a.id,to:'missing',color:'#8899aa'}] })) && !parseWhiteboard(JSON.stringify({...board, version:4})));
+check('whiteboards reject dangling connections and unknown future fields', !parseWhiteboard(JSON.stringify({ ...board, connections:[{from:a.id,to:'missing',color:'#8899aa'}] })) && !parseWhiteboard(JSON.stringify({...JSON.parse(serializeWhiteboard(board)), version:5})));
 check('whiteboards reject unsafe embedded image data', !parseWhiteboard(JSON.stringify({ ...board, items:[{...a,type:'image',image:'data:image/svg+xml;base64,PHN2Zz4='}], connections:[] })));
 const legacyItem={id:'old',type:'text',x:10,y:20,text:'safe',done:false,color:'#abcdef',image:''};
 const legacyBoard={format:'comet-whiteboard',version:1,items:[legacyItem],connections:[]}, migrated=parseWhiteboard(JSON.stringify(legacyBoard));
@@ -31,9 +31,16 @@ const smallShape={...newWhiteboardItem('shape',20,20),width:80,height:60};
 const smallBoard={...board,items:[smallShape],connections:[]};
 check('small shapes use version 3 and version 2 retains its original size rules',!parseWhiteboard(JSON.stringify(smallBoard))&&parseWhiteboard(serializeWhiteboard(smallBoard))?.version===3&&parseWhiteboard(serializeWhiteboard(smallBoard))?.items[0].width===80);
 check('ordinary version 2 boards continue to serialize as version 2',JSON.parse(serializeWhiteboard(board)).version===2);
+const filledBoard={...smallBoard,items:[{...smallShape,filled:true}]};const serializedFilled=serializeWhiteboard(filledBoard), parsedFilled=parseWhiteboard(serializedFilled);
+check('filled shapes use version 4 and preserve the fill on round-trip',JSON.parse(serializedFilled).version===4&&parsedFilled?.items[0].filled===true);
+check('version 4 is retained after turning a fill back off',JSON.parse(serializeWhiteboard({...parsedFilled,items:parsedFilled.items.map(item=>({...item,filled:false}))})).version===4);
+check('old versions default shapes to unfilled and do not gain a new field on save',parseWhiteboard(serializeWhiteboard(smallBoard))?.items[0].filled===false&&!('filled' in JSON.parse(serializeWhiteboard(smallBoard)).items[0]));
+
 
 const css=readFileSync('src/index.css','utf8'),epubSource=readFileSync('src/EpubView.tsx','utf8');
 check('EPUB wrapper styles cannot constrain epub.js paginated inner views',css.includes('.comet-epub-view {')&&!/^\s*\.epub-view\s*\{/m.test(css)&&epubSource.includes('comet-epub-view'));
+check('EPUB section links resolve relative to the navigation file and only target the reading spine',resolveEpubSection('../Text/two.xhtml#part','nav/toc.xhtml','OEBPS/content.opf',['Text/two.xhtml'])==='Text/two.xhtml#part'&&!resolveEpubSection('https://evil.test/x','nav/toc.xhtml','OEBPS/content.opf',['Text/two.xhtml'])&&!resolveEpubSection('../../outside.xhtml','nav/toc.xhtml','OEBPS/content.opf',['Text/two.xhtml'])&&!resolveEpubSection('%6aavascript:alert(1)','nav/toc.xhtml','OEBPS/content.opf',['Text/two.xhtml']));
+
 
 const salt = crypto.getRandomValues(new Uint8Array(16)), key = await derivePasswordKey('correct horse battery staple', salt);
 const data = {format:'comet-passwords-data',version:1,entries:[{id:'one',name:'Example',website:'https://example.com/',username:'alice@example.com',password:'hidden secret',notes:''}]};

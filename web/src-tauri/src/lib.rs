@@ -12,6 +12,7 @@ mod update;
 mod google;
 mod workspace_archive;
 mod artwork;
+mod upload;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -323,34 +324,9 @@ async fn create_note(vault: String, path: String, content: String) -> Result<(),
     file.write_all(content.as_bytes()).map_err(|e| e.to_string())
 }
 
-// HTML drop is enabled in WebView2 so both web links and files reach the UI.
-// Bounded uploads use exclusive creation, just like the file-picker import.
-#[tauri::command]
-async fn import_dropped_bytes(vault: String, path: String, bytes: Vec<u8>) -> Result<(), String> {
-    if bytes.len() > 20 * 1024 * 1024 { return Err("Dropped files are limited to 20 MB; use Upload files for larger files.".into()); }
-    let destination = checked_new_entry(&vault, &path, false)?;
-    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&destination).map_err(|e| e.to_string())?;
-    if let Err(error) = file.write_all(&bytes) {
-        drop(file);
-        let _ = std::fs::remove_file(&destination);
-        return Err(error.to_string());
-    }
-    Ok(())
-}
-
 #[tauri::command]
 async fn copy_asset(vault: String, src: String, dest: String) -> Result<(), String> {
-    let asset = checked_new_entry(&vault, &dest, true)?;
-    let mut source = std::fs::File::open(&src).map_err(|e| e.to_string())?;
-    if !source.metadata().map_err(|e| e.to_string())?.is_file() { return Err("Only files can be imported.".into()); }
-    let mut destination = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(asset)
-        .map_err(|e| e.to_string())?;
-    std::io::copy(&mut source, &mut destination)
-        .map(|_| ())
-        .map_err(|e| e.to_string())
+    tauri::async_runtime::spawn_blocking(move || upload::copy_file(&vault, &src, &dest)).await.map_err(|_| "The file import was interrupted.")?
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -488,6 +464,7 @@ fn create_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .manage(upload::DroppedUploads::default())
         // Re-launching a tray-resident Comet restores the existing window.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main_window(app)))
         .plugin(tauri_plugin_opener::init())
@@ -532,7 +509,10 @@ pub fn run() {
             create_dir,
             create_note,
             copy_asset,
-            import_dropped_bytes,
+            upload::begin_dropped_upload,
+            upload::append_dropped_upload,
+            upload::finish_dropped_upload,
+            upload::abort_dropped_upload,
             search_vault
         ])
         .run(tauri::generate_context!())
@@ -587,7 +567,7 @@ mod tests {
 
     #[test]
     fn moves_and_imports_never_replace_existing_files() {
-        use super::{copy_asset, import_dropped_bytes, move_entry, read_note, write_note};
+        use super::{copy_asset, move_entry, read_note, write_note};
         let unique = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
         let base = std::env::temp_dir().join(format!("comet-move-test-{}-{unique}", std::process::id()));
         let vault = base.join("vault");
@@ -620,13 +600,9 @@ mod tests {
             let binary = destination_folder.join("upload.bin");
             copy_asset(root.clone(), path(&external), path(&binary)).await.unwrap();
             assert!(read_note(root.clone(), path(&binary)).await.is_err());
-            assert!(import_dropped_bytes(root.clone(), path(&binary), vec![42]).await.is_err());
+            assert!(copy_asset(root.clone(), path(&external), path(&binary)).await.is_err());
             assert_eq!(fs::read(&binary).unwrap(), vec![0, 255, 1]);
-            let dropped = destination_folder.join("dropped.bin");
-            import_dropped_bytes(root.clone(), path(&dropped), vec![3, 0, 255]).await.unwrap();
-            assert_eq!(fs::read(&dropped).unwrap(), vec![3, 0, 255]);
-            assert!(import_dropped_bytes(root.clone(), path(&vault.join("../escape.bin")), vec![1]).await.is_err());
-            assert!(import_dropped_bytes(root.clone(), path(&destination_folder.join("huge.bin")), vec![0; 20 * 1024 * 1024 + 1]).await.is_err());
+
         });
         fs::remove_dir_all(base).unwrap();
     }

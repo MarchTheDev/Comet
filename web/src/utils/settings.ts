@@ -1,6 +1,6 @@
 import { DEFAULT_SHORTCUTS, readShortcuts, type Shortcuts } from "./shortcuts";
 
-export type ThemePreference = "dark" | "light" | "system" | "emerald" | "rubellite" | "navy" | "0807-light" | "0807-dark";
+export type ThemePreference = "dark" | "light" | "system" | "emerald" | "rubellite" | "navy" | "0807-light" | "0807-dark" | "sakura" | "matcha" | "ember" | "gothic" | "frog" | "nightjar" | "onyx";
 export type EditorFontSize = 14 | 16 | 18;
 
 export interface Settings {
@@ -57,7 +57,7 @@ export function readSettings(store: SettingsStorage | undefined = storage()): Se
       ? (typeof value.textScale === "number" && Number.isFinite(value.textScale) && value.textScale >= 65 && value.textScale <= 140 ? value.textScale : 100)
       : oldTextScale === 100 ? 100 : Math.max(65, Math.min(140, Math.round(oldTextScale / 1.2 / 5) * 5));
     return {
-      theme: (["light", "system", "dark", "emerald", "rubellite", "navy", "0807-light", "0807-dark"] as unknown[]).includes(value.theme) ? value.theme as ThemePreference : DEFAULT_SETTINGS.theme,
+      theme: (["light", "system", "dark", "emerald", "rubellite", "navy", "0807-light", "0807-dark", "sakura", "matcha", "ember", "gothic", "frog", "nightjar", "onyx"] as unknown[]).includes(value.theme) ? value.theme as ThemePreference : DEFAULT_SETTINGS.theme,
       shortcuts: readShortcuts(value.shortcuts),
       editorFontSize: value.editorFontSize === 14 || value.editorFontSize === 16 || value.editorFontSize === 18 ? value.editorFontSize : DEFAULT_SETTINGS.editorFontSize,
       interfaceScale: typeof value.interfaceScale === "number" && Number.isFinite(value.interfaceScale) && value.interfaceScale >= 75 && value.interfaceScale <= 150 ? value.interfaceScale : DEFAULT_SETTINGS.interfaceScale,

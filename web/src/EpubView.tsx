@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import ePub, { type Book, type Rendition, type Location } from "epubjs";
+import ePub, { type Book, type Rendition, type Location, type NavItem } from "epubjs";
 import { BookOpen, ChevronLeft, ChevronRight, ExternalLink, Minus, Plus, Settings2 } from "lucide-react";
-import { boundedEpubResponse, validateEpubArchive } from "./utils/epubSafety";
+import { boundedEpubResponse, resolveEpubSection, validateEpubArchive } from "./utils/epubSafety";
 
 const positionKey = (path: string) => `comet:epub-position:v1:${encodeURIComponent(path)}`;
 const PREFS_KEY = "comet:epub-preferences:v1";
@@ -13,6 +13,20 @@ function preferences(): ReaderPreferences {
     return { font: typeof v.font === "number" && v.font >= 70 && v.font <= 180 ? v.font : 100, family: ["book", "serif", "sans"].includes(v.family) ? v.family : "book", lineHeight: typeof v.lineHeight === "number" && v.lineHeight >= 1.2 && v.lineHeight <= 2.2 ? v.lineHeight : 1.65, paper: ["light", "sepia", "dark"].includes(v.paper) ? v.paper : "light" };
   } catch { return defaultPrefs; }
 }
+function bookSections(items: NavItem[], resolve: (href: string) => string | null): { href: string; label: string }[] {
+  const result: { href: string; label: string }[] = []; let examined = 0;
+  const visit = (list: NavItem[], depth: number) => {
+    if (depth > 12 || !Array.isArray(list)) return;
+    for (const item of list) {
+      if (result.length >= 1000 || ++examined > 5000) return;
+      const label = typeof item.label === "string" ? item.label.trim().slice(0, 300) : "";
+      const href = typeof item.href === "string" ? resolve(item.href) : null;
+      if (href && label && label.toLowerCase() !== "chapters") result.push({ href, label: `${"  ".repeat(Math.min(depth, 4))}${label}` });
+      if (item.subitems) visit(item.subitems, depth + 1);
+    }
+  };
+  visit(items, 0); return result;
+}
 function isEditing(target: EventTarget | null): boolean {
   const node = target as HTMLElement | null;
   return !!node && (/^(INPUT|TEXTAREA|SELECT)$/.test(node.tagName) || node.isContentEditable);
@@ -23,6 +37,7 @@ export function EpubView({ url, path, sample, onOpenExternal }: { url: string; p
   const host = useRef<HTMLDivElement>(null), rendition = useRef<Rendition | null>(null), turning = useRef(false);
   const [error, setError] = useState(""), [notice, setNotice] = useState(""), [ready, setReady] = useState(false);
   const [prefs, setPrefs] = useState(preferences), [options, setOptions] = useState(false);
+  const [sections, setSections] = useState<{ href: string; label: string }[]>([]), [sectionHref, setSectionHref] = useState("");
   const [page, setPage] = useState<{ current: number; total: number; atStart: boolean; atEnd: boolean } | null>(null);
   const turn = (direction: "next" | "prev") => {
     const reader = rendition.current; if (!reader || turning.current) return;
@@ -40,7 +55,7 @@ export function EpubView({ url, path, sample, onOpenExternal }: { url: string; p
   }, []);
   useEffect(() => {
     const controller = new AbortController(); let active = true, book: Book | null = null;
-    setError(""); setNotice(""); setReady(false); setPage(null);
+    setError(""); setNotice(""); setReady(false); setPage(null); setSections([]); setSectionHref("");
     void (async () => {
       const response = await fetch(url, { signal: controller.signal });
       const data = await boundedEpubResponse(response); validateEpubArchive(data);
@@ -55,6 +70,11 @@ export function EpubView({ url, path, sample, onOpenExternal }: { url: string; p
       });
       await book.ready;
       if (!active || !host.current) return;
+      const openedBook = book, spine: string[] = [];
+      openedBook.spine.each((section: { href: string }) => { if (typeof section.href === "string") spine.push(section.href); });
+      const packagePath = (openedBook.container as unknown as { packagePath?: string })?.packagePath ?? "";
+      const navigationPath = openedBook.packaging.navPath || openedBook.packaging.ncxPath;
+      void openedBook.loaded.navigation.then((navigation) => { if (active) setSections(bookSections(navigation.toc, (href) => resolveEpubSection(href, navigationPath, packagePath, spine))); }).catch(() => { /* Books may omit a table of contents. */ });
       const reader = book.renderTo(host.current, { width: "100%", height: "100%", flow: "paginated", spread: "none", allowScriptedContent: false });
       rendition.current = reader;
       reader.themes.default({ body: { color: "#263342", background: "#fff", "line-height": "1.65" } });
@@ -64,6 +84,7 @@ export function EpubView({ url, path, sample, onOpenExternal }: { url: string; p
       });
       reader.on("relocated", (location: Location) => {
         if (!active) return;
+        setSectionHref((previous) => { const current = location.start?.href ?? ""; return previous && previous.split("#")[0] === current.split("#")[0] ? previous : current; });
         const displayed = location.start?.displayed;
         if (displayed && Number.isFinite(displayed.page) && Number.isFinite(displayed.total)) setPage({ current: displayed.page, total: displayed.total, atStart: !!location.atStart, atEnd: !!location.atEnd });
         if (typeof location.start?.cfi === "string" && location.start.cfi.length < 2000) { try { localStorage.setItem(positionKey(path), location.start.cfi); } catch { /* Position is optional. */ } }
@@ -85,6 +106,7 @@ export function EpubView({ url, path, sample, onOpenExternal }: { url: string; p
   const updatePrefs = (patch: Partial<ReaderPreferences>) => setPrefs((old) => ({ ...old, ...patch }));
   return <div className={`comet-epub-view epub-paper-${prefs.paper}`}>
     <div className="epub-toolbar"><BookOpen size={17} /><strong>EPUB reader</strong><span className="pdf-spacer" />
+      {sections.length > 0 && <select aria-label="Book section" className="epub-section-select" value={sections.find((item) => item.href === sectionHref)?.href ?? sections.find((item) => item.href.split("#")[0] === sectionHref.split("#")[0])?.href ?? ""} disabled={!ready} onChange={(event) => { const href = event.target.value; if (sections.some((item) => item.href === href)) { setSectionHref(href); void rendition.current?.display(href).catch(() => setNotice("Couldn't open that section.")); } }}><option value="" disabled hidden>Choose a section</option>{sections.map((item, index) => <option key={`${item.href}:${index}`} value={item.href}>{item.label}</option>)}</select>}
       <button type="button" aria-label="Smaller book text" disabled={!ready || prefs.font <= 70} onClick={() => updatePrefs({ font: Math.max(70, prefs.font - 10) })}><Minus size={16} /></button><span>{prefs.font}%</span><button type="button" aria-label="Larger book text" disabled={!ready || prefs.font >= 180} onClick={() => updatePrefs({ font: Math.min(180, prefs.font + 10) })}><Plus size={16} /></button>
       <button type="button" title="Reading options" aria-label="Reading options" aria-expanded={options} onClick={() => setOptions(!options)}><Settings2 size={17} /></button>{!sample && <button type="button" aria-label="Open ebook in system app" onClick={onOpenExternal}><ExternalLink size={16} /></button>}
     </div>

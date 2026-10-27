@@ -52,3 +52,13 @@ export function graphPositionWithoutOverlap(ideal: { x: number; y: number }, occ
     if (!overlaps(candidate)) return candidate;
   }
 }
+
+/** Bounded, temporary push away from a dragged node; never alters saved layout. */
+export function graphRepulsion(dragged: { x: number; y: number }, other: { x: number; y: number }, index = 0): { x: number; y: number } {
+  const dx = other.x - dragged.x, dy = other.y - dragged.y, distance = Math.hypot(dx, dy);
+  const radius = 230, maximum = 72;
+  if (distance >= radius) return { x: 0, y: 0 };
+  const strength = maximum * (1 - distance / radius) ** 2;
+  const angle = distance < .001 ? index * 2.3999632297 : Math.atan2(dy, dx);
+  return { x: Math.cos(angle) * strength, y: Math.sin(angle) * strength };
+}

@@ -15,8 +15,8 @@ Google Calendar and on-demand two-way Google Drive workspace sync are optional.
   that moves it into a different folder. A grouped outline highlights the
   destination folder and its visible contents. The **Move to** menu provides a searchable folder picker that also shows files
   beneath expanded folders (only folders can be selected as destinations).
-  Drop files or web links on a folder or workspace to add them. Dropped files are
-  limited to 20 MB; use **Upload files** for larger files in the desktop app.
+  Drop files or web links on a folder or workspace to add them. Desktop file
+  imports have no Comet-imposed size limit; available disk space still applies.
   Renames, moves and imports reject collisions; moving or renaming does not
   rewrite links in other notes.
 - **Select and delete.** Ctrl/Cmd-click toggles items, and Shift-click selects a
@@ -30,9 +30,12 @@ Google Calendar and on-demand two-way Google Drive workspace sync are optional.
 - **Explore.** Expand the root and folder nodes in the left-to-right Tree view
   to reveal files. Brain view shows up to 150 items as a network: click a folder
   node to reveal or hide its children, drag the background to pan or a node to
-  arrange it without moving its neighbors, and click a file to open it.
-  Right-click a node for actions such as Open, Move, Rename and Delete. Use
-  Ctrl/Cmd + scroll to zoom. Node positions are saved on this device.
+  arrange it, and click a file to open it. Nearby nodes react while dragging
+  and settle back without their temporary movement being saved. Newly revealed
+  files appear near their folder; manually moved positions are saved on this
+  device. Right-click a node for actions such as Open, Move, Rename and Delete.
+  Use Ctrl/Cmd + scroll to zoom. **Reset layout** clears saved positions only
+  after confirmation (useful for layouts saved by an older version).
   Solid lines represent folder membership; dotted lines represent
   links between Markdown notes. Only the first 256K characters of the first 120
   Markdown notes are read for connections, with bounded concurrency; binary files
@@ -49,8 +52,8 @@ Google Calendar and on-demand two-way Google Drive workspace sync are optional.
 - **Navigation and appearance.** Use the back/forward arrows, mouse side
   buttons, or keyboard shortcuts to revisit places. Comet follows your system
   theme by default; Settings also offers dark, light, emerald, rubellite, navy,
-  and 0807 light and dark themes (inspired by the MIT-licensed
-  [0807 project](https://codeberg.org/Sauul/0807)), app and interface-text
+  plus Light (coral), Blue, Sakura, Matcha, Ember, Gothic, Frog, Nightjar and
+  Onyx palettes based on the live [0807 project](https://0807.st/), app and interface-text
   scaling, editor size, spell check, to-do
   arrowheads, and reopening the last workspace. Scaling applies when a dragged
   slider is released. Drag the sidebar's right edge to change its width; the
@@ -97,8 +100,8 @@ Markdown opens in the visual editor, source editor, or read-only view. Known
 UTF-8 text files such as `.txt`, `.json`, and `.csv` open in a plain-text editor.
 Text editing is limited to 16 MB. Images, PDFs, audio and video open in a preview
 or player; EPUB books open in a built-in reader with page-by-page buttons and
-arrow keys, saved position, font/spacing controls and page colors. Existing
-bookmark data is left on the device, although bookmark controls are not shown.
+arrow keys, a section selector when the book supplies a table of contents,
+saved position, font/spacing controls and page colors. Existing bookmark data is left on the device, although bookmark controls are not shown.
 EPUB scripts and remote resources are blocked; DRM-protected books are unsupported. Playback depends on the codecs available on the system. Unknown
 formats are not automatically decoded as text: open them with the system app or
 explicitly try UTF-8 text editing. Invalid UTF-8 and files containing NUL bytes
@@ -141,10 +144,13 @@ absolute paths and `..` traversal are rejected.
 Quick capture (`+` at the top) saves text as a new Markdown file, a web link
 as a standard `.url` shortcut, or copies selected files into a destination chosen
 from a folder tree. Drop files onto the file capture box or click it to browse.
-The uploader shows the current file and completed count; progress is indeterminate
-when the system copy operation does not report bytes. The browser sample is
-limited to 20 MB per file and may have a smaller storage quota; it warns if
-changes cannot be persisted. An image capture copies
+The uploader shows the current file and completed count; dropped desktop files
+show measured progress, while system copies are indeterminate. Desktop uploads
+stream in bounded chunks and are staged before no-overwrite publication. If the
+app is interrupted, a clearly named `.comet-upload-…part` file can remain; after
+confirming no import is running, remove it before syncing. The browser sample
+uses localStorage and is constrained by the browser's storage and memory quota;
+it warns when files cannot be persisted. An image capture copies
 the image into that same folder and links it relatively; image capture requires
 a desktop workspace. Dropped links also become shortcuts; they do **not**
 download videos. YouTube and direct video links in Markdown automatically show
@@ -166,14 +172,15 @@ Ctrl/Cmd + scroll.
 Create a **whiteboard** from the New menu for a separate `.comet-whiteboard`
 canvas. Add text boxes, to-dos, shapes and images (PNG/JPEG/GIF/WebP up to 2 MB
 apiece), choose a shape and drag on blank canvas to size it, or use the pen for
-freehand strokes. Shape interiors are transparent. Drag an
-item's top bar to move it, its bottom-right handle to resize it, or its dot to
-connect it to another item. Select a connection to change its color or remove
+freehand strokes. Shapes start transparent; use the fill button in a shape's
+hover menu to fill it. Cards remain selectable above shapes. Drag an item's top
+bar to move it, its invisible bottom-right corner to resize it (arrow keys work
+when the corner is focused), or its dot to connect it to another item. Select a connection to change its color or remove
 it. Clicking blank canvas clears focus; drag blank space to pan or use the zoom
 controls. Version 1 whiteboards open without being rewritten and migrate to
-version 2 on the first edit. Shapes smaller than 160 × 110 use version 3, so
-older builds safely reject that board rather than misread it. Older versions of
-Comet may not understand edited version 2 or version 3 boards. Boards autosave
+version 2 on the first edit. Shapes smaller than 160 × 110 use version 3; filled
+shapes use version 4. Older builds safely reject formats they cannot preserve.
+Older versions of Comet may not understand edited version 2–4 boards. Boards autosave
 in the workspace; unknown or damaged formats are not overwritten.
 
 Existing version 1 and version 2 to-do boards open without being changed on disk.
@@ -191,9 +198,9 @@ confirmation and is permanent; it does not use the system trash.
 
 The browser development preview is an interactive **sample**, not a view of
 local files. Sample data is saved in browser storage when possible; large media
-can exceed the storage quota, in which case changes are temporary. The sample
-file picker accepts files up to 20 MB. The desktop file picker copies larger
-files directly; HTML file drops are limited to 20 MB.
+can exceed the browser storage quota, in which case imports may be rejected or
+changes may be temporary. Desktop drops and file-picker imports are limited by
+the filesystem and available disk space rather than a fixed Comet file-size cap.
 Clearing browser storage removes sample data.
 
 | Shortcut | Action |
@@ -216,22 +223,23 @@ use Ctrl on Windows/Linux and Command on macOS.
 The Passwords view stores an AES-256-GCM encrypted vault in this device's app
 profile. Its master key is derived using PBKDF2-SHA256 with 600,000 iterations;
 the master password is not stored. The vault locks when you leave the view, hide
-the app, or after five minutes of inactivity. To reduce lockout risk, unlock the
-vault, choose **Set up recovery**, confirm the master password, and save the
+the app, or after five minutes of inactivity. Manage recovery, the master
+password, encrypted backups, site icons, and device-vault reset in **Settings →
+Passwords**. To reduce lockout risk, choose **Set up recovery**, confirm the master password, and save the
 random recovery code somewhere separate and safe before enabling it. The code
 can reset a forgotten master password; anyone with the code and an encrypted
 vault or backup can unlock its contents. **The code alone cannot restore a lost
 vault**: use Backup to save an encrypted copy. New recovery settings do not
 change earlier backups, which retain their original password and recovery code.
-To change the master password, unlock with the previous password and choose
-**Change master password**; entries are preserved. If recovery was enabled,
+To change the master password, choose **Change master password** in Settings and
+verify with either the previous master password or recovery code; entries are preserved. If recovery was enabled,
 Comet presents a new recovery code to save before committing the change. Old
 backups retain their previous password and recovery code. If both the password
-and recovery code are lost, the locked view offers an explicitly confirmed reset
+and recovery code are lost, Settings offers an explicitly confirmed reset
 that permanently erases this device vault (not exported backups); the old
 passwords cannot be recovered without a usable backup and its password or code.
 Site icons load automatically, sending site domains (not usernames or passwords)
-to Google's favicon service; the option can be disabled in the Passwords view.
+to Google's favicon service; the option can be disabled in Passwords settings.
 Comet's vault has not been independently security-audited and is not a replacement for an audited password manager. It
 has no autofill or cloud sync and is not included in Drive revisions.
 
@@ -269,8 +277,9 @@ backups, and never replace an existing workspace.
 Drive revisions are uncompressed and **not encrypted by Comet**. They include
 workspace files, potentially sensitive notes and media; local-only calendars,
 passwords, preferences, and organization metadata are excluded and must be
-backed up separately. Each revision is limited to 128 MB and 20,000 items;
-symbolic links and nonportable paths are refused. Comet currently lists at most
+backed up separately. Each revision is limited to 128 MB and 20,000 items, even
+though local file imports have no fixed Comet size cap; large workspaces cannot
+currently be synced this way. Symbolic links and nonportable paths are refused. Comet currently lists at most
 2,000 sync revisions per account/client, and does not automatically prune
 history. Removing revisions can break merge ancestry, so keep independent backups
 and avoid deleting them while using sync. Real Google account, operating-system

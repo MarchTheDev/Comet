@@ -34,6 +34,7 @@ const checks = [
   'tests/googleInteractions.test.mjs',
   'tests/whiteboardInteractions.test.mjs',
   'tests/uploadInteractions.test.mjs',
+  'tests/droppedUpload.test.mjs',
   'tests/playerInteractions.test.mjs',
 ];
 try {

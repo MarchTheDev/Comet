@@ -62,3 +62,26 @@ export function validateEpubArchive(buffer: ArrayBuffer): void {
   }
   if (cursor !== offset + size) throw new Error("This EPUB archive is damaged.");
 }
+
+/** Resolve a table-of-contents link against the navigation file, but only
+ * return targets already present in the book's own validated reading spine. */
+export function resolveEpubSection(href: string, navigationPath: string, packagePath: string, spine: string[]): string | null {
+  const relative = (value: string) => {
+    try {
+      const decoded = decodeURIComponent(value);
+      return !!decoded && decoded.length <= 2000 && decoded === decoded.trim() && !/[\x00-\x1f\\]/.test(decoded) && !/^(?:[a-z][a-z0-9+.-]*:|\/)/i.test(decoded);
+    } catch { return false; }
+  };
+  if (!relative(href) || !relative(navigationPath) || !relative(packagePath)) return null;
+  try {
+    const packageUrl = new URL(packagePath, "https://epub.invalid/");
+    const navUrl = new URL(navigationPath, packageUrl), target = new URL(href, navUrl);
+    if (packageUrl.origin !== "https://epub.invalid" || navUrl.origin !== packageUrl.origin || target.origin !== packageUrl.origin) return null;
+    const match = spine.find((item) => {
+      if (!relative(item)) return false;
+      const candidate = new URL(item, packageUrl);
+      return candidate.origin === packageUrl.origin && decodeURI(candidate.pathname) === decodeURI(target.pathname);
+    });
+    return match ? `${match.split("#", 1)[0]}${target.hash}` : null;
+  } catch { return null; }
+}

@@ -33,7 +33,14 @@ check('cancelling a shape gesture does not add an item',current.items.length===3
 await fire(stage,pointer('pointerdown',310,260));await fire(stage,pointer('pointermove',390,330));await fire(window,new dom.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));await fire(stage,pointer('pointerup',390,330));
 check('Escape cancels an in-progress shape and disarms the tool',current.items.length===3&&!document.querySelector('.whiteboard-shape-hint'));
 
-check('shape outlines are transparent and item handles respect stacking order',/\.whiteboard-item\s*\{\s*z-index:0/.test(css)&&/\.whiteboard-shape-visual > \*, \.whiteboard-shape-preview > \*\s*\{\s*fill:none/.test(css));
+check('shape outlines start transparent and cards stack above shape hit areas',/\.whiteboard-item:not\(\.whiteboard-shape\)\s*\{\s*z-index:2/.test(css)&&/\.whiteboard-shape-visual > \*, \.whiteboard-shape-preview > \*\s*\{\s*fill:none/.test(css));
+await click(document.querySelector('[aria-label="Fill shape"]'));
+check('the per-shape fill toggle persists a version 4 filled shape',current.items.at(-1).filled===true&&parseWhiteboard(serializeWhiteboard(current))?.items.at(-1).filled===true&&!!document.querySelector('.whiteboard-shape.is-filled'));
+await click(document.querySelector('[aria-label="Remove shape fill"]'));
+check('shape fill can be toggled back off',current.items.at(-1).filled===false&&!document.querySelector('.whiteboard-shape.is-filled'));
+const resizeButton=document.querySelector('[aria-label="Resize text"]'), oldWidth=current.items[0].width;
+await fire(resizeButton,new dom.window.KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true,cancelable:true}));
+check('the invisible corner resize remains keyboard-accessible',current.items[0].width===oldWidth+5&&/\.whiteboard-resize\s*\{\s*background:transparent/.test(css));
 
 await act(async()=>root.unmount());dom.window.close();delete globalThis.IS_REACT_ACT_ENVIRONMENT;
 globalThis.__cometFailures=(globalThis.__cometFailures??0)+failures;

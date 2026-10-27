@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { disable as disableAutostart, enable as enableAutostart, isEnabled as isAutostartEnabled } from "@tauri-apps/plugin-autostart";
 import { ArrowLeft, Check, FolderOpen, Gem, Keyboard, Monitor, Moon, RotateCcw, Sun } from "lucide-react";
 import { keyboardShortcut, shortcutLabel, SHORTCUT_ACTIONS, type ShortcutAction } from "./utils/shortcuts";
+import { PasswordSettings } from "./PasswordSettings";
 import { GoogleSettings } from "./GoogleSettings";
 import { UpdatesSettings } from "./UpdatesSettings";
 import type { UpdateInfo } from "./utils/updates";
@@ -21,8 +22,9 @@ interface SettingsPageProps {
   onChange: (patch: Partial<Settings>) => void;
   onBack: () => void;
   onOpenVault: () => void;
-  section?: "general" | "updates" | "cloud";
-  onSection?: (section: "general" | "updates" | "cloud") => void;
+  onOpenPasswords?: () => void;
+  section?: "general" | "updates" | "cloud" | "passwords";
+  onSection?: (section: "general" | "updates" | "cloud" | "passwords") => void;
   version?: string;
   update?: UpdateInfo | null;
   updateStatus?: string;
@@ -38,11 +40,18 @@ const themes: { value: ThemePreference; label: string; description: string; icon
   { value: "emerald", label: "Emerald", description: "A forest glow", icon: Gem },
   { value: "rubellite", label: "Rubellite", description: "A warm rose glow", icon: Gem },
   { value: "navy", label: "Navy", description: "A midnight blue", icon: Moon },
-  { value: "0807-light", label: "0807 Light", description: "Soft paper & coral", icon: Sun },
-  { value: "0807-dark", label: "0807 Dark", description: "Slate & coral", icon: Moon },
+  { value: "0807-light", label: "Light (coral)", description: "Soft paper & coral", icon: Sun },
+  { value: "0807-dark", label: "Blue", description: "Slate & coral", icon: Moon },
+  { value: "sakura", label: "Sakura", description: "Cherry blossom", icon: Sun },
+  { value: "matcha", label: "Matcha", description: "Soft green tea", icon: Sun },
+  { value: "ember", label: "Ember", description: "A warm glow", icon: Moon },
+  { value: "gothic", label: "Gothic", description: "Plum & rose", icon: Moon },
+  { value: "frog", label: "Frog", description: "Moss & gold", icon: Moon },
+  { value: "nightjar", label: "Nightjar", description: "Midnight & sky", icon: Moon },
+  { value: "onyx", label: "Onyx", description: "Deep charcoal", icon: Moon },
 ];
 
-export function SettingsPage({ settings, persisted, isSample, vault = "", onImported = () => {}, onSyncStart, onSyncEnd, modifier, desktop, trayAvailable, onChange, onBack, onOpenVault, section = "general", onSection, version = "", update = null, updateStatus = "", onCheckUpdate = () => {}, onInstallUpdate = () => {}, onUpdatePage = () => {} }: SettingsPageProps) {
+export function SettingsPage({ settings, persisted, isSample, vault = "", onImported = () => {}, onSyncStart, onSyncEnd, modifier, desktop, trayAvailable, onChange, onBack, onOpenVault, onOpenPasswords = () => {}, section = "general", onSection, version = "", update = null, updateStatus = "", onCheckUpdate = () => {}, onInstallUpdate = () => {}, onUpdatePage = () => {} }: SettingsPageProps) {
   const [recording, setRecording] = useState<ShortcutAction | null>(null);
   const [shortcutError, setShortcutError] = useState("");
   const mac = modifier === "⌘";
@@ -53,8 +62,8 @@ export function SettingsPage({ settings, persisted, isSample, vault = "", onImpo
       <span className="settings-saved"><Check size={14} /> {persisted ? "Saved on this device" : "For this session only"}</span>
     </div>
 
-    {onSection && <div className="settings-tabs" role="tablist" aria-label="Settings sections"><button type="button" role="tab" aria-selected={section === "general"} onClick={() => onSection("general")}>General</button><button type="button" role="tab" aria-selected={section === "updates"} onClick={() => onSection("updates")}>Updates{update && <span className="update-dot" />}</button><button type="button" role="tab" aria-selected={section === "cloud"} onClick={() => onSection("cloud")}>Cloud</button></div>}
-    {section === "cloud" ? <GoogleSettings desktop={desktop} vault={vault} isSample={isSample} onImported={onImported} onSyncStart={onSyncStart} onSyncEnd={onSyncEnd} /> : section === "updates" ? <UpdatesSettings version={version} update={update} status={updateStatus} desktop={desktop} onCheck={onCheckUpdate} onInstall={onInstallUpdate} onPage={onUpdatePage} /> : <div className="settings-layout">
+    {onSection && <div className="settings-tabs" role="tablist" aria-label="Settings sections"><button type="button" role="tab" aria-selected={section === "general"} onClick={() => onSection("general")}>General</button><button type="button" role="tab" aria-selected={section === "passwords"} onClick={() => onSection("passwords")}>Passwords</button><button type="button" role="tab" aria-selected={section === "updates"} onClick={() => onSection("updates")}>Updates{update && <span className="update-dot" />}</button><button type="button" role="tab" aria-selected={section === "cloud"} onClick={() => onSection("cloud")}>Cloud</button></div>}
+    {section === "passwords" ? <PasswordSettings onOpenVault={onOpenPasswords} /> : section === "cloud" ? <GoogleSettings desktop={desktop} vault={vault} isSample={isSample} onImported={onImported} onSyncStart={onSyncStart} onSyncEnd={onSyncEnd} /> : section === "updates" ? <UpdatesSettings version={version} update={update} status={updateStatus} desktop={desktop} onCheck={onCheckUpdate} onInstall={onInstallUpdate} onPage={onUpdatePage} /> : <div className="settings-layout">
       <div className="settings-main">
         <section className="settings-card" aria-labelledby="appearance-title">
           <div className="settings-card-heading"><div><h2 id="appearance-title">Appearance</h2><p>Set the mood for your workspace.</p></div></div>

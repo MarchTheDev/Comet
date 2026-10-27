@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { ChevronDown, ChevronRight, GitBranch, Minus, Network, Plus, RotateCcw } from "lucide-react";
 import { FileIcon } from "./FileIcon";
-import { graphEdges, graphPositionWithoutOverlap } from "./utils/graph";
+import { graphEdges, graphPositionWithoutOverlap, graphRepulsion } from "./utils/graph";
 import { displayEntryName, isMarkdown, isPathInside, normalizePath, noteTitle, parentPath, type Entry, type TreeNode } from "./utils/vault";
 import { readNote } from "./utils/vaultBridge";
 
@@ -81,12 +81,44 @@ function readPositions(vault: string): Record<string, Point> {
 export function BrainExplore({ vault, name, entries, onOpen, onActivate, onContext, selectedPaths, onClearSelection }: Common & { entries: Entry[] }) {
   const [contents, setContents] = useState<Record<string, string>>({});
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(() => new Set());
-  const toggleFolder = (path: string) => setExpandedFolders((previous) => { const next = new Set(previous); const key = normalizePath(path); if (next.has(key)) next.delete(key); else next.add(key); return next; });
   const [loading, setLoading] = useState(true);
   const [zoom, setZoom] = useState(() => typeof window !== "undefined" && window.innerWidth <= 600 ? 1.3 : 1);
   const [pan, setPan] = useState<Point>({ x: 0, y: 0 });
   const [positions, setPositions] = useState<Record<string, Point>>(() => readPositions(vault));
+  // Saved user moves and transient positions are intentionally separate. A
+  // drag may freeze visible defaults for the gesture, but never writes them.
+  const persistedPositions = useRef<Record<string, Point> | null>(null);
+  if (!persistedPositions.current) persistedPositions.current = readPositions(vault);
+  const toggleFolder = (path: string) => {
+    const key = normalizePath(path);
+    if (expandedFolders.has(key)) setPositions((previous) => Object.fromEntries(Object.entries(previous).filter(([item]) => item === key || !isPathInside(item, key) || !!persistedPositions.current?.[item])));
+    setExpandedFolders((previous) => { const next = new Set(previous); if (next.has(key)) next.delete(key); else next.add(key); return next; });
+  };
+  const [repelled, setRepelled] = useState<Record<string, Point>>({});
+  const repulsionCurrent = useRef<Record<string, Point>>({}), repulsionTarget = useRef<Record<string, Point>>({}), repulsionFrame = useRef<number | null>(null), dragCleanup = useRef<(() => void) | null>(null);
+  const animateRepulsion = () => {
+    const target = repulsionTarget.current, current = repulsionCurrent.current, next: Record<string, Point> = {}; let moving = false;
+    for (const key of new Set([...Object.keys(current), ...Object.keys(target)])) {
+      const from = current[key] ?? { x: 0, y: 0 }, to = target[key] ?? { x: 0, y: 0 };
+      const point = { x: from.x + (to.x - from.x) * .25, y: from.y + (to.y - from.y) * .25 };
+      if (Math.hypot(point.x - to.x, point.y - to.y) > .3) moving = true;
+      else { point.x = to.x; point.y = to.y; }
+      if (Math.abs(point.x) > .01 || Math.abs(point.y) > .01) next[key] = point;
+    }
+    repulsionCurrent.current = next; setRepelled(next);
+    repulsionFrame.current = moving ? window.requestAnimationFrame(animateRepulsion) : null;
+  };
+  const pushNeighbors = (targets: Record<string, Point>) => {
+    repulsionTarget.current = targets;
+    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+      if (repulsionFrame.current !== null) window.cancelAnimationFrame(repulsionFrame.current);
+      repulsionFrame.current = null; repulsionCurrent.current = targets; setRepelled(targets); return;
+    }
+    if (repulsionFrame.current === null) repulsionFrame.current = window.requestAnimationFrame(animateRepulsion);
+  };
+  useEffect(() => () => { dragCleanup.current?.(); if (repulsionFrame.current !== null) window.cancelAnimationFrame(repulsionFrame.current); }, []);
   const [dragging, setDragging] = useState(false);
+  const [resetLayout, setResetLayout] = useState(false), [layoutError, setLayoutError] = useState("");
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<"all" | "notes">("all");
   const svg = useRef<SVGSVGElement>(null);
@@ -155,8 +187,11 @@ export function BrainExplore({ vault, name, entries, onOpen, onActivate, onConte
     });
   }, [filtered, positions, vault]);
   const edges = useMemo(() => graphEdges(vault, entries, contents), [vault, entries, contents]);
-  const rootPosition = positions[normalizePath(vault)] ?? { x: 600, y: 520 };
-  const positionMap = useMemo(() => new Map([[normalizePath(vault), rootPosition], ...positioned.map(({ entry, x, y }) => [normalizePath(entry.path), { x, y }] as const)]), [positioned, vault, rootPosition.x, rootPosition.y]);
+  const baseRoot = positions[normalizePath(vault)] ?? { x: 600, y: 520 };
+  const rootShift = repelled[normalizePath(vault)] ?? { x: 0, y: 0 };
+  const rootPosition = { x: baseRoot.x + rootShift.x, y: baseRoot.y + rootShift.y };
+  const visualNodes = positioned.map((node) => { const shift = repelled[normalizePath(node.entry.path)] ?? { x: 0, y: 0 }; return { ...node, x: node.x + shift.x, y: node.y + shift.y }; });
+  const positionMap = new Map([[normalizePath(vault), rootPosition], ...visualNodes.map(({ entry, x, y }) => [normalizePath(entry.path), { x, y }] as const)]);
   const drawn = edges.filter((edge) => positionMap.has(normalizePath(edge.from)) && positionMap.has(normalizePath(edge.to)));
   const svgPoint = (clientX: number, clientY: number): Point => {
     const element = svg.current; if (!element) return { x: clientX, y: clientY };
@@ -184,7 +219,7 @@ export function BrainExplore({ vault, name, entries, onOpen, onActivate, onConte
   }, []);
   const startDrag = (event: ReactPointerEvent, node?: Positioned) => {
     if (event.button !== 0) return;
-    event.preventDefault(); event.stopPropagation();
+    event.preventDefault(); event.stopPropagation(); dragCleanup.current?.();
     const pointer = event.pointerId, start = svgPoint(event.clientX, event.clientY), startX = event.clientX, startY = event.clientY;
     const initialPan = pan, key = node ? normalizePath(node.entry.path) : "";
     // Default placements are relative to their parents. Freeze what is already
@@ -196,10 +231,15 @@ export function BrainExplore({ vault, name, entries, onOpen, onActivate, onConte
       if (e.pointerId !== pointer) return;
       if (!moved && Math.hypot(e.clientX - startX, e.clientY - startY) < 4) return;
       moved = true; setDragging(true); const current = svgPoint(e.clientX, e.clientY);
-      if (node) { nextPoint = { x: Math.max(-99_999, Math.min(99_999, node.x + (current.x - start.x) / zoom)), y: Math.max(-99_999, Math.min(99_999, node.y + (current.y - start.y) / zoom)) }; setPositions((previous) => ({ ...previous, ...frozen, [key]: nextPoint! })); }
+      if (node) {
+        nextPoint = { x: Math.max(-99_999, Math.min(99_999, node.x + (current.x - start.x) / zoom)), y: Math.max(-99_999, Math.min(99_999, node.y + (current.y - start.y) / zoom)) };
+        setPositions((previous) => ({ ...previous, ...frozen, [key]: nextPoint! }));
+        const others = [{ key: normalizePath(vault), point: baseRoot }, ...positioned.map((item) => ({ key: normalizePath(item.entry.path), point: { x: item.x, y: item.y } }))];
+        const targets: Record<string, Point> = {}; others.forEach((item, index) => { if (item.key !== key) targets[item.key] = graphRepulsion(nextPoint!, item.point, index); }); pushNeighbors(targets);
+      }
       else setPan({ x: initialPan.x + current.x - start.x, y: initialPan.y + current.y - start.y });
     };
-    const cleanup = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", end); window.removeEventListener("pointercancel", cancel); setDragging(false); };
+    const cleanup = (updateUi = true) => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", end); window.removeEventListener("pointercancel", cancel); dragCleanup.current = null; if (updateUi) { setDragging(false); pushNeighbors({}); } };
     const end = (e: PointerEvent) => {
       if (e.pointerId !== pointer) return; cleanup();
       if (moved && node && nextPoint) {
@@ -207,20 +247,21 @@ export function BrainExplore({ vault, name, entries, onOpen, onActivate, onConte
         // Pointer-up can land outside the original node, in which case no
         // click follows. Do not swallow the user's next intentional click.
         window.setTimeout(() => { suppressClick.current = false; }, 0);
-        const saved = { ...positions, ...frozen, [key]: nextPoint };
+        const saved = { ...persistedPositions.current, [key]: nextPoint }; persistedPositions.current = saved;
         try { localStorage.setItem(graphKey(vault), JSON.stringify(saved)); } catch { /* layout is optional */ }
       } else if (!node && !moved) onClearSelection();
     };
     const cancel = (e: PointerEvent) => { if (e.pointerId === pointer) { cleanup(); if (node && moved) setPositions(positions); else if (!node && moved) setPan(initialPan); } };
-    window.addEventListener("pointermove", move); window.addEventListener("pointerup", end); window.addEventListener("pointercancel", cancel);
+    dragCleanup.current = () => cleanup(false); window.addEventListener("pointermove", move); window.addEventListener("pointerup", end); window.addEventListener("pointercancel", cancel);
   };
   return <section className="explore-card brain-card" aria-labelledby="brain-title"><div className="explore-heading"><span className="explore-heading-icon"><Network size={20} /></span><div><span className="section-eyebrow">EXPLORE YOUR SPACE</span><h2 id="brain-title">Brain view</h2><p>Click a folder to reveal its contents. Drag nodes or the background to arrange the graph; right-click a node for more actions.</p></div></div>
-    <div className="brain-controls"><label><span className="sr-only">Filter graph</span><input aria-label="Filter graph" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Find a node…" /></label><button type="button" aria-pressed={filter === "notes"} onClick={() => setFilter((value) => value === "all" ? "notes" : "all")}>Notes only</button><span className="brain-spacer" /><button type="button" aria-label="Reset graph view" title="Reset view" onClick={() => { setZoom(window.innerWidth <= 600 ? 1.3 : 1); setPan({ x: 0, y: 0 }); }}><RotateCcw size={14} /></button><button type="button" aria-label="Zoom graph out" onClick={() => setZoom((value) => Math.max(.6, Math.round((value - .2) * 10) / 10))}><Minus size={15} /></button><span>{Math.round(zoom * 100)}%</span><button type="button" aria-label="Zoom graph in" onClick={() => setZoom((value) => Math.min(2, Math.round((value + .2) * 10) / 10))}><Plus size={15} /></button></div>
+    <div className="brain-controls"><label><span className="sr-only">Filter graph</span><input aria-label="Filter graph" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Find a node…" /></label><button type="button" aria-pressed={filter === "notes"} onClick={() => setFilter((value) => value === "all" ? "notes" : "all")}>Notes only</button><span className="brain-spacer" /><button type="button" onClick={() => { setResetLayout(true); setLayoutError(""); }}>Reset layout</button><button type="button" aria-label="Reset graph view" title="Reset view" onClick={() => { setZoom(window.innerWidth <= 600 ? 1.3 : 1); setPan({ x: 0, y: 0 }); }}><RotateCcw size={14} /></button><button type="button" aria-label="Zoom graph out" onClick={() => setZoom((value) => Math.max(.6, Math.round((value - .2) * 10) / 10))}><Minus size={15} /></button><span>{Math.round(zoom * 100)}%</span><button type="button" aria-label="Zoom graph in" onClick={() => setZoom((value) => Math.min(2, Math.round((value + .2) * 10) / 10))}><Plus size={15} /></button></div>
+    {resetLayout && <div className="brain-reset-confirm" role="group" aria-label="Reset saved graph layout"><span>Reset all saved node positions? Your files won't change.</span><button type="button" onClick={() => setResetLayout(false)}>Cancel</button><button type="button" onClick={() => { try { localStorage.removeItem(graphKey(vault)); persistedPositions.current = {}; setPositions({}); setExpandedFolders(new Set()); setResetLayout(false); } catch { setLayoutError("Couldn't reset the saved graph positions on this device."); } }}>Reset positions</button>{layoutError && <span role="alert">{layoutError}</span>}</div>}
     <div className={`brain-stage${dragging ? " dragging" : ""}`}><svg ref={svg} viewBox="0 0 1200 1040" preserveAspectRatio="xMidYMid meet" role="group" aria-label={`Workspace graph for ${name}`} onPointerDown={(event) => startDrag(event)}>
       <g transform={`translate(${pan.x} ${pan.y}) translate(600 520) scale(${zoom}) translate(-600 -520)`}>
         <g className="brain-edges">{drawn.map((edge) => { const from = positionMap.get(normalizePath(edge.from))!, to = positionMap.get(normalizePath(edge.to))!; return <line key={`${edge.kind}:${edge.from}:${edge.to}`} className={edge.kind} x1={from.x} y1={from.y} x2={to.x} y2={to.y} />; })}</g>
-        <g className="brain-root" data-graph-root transform={`translate(${rootPosition.x} ${rootPosition.y})`} aria-label={`Drag ${name} workspace node`} onPointerDown={(event) => startDrag(event, { entry: { path: vault, name, kind: "folder" }, ...rootPosition })}><circle r="35" /><text textAnchor="middle" y="57">{name.slice(0, 22)}</text></g>
-        {positioned.map((node) => { const { entry, x, y } = node; const folderOpen = expandedFolders.has(normalizePath(entry.path)); return <g className={`brain-node ${entry.kind}${selectedPaths.has(entry.path) ? " multi-selected" : ""}`} data-graph-path={entry.path} key={entry.path} transform={`translate(${x} ${y})`} role="button" tabIndex={0} aria-label={entry.kind === "folder" ? `${folderOpen ? "Collapse" : "Expand"} ${entry.name}` : `Open ${entry.name}`} aria-expanded={entry.kind === "folder" ? folderOpen : undefined} aria-pressed={entry.kind === "file" ? selectedPaths.has(entry.path) : undefined} onPointerDown={(event) => startDrag(event, node)} onContextMenu={(event) => onContext?.(event, entry)} onClick={(event) => { if (suppressClick.current) { suppressClick.current = false; return; } if (entry.kind === "folder" && !event.ctrlKey && !event.metaKey && !event.shiftKey) toggleFolder(entry.path); else onActivate(event, entry, positioned.map((item) => item.entry.path)); }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); if (entry.kind === "folder") toggleFolder(entry.path); else onOpen(entry); } }}><title>{entry.path}</title><circle className="brain-node-hit" r="36" /><circle r={entry.kind === "folder" ? 25 : 20} />{entry.kind === "folder" && <text className="brain-folder-glyph" textAnchor="middle" y="7">{folderOpen ? "−" : "+"}</text>}<text textAnchor="middle" y="45">{(entry.kind === "folder" ? entry.name : isMarkdown(entry.path) ? noteTitle(entry.name) : displayEntryName(entry.name)).slice(0, 22)}</text></g>; })}
+        <g className="brain-root" data-graph-root transform={`translate(${rootPosition.x} ${rootPosition.y})`} aria-label={`Drag ${name} workspace node`} onPointerDown={(event) => startDrag(event, { entry: { path: vault, name, kind: "folder" }, ...baseRoot })}><circle r="35" /><text textAnchor="middle" y="57">{name.slice(0, 22)}</text></g>
+        {visualNodes.map((node) => { const { entry, x, y } = node; const folderOpen = expandedFolders.has(normalizePath(entry.path)); return <g className={`brain-node ${entry.kind}${selectedPaths.has(entry.path) ? " multi-selected" : ""}`} data-graph-path={entry.path} key={entry.path} transform={`translate(${x} ${y})`} role="button" tabIndex={0} aria-label={entry.kind === "folder" ? `${folderOpen ? "Collapse" : "Expand"} ${entry.name}` : `Open ${entry.name}`} aria-expanded={entry.kind === "folder" ? folderOpen : undefined} aria-pressed={entry.kind === "file" ? selectedPaths.has(entry.path) : undefined} onPointerDown={(event) => startDrag(event, node)} onContextMenu={(event) => onContext?.(event, entry)} onClick={(event) => { if (suppressClick.current) { suppressClick.current = false; return; } if (entry.kind === "folder" && !event.ctrlKey && !event.metaKey && !event.shiftKey) toggleFolder(entry.path); else onActivate(event, entry, positioned.map((item) => item.entry.path)); }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); if (entry.kind === "folder") toggleFolder(entry.path); else onOpen(entry); } }}><title>{entry.path}</title><circle className="brain-node-hit" r="36" /><circle r={entry.kind === "folder" ? 25 : 20} />{entry.kind === "folder" && <text className="brain-folder-glyph" textAnchor="middle" y="7">{folderOpen ? "−" : "+"}</text>}<text textAnchor="middle" y="45">{(entry.kind === "folder" ? entry.name : isMarkdown(entry.path) ? noteTitle(entry.name) : displayEntryName(entry.name)).slice(0, 22)}</text></g>; })}
       </g>
     </svg></div>
     <div className="brain-caption"><span>{loading ? "Reading note links…" : `${drawn.filter((edge) => edge.kind === "link").length} note links`} · {positioned.length} items shown</span><span>{entries.length > 150 ? "Graph displays up to 150 matching items. " : ""}{notes.length > 120 ? "Links are read from the first 120 notes." : ""}</span></div>

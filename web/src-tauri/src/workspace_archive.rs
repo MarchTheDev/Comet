@@ -43,6 +43,9 @@ pub fn pack(vault: &str) -> Result<Vec<u8>, String> {
         let mut children = fs::read_dir(&directory).map_err(|_| "Couldn't read a workspace folder.")?.collect::<Result<Vec<_>, _>>().map_err(|_| "Couldn't read a workspace item.")?;
         children.sort_by_key(|entry| entry.file_name());
         for entry in children {
+            if entry.file_name().to_str().is_some_and(crate::upload::is_stage_name) {
+                return Err("An incomplete Comet file import is present. Wait for it to finish, or remove the .comet-upload-…part file after an interrupted import, then try syncing again.".into());
+            }
             count += 1; if count > MAX_ENTRIES { return Err("This workspace has more than 20,000 items.".into()); }
             let path = entry.path(); let metadata = fs::symlink_metadata(&path).map_err(|_| "Couldn't inspect a workspace item.")?;
             if metadata.file_type().is_symlink() { return Err("Snapshots don't follow symbolic links. Remove or exclude the link before uploading; nothing was uploaded.".into()); }

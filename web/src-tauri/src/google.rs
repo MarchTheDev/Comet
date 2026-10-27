@@ -12,8 +12,7 @@ use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_dialog::DialogExt;
 
 const SERVICE: &str = "com.marco.comet.google";
-static CALENDAR_CONNECTING: AtomicBool = AtomicBool::new(false);
-static DRIVE_CONNECTING: AtomicBool = AtomicBool::new(false);
+static CONNECTING: AtomicBool = AtomicBool::new(false);
 
 #[derive(Serialize, Deserialize)]
 struct Credentials { client_id: String, client_secret: String, refresh_token: String }
@@ -24,6 +23,7 @@ fn scope(service: &str) -> Result<&'static str, String> {
     match service {
         "calendar" => Ok("https://www.googleapis.com/auth/calendar.events"),
         "drive" => Ok("https://www.googleapis.com/auth/drive.file"),
+        "all" => Ok("https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/drive.file"),
         _ => Err("Unknown Google service.".into()),
     }
 }
@@ -32,7 +32,11 @@ fn entry(service: &str) -> Result<keyring::Entry, String> {
     keyring::Entry::new(SERVICE, service).map_err(|_| "The system credential store isn't available.".into())
 }
 fn read_credentials(service: &str) -> Result<Credentials, String> {
-    let raw = entry(service)?.get_password().map_err(|_| "Google isn't connected or the system credential store is locked.")?;
+    let raw = match entry("all")?.get_password() {
+        Ok(raw) => raw,
+        Err(keyring::Error::NoEntry) if service != "all" => entry(service)?.get_password().map_err(|_| "Google isn't connected or the system credential store is locked.")?,
+        Err(_) => return Err("Google isn't connected or the system credential store is locked.".into()),
+    };
     serde_json::from_str(&raw).map_err(|_| "Stored Google authorization is invalid. Disconnect and reconnect.".into())
 }
 fn client() -> Result<reqwest::Client, String> {
@@ -44,26 +48,37 @@ impl Drop for ConnectingGuard { fn drop(&mut self) { self.0.store(false, Orderin
 
 #[tauri::command]
 pub async fn google_status(service: String) -> Result<bool, String> {
-    tauri::async_runtime::spawn_blocking(move || match entry(&service)?.get_password() {
-        Ok(_) => Ok(true), Err(keyring::Error::NoEntry) => Ok(false), Err(_) => Err("The system credential store isn't available or is locked.".into()),
+    scope(&service)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        match entry("all")?.get_password() {
+            Ok(_) => Ok(true),
+            Err(keyring::Error::NoEntry) if service != "all" => match entry(&service)?.get_password() {
+                Ok(_) => Ok(true), Err(keyring::Error::NoEntry) => Ok(false), Err(_) => Err("The system credential store isn't available or is locked.".into()),
+            },
+            Err(keyring::Error::NoEntry) => Ok(false),
+            Err(_) => Err("The system credential store isn't available or is locked.".into()),
+        }
     }).await.map_err(|_| "Couldn't check Google connection.".to_string())?
 }
 
 #[tauri::command]
 pub async fn google_disconnect(service: String) -> Result<(), String> {
     scope(&service)?;
-    if (if service == "calendar" { &CALENDAR_CONNECTING } else { &DRIVE_CONNECTING }).load(Ordering::Acquire) { return Err("Wait for the sign-in to finish first.".into()); }
-    tauri::async_runtime::spawn_blocking(move || match entry(&service)?.delete_credential() {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()), Err(_) => Err("Couldn't remove Google authorization from the system credential store.".into()),
+    if CONNECTING.load(Ordering::Acquire) { return Err("Wait for the sign-in to finish first.".into()); }
+    tauri::async_runtime::spawn_blocking(move || {
+        let services: Vec<&str> = if service == "all" { vec!["all", "calendar", "drive"] } else { vec![service.as_str()] };
+        for name in services {
+            match entry(name)?.delete_credential() { Ok(()) | Err(keyring::Error::NoEntry) => {}, Err(_) => return Err("Couldn't remove Google authorization from the system credential store.".into()) }
+        }
+        Ok(())
     }).await.map_err(|_| "Couldn't disconnect Google.".to_string())?
 }
 
 #[tauri::command]
 pub async fn google_connect(app: tauri::AppHandle, service: String, client_id: String, client_secret: String) -> Result<(), String> {
     let requested_scope = scope(&service)?;
-    let lock = if service == "calendar" { &CALENDAR_CONNECTING } else { &DRIVE_CONNECTING };
-    if lock.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() { return Err("A Google sign-in is already in progress.".into()); }
-    let _guard = ConnectingGuard(lock);
+    if CONNECTING.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() { return Err("A Google sign-in is already in progress.".into()); }
+    let _guard = ConnectingGuard(&CONNECTING);
     if client_id.len() > 300 || !client_id.ends_with(".apps.googleusercontent.com") || !client_id.bytes().all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_' | b'.')) || client_secret.len() > 300 || client_secret.chars().any(char::is_control) {
         return Err("Enter a valid Google OAuth desktop client ID and optional client secret.".into());
     }
@@ -86,7 +101,7 @@ pub async fn google_connect(app: tauri::AppHandle, service: String, client_id: S
     let response = client()?.post("https://oauth2.googleapis.com/token").form(&form).send().await.map_err(|_| "Couldn't exchange the Google authorization.")?;
     if !response.status().is_success() { return Err("Google declined the authorization. Check the desktop OAuth client and enabled API, then try again.".into()); }
     let reply: TokenReply = response.json().await.map_err(|_| "Google returned an invalid authorization response.")?;
-    if reply.scope.as_deref().is_some_and(|granted| !granted.split_whitespace().any(|value| value == requested_scope)) { return Err("Google did not grant the requested permission.".into()); }
+    if reply.scope.as_deref().is_some_and(|granted| !requested_scope.split_whitespace().all(|scope| granted.split_whitespace().any(|value| value == scope))) { return Err("Google did not grant the requested permission.".into()); }
     let refresh_token = reply.refresh_token.filter(|token| !token.is_empty() && token.len() < 10_000).ok_or("Google didn't return a refresh token. Disconnect Comet in your Google account and try again.")?;
     let credentials = serde_json::to_string(&Credentials { client_id, client_secret, refresh_token }).map_err(|_| "Couldn't prepare Google authorization.")?;
     tauri::async_runtime::spawn_blocking(move || entry(&service)?.set_password(&credentials).map_err(|_| "Couldn't store authorization in the system credential store. No insecure fallback was used.".into())).await.map_err(|_| "Couldn't store Google authorization.".to_string())?
@@ -268,5 +283,174 @@ mod tests {
         assert!(!event_patch(&json!({"summary":"x","start":{"date":"2026-10-27","timeZone":"evil"}}), false));
         assert!(event_id("abc_123-xyz")); assert!(!event_id("../event"));
         assert!(!time_bound("2026-01-01&x=1"));
+    }
+}
+
+// Immutable revision snapshots form a small DAG. Concurrent uploads create
+// separate heads; a later sync merges them with their common ancestor rather
+// than letting a last-writer-wins update erase another device's work.
+static SYNCING: AtomicBool = AtomicBool::new(false);
+#[derive(Clone, Debug)]
+struct Revision { id: String, group: String, name: String, modified: String, parents: Vec<String> }
+fn group_id(value: &str) -> bool { value.len() == 32 && value.bytes().all(|b| b.is_ascii_hexdigit()) }
+fn revision(value: &Value) -> Option<Revision> {
+    let id = value.get("id")?.as_str()?.to_string(); let props = value.get("appProperties")?.as_object()?;
+    let group = props.get("cometGroup")?.as_str()?.to_string();
+    if !drive_id(&id) || !group_id(&group) || props.get("cometSync")?.as_str()? != "2" { return None; }
+    let mut parents = Vec::new();
+    for key in ["parentA", "parentB"] { if let Some(parent) = props.get(key).and_then(Value::as_str).filter(|v| !v.is_empty()) { if !drive_id(parent) || parent == id { return None; } parents.push(parent.to_string()); } }
+    Some(Revision { id, group, name: value.get("name").and_then(Value::as_str).unwrap_or("Comet workspace").chars().take(150).collect(), modified: value.get("modifiedTime").and_then(Value::as_str).unwrap_or("").to_string(), parents })
+}
+async fn revisions(access: &str) -> Result<Vec<Revision>, String> {
+    let client = drive_client()?; let mut result = Vec::new(); let mut page = String::new();
+    for _ in 0..20 {
+        let response = client.get("https://www.googleapis.com/drive/v3/files").bearer_auth(access)
+            .query(&[("q", "trashed = false and appProperties has { key='cometSync' and value='2' }"), ("fields", "nextPageToken,files(id,name,modifiedTime,appProperties)"), ("pageSize", "100"), ("orderBy", "modifiedTime desc"), ("pageToken", page.as_str())])
+            .send().await.map_err(|_| "Couldn't reach Google Drive.")?;
+        let data = response_json(response).await?;
+        if let Some(files) = data.get("files").and_then(Value::as_array) { result.extend(files.iter().filter_map(revision)); }
+        page = data.get("nextPageToken").and_then(Value::as_str).unwrap_or("").to_string();
+        if page.is_empty() { return Ok(result); }
+        if page.len() > 2000 { return Err("Google returned an invalid page token.".into()); }
+    }
+    Err("Too many sync revisions to list safely. No files were changed.".into())
+}
+fn heads(revisions: &[Revision]) -> Vec<&Revision> {
+    let referenced: std::collections::HashSet<&str> = revisions.iter().flat_map(|r| r.parents.iter().map(String::as_str)).collect();
+    revisions.iter().filter(|r| !referenced.contains(r.id.as_str())).collect()
+}
+fn ancestor_distances(id: &str, revisions: &[Revision]) -> std::collections::HashMap<String, usize> {
+    let map: std::collections::HashMap<&str, &Revision> = revisions.iter().map(|r| (r.id.as_str(), r)).collect();
+    let mut distances = std::collections::HashMap::new(); let mut pending = std::collections::VecDeque::from([(id.to_string(), 0usize)]);
+    while let Some((next, distance)) = pending.pop_front() {
+        if distances.contains_key(&next) || distance > revisions.len() { continue; }
+        distances.insert(next.clone(), distance);
+        if let Some(rev) = map.get(next.as_str()) { for parent in &rev.parents { pending.push_back((parent.clone(), distance + 1)); } }
+    }
+    distances
+}
+fn common_ancestor(left: &str, right: &str, revisions: &[Revision]) -> Option<String> {
+    let a = ancestor_distances(left, revisions); let b = ancestor_distances(right, revisions);
+    a.iter().filter_map(|(id, distance)| b.get(id).map(|other| (id, distance + other))).min_by(|(left_id, left_distance), (right_id, right_distance)| left_distance.cmp(right_distance).then_with(|| left_id.cmp(right_id))).map(|(id, _)| id.clone())
+}
+async fn sync_download(access: &str, id: &str, group: &str) -> Result<Vec<u8>, String> {
+    if !drive_id(id) || !group_id(group) { return Err("Invalid sync revision.".into()); }
+    let client = drive_client()?; let url = format!("https://www.googleapis.com/drive/v3/files/{id}");
+    let meta = response_json(client.get(&url).query(&[("fields", "id,name,modifiedTime,appProperties,size,trashed")]).bearer_auth(access).send().await.map_err(|_| "Couldn't reach Google Drive.")?).await?;
+    if meta.get("trashed").and_then(Value::as_bool) == Some(true) || !revision(&meta).is_some_and(|r| r.group == group && r.id == id) { return Err("The sync revision is missing or belongs to another workspace.".into()); }
+    if meta.get("size").and_then(Value::as_str).and_then(|s| s.parse::<usize>().ok()).is_some_and(|size| size > crate::workspace_archive::MAX_ARCHIVE) { return Err("The sync revision exceeds 128 MB.".into()); }
+    let mut response = client.get(&url).query(&[("alt", "media")]).bearer_auth(access).send().await.map_err(|_| "Couldn't download the sync revision.")?;
+    if !response.status().is_success() || response.content_length().is_some_and(|size| size > crate::workspace_archive::MAX_ARCHIVE as u64) { return Err("The sync revision is missing or exceeds 128 MB.".into()); }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|_| "The sync download was interrupted.")? {
+        if bytes.len() + chunk.len() > crate::workspace_archive::MAX_ARCHIVE { return Err("The sync revision exceeds 128 MB.".into()); }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
+}
+async fn sync_upload(access: &str, name: &str, group: &str, parents: &[String], bytes: &[u8]) -> Result<String, String> {
+    if !group_id(group) || parents.len() > 2 || parents.iter().any(|id| !drive_id(id)) { return Err("Invalid sync revision metadata.".into()); }
+    let mut nonce = [0u8; 16]; getrandom::fill(&mut nonce).map_err(|_| "Couldn't prepare a sync revision.")?;
+    let boundary = format!("comet{:x}", u128::from_le_bytes(nonce));
+    let mut props = serde_json::Map::new();
+    props.insert("cometSync".into(), json!("2")); props.insert("cometGroup".into(), json!(group));
+    if let Some(parent) = parents.first() { props.insert("parentA".into(), json!(parent)); }
+    if let Some(parent) = parents.get(1) { props.insert("parentB".into(), json!(parent)); }
+    let meta = serde_json::to_string(&json!({ "name": name, "mimeType": "application/octet-stream", "appProperties": props })).map_err(|_| "Couldn't prepare sync metadata.")?;
+    let mut body = format!("--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n{meta}\r\n--{boundary}\r\nContent-Type: application/octet-stream\r\n\r\n").into_bytes();
+    body.extend_from_slice(bytes); body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    let response = drive_client()?.post("https://www.googleapis.com/upload/drive/v3/files").query(&[("uploadType", "multipart"), ("fields", "id")]).bearer_auth(access).header("Content-Type", format!("multipart/related; boundary={boundary}")).body(body).send().await.map_err(|_| "The sync upload was interrupted; local files were preserved. Retry sync.")?;
+    let result = response_json(response).await?; result.get("id").and_then(Value::as_str).filter(|id| drive_id(id)).map(str::to_string).ok_or("Google returned an invalid sync revision ID.".into())
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncWorkspace { group: String, id: String, name: String, modified: String, branches: usize }
+#[tauri::command]
+pub async fn google_sync_list() -> Result<Vec<SyncWorkspace>, String> {
+    let access = token("drive").await?; let all = revisions(&access).await?;
+    let mut groups: std::collections::BTreeMap<String, Vec<Revision>> = std::collections::BTreeMap::new();
+    for item in all { groups.entry(item.group.clone()).or_default().push(item); }
+    Ok(groups.into_iter().filter_map(|(group, items)| {
+        let mut heads = heads(&items); heads.sort_by(|a, b| b.modified.cmp(&a.modified).then_with(|| a.id.cmp(&b.id)));
+        heads.first().map(|head| SyncWorkspace { group, id: head.id.clone(), name: head.name.clone(), modified: head.modified.clone(), branches: heads.len() })
+    }).collect())
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncImport { path: String, group: String, base: String }
+#[tauri::command]
+pub async fn google_sync_import(app: tauri::AppHandle, id: String, group: String) -> Result<Option<SyncImport>, String> {
+    if !drive_id(&id) || !group_id(&group) { return Err("Invalid synced workspace.".into()); }
+    let selected = app.dialog().file().set_title("Choose a folder for the synced workspace").blocking_pick_folder();
+    let Some(parent) = selected.and_then(|path| path.into_path().ok()) else { return Ok(None); };
+    let access = token("drive").await?; let bytes = sync_download(&access, &id, &group).await?;
+    let path = tauri::async_runtime::spawn_blocking(move || crate::workspace_archive::unpack(&bytes, &parent)).await.map_err(|_| "The import was interrupted.")??;
+    Ok(Some(SyncImport { path: path.to_string_lossy().to_string(), group, base: id }))
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncResult { group: String, base: String, applied: usize, conflicts: usize, deleted: usize, safety_folder: Option<String>, more: bool }
+#[tauri::command]
+pub async fn google_sync_now(vault: String, group: String, base: String) -> Result<SyncResult, String> {
+    if SYNCING.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() { return Err("A workspace sync is already running.".into()); }
+    let _guard = ConnectingGuard(&SYNCING);
+    if (!group.is_empty() && !group_id(&group)) || (!base.is_empty() && !drive_id(&base)) || (group.is_empty() != base.is_empty()) { return Err("Invalid workspace sync state.".into()); }
+    let access = token("drive").await?;
+    let name = std::path::Path::new(&vault).file_name().and_then(|value| value.to_str()).unwrap_or("Workspace").chars().filter(|c| !c.is_control() && !matches!(c, '/' | '\\')).take(100).collect::<String>();
+    let display_name = format!("Comet sync - {name}");
+    if group.is_empty() {
+        let mut nonce = [0u8; 16]; getrandom::fill(&mut nonce).map_err(|_| "Couldn't create a workspace identity.")?;
+        let group = nonce.iter().map(|b| format!("{b:02x}")).collect::<String>();
+        let path = vault.clone(); let snapshot = tauri::async_runtime::spawn_blocking(move || crate::workspace_archive::pack(&path)).await.map_err(|_| "Couldn't prepare the workspace.")??;
+        let id = sync_upload(&access, &display_name, &group, &[], &snapshot).await?;
+        return Ok(SyncResult { group, base: id, applied: 0, conflicts: 0, deleted: 0, safety_folder: None, more: false });
+    }
+    let all = revisions(&access).await?; let group_revs: Vec<_> = all.into_iter().filter(|r| r.group == group).collect();
+    if !group_revs.iter().any(|r| r.id == base) { return Err("The sync baseline is missing in Google Drive. No local files were changed; import a new copy or reconnect the original account.".into()); }
+    let mut current_heads = heads(&group_revs); current_heads.sort_by(|a, b| b.modified.cmp(&a.modified).then_with(|| a.id.cmp(&b.id)));
+    if current_heads.is_empty() { return Err("Google returned an invalid sync revision history. No local files were changed.".into()); }
+    let base_ancestors = ancestor_distances(&base, &group_revs);
+    let remote = current_heads.iter().find(|head| head.id != base && !base_ancestors.contains_key(&head.id)).map(|item| item.id.clone());
+    let mut summary = crate::workspace_archive::MergeSummary { applied: 0, conflicts: 0, deleted: 0, safety_folder: None };
+    let mut parents = vec![base.clone()];
+    let remote_snapshot = if let Some(remote_id) = remote {
+        let ancestor = common_ancestor(&base, &remote_id, &group_revs);
+        let original = if let Some(id) = ancestor { Some(sync_download(&access, &id, &group).await?) } else { None };
+        let incoming = sync_download(&access, &remote_id, &group).await?;
+        let path = vault.clone(); let incoming_copy = incoming.clone();
+        summary = tauri::async_runtime::spawn_blocking(move || crate::workspace_archive::merge(&path, original.as_deref(), &incoming_copy)).await.map_err(|_| "The local sync merge was interrupted.")??;
+        parents.push(remote_id); Some(incoming)
+    } else { None };
+    let describe_merge = |error: String| match &summary.safety_folder {
+        Some(folder) => format!("{error} Remote changes already merged locally were preserved. Replaced or deleted originals are in {folder}."),
+        None => format!("{error} Remote changes already merged locally were preserved."),
+    };
+    let path = vault.clone(); let snapshot = tauri::async_runtime::spawn_blocking(move || crate::workspace_archive::pack(&path)).await.map_err(|_| describe_merge("Couldn't prepare the workspace after merging.".into()))?.map_err(&describe_merge)?;
+    let base_snapshot = if remote_snapshot.is_none() { Some(sync_download(&access, &base, &group).await?) } else { None };
+    let id = if parents.len() == 1 && base_snapshot.as_ref().is_some_and(|old| old.as_slice() == snapshot.as_slice()) { base.clone() }
+        else if parents.len() == 2 && ancestor_distances(&parents[1], &group_revs).contains_key(&base) && remote_snapshot.as_ref().is_some_and(|old| old.as_slice() == snapshot.as_slice()) { parents[1].clone() }
+        else { sync_upload(&access, &display_name, &group, &parents, &snapshot).await.map_err(&describe_merge)? };
+    Ok(SyncResult { group, base: id, applied: summary.applied, conflicts: summary.conflicts, deleted: summary.deleted, safety_folder: summary.safety_folder, more: current_heads.len() > 1 })
+}
+
+#[cfg(test)]
+mod sync_history_tests {
+    use super::*;
+    fn rev(id: &str, parents: &[&str]) -> Revision { Revision { id: id.into(), group: "a".repeat(32), name: "vault".into(), modified: "".into(), parents: parents.iter().map(|v| v.to_string()).collect() } }
+    #[test]
+    fn finds_concurrent_heads_and_shared_ancestor() {
+        let history = vec![rev("root", &[]), rev("left", &["root"]), rev("right", &["root"])];
+        let mut ids: Vec<_> = heads(&history).iter().map(|r| r.id.clone()).collect(); ids.sort();
+        assert_eq!(ids, ["left", "right"]); assert_eq!(common_ancestor("left", "right", &history).as_deref(), Some("root"));
+        let mut merged = history.clone(); merged.push(rev("merge", &["left", "right"]));
+        assert_eq!(heads(&merged).iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["merge"]);
+        assert_eq!(common_ancestor("left", "merge", &merged).as_deref(), Some("left"));
+    }
+    #[test]
+    fn rejects_invalid_revision_metadata() {
+        let good = json!({"id":"abc-123", "appProperties":{"cometSync":"2", "cometGroup":"a".repeat(32), "parentA":"root"}});
+        assert!(revision(&good).is_some());
+        let bad = json!({"id":"../unsafe", "appProperties":{"cometSync":"2", "cometGroup":"a".repeat(32)}});
+        assert!(revision(&bad).is_none());
     }
 }

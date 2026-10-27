@@ -39,3 +39,16 @@ export function graphEdges(vault: string, entries: Entry[], contents: Record<str
   }
   return edges;
 }
+
+/** Reserve the whole node and its (bounded-width) label, not just the circle. */
+export function graphPositionWithoutOverlap(ideal: { x: number; y: number }, occupied: { x: number; y: number }[]): { x: number; y: number } {
+  const overlaps = (p: { x: number; y: number }) => occupied.some((other) => Math.abs(p.x - other.x) < 220 && Math.abs(p.y - other.y) < 120);
+  if (!overlaps(ideal)) return ideal;
+  // The spiral is unbounded: even a very dense imported layout eventually has
+  // a free slot, and it stays deterministic between renders.
+  for (let n = 1; ; n++) {
+    const radius = 45 * Math.sqrt(n), angle = n * 2.3999632297;
+    const candidate = { x: ideal.x + Math.cos(angle) * radius, y: ideal.y + Math.sin(angle) * radius };
+    if (!overlaps(candidate)) return candidate;
+  }
+}

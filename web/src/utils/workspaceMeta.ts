@@ -82,11 +82,16 @@ export function removeMeta(meta: WorkspaceMeta, path: string): WorkspaceMeta {
   };
 }
 
-export function reorderChildren(meta: WorkspaceMeta, parent: string, children: string[], dragged: string, target: string, after: boolean): WorkspaceMeta {
-  const key = normalizePath(parent), source = normalizePath(dragged), destination = normalizePath(target);
-  const list = children.map(normalizePath).filter((path) => path !== source);
-  const index = list.indexOf(destination);
-  if (!children.map(normalizePath).includes(source) || index < 0) return meta;
-  list.splice(index + (after ? 1 : 0), 0, source);
+/** Move a whole selection as one block, preserving its existing sibling order. */
+export function reorderChildrenGroup(meta: WorkspaceMeta, parent: string, children: string[], dragged: string[], target: string, after: boolean): WorkspaceMeta {
+  const key = normalizePath(parent), sources = new Set(dragged.map(normalizePath)), destination = normalizePath(target);
+  const siblings = [...new Set(children.map(normalizePath))], moving = siblings.filter((path) => sources.has(path));
+  if (!moving.length || moving.length !== sources.size || sources.has(destination)) return meta;
+  const list = siblings.filter((path) => !sources.has(path)), index = list.indexOf(destination);
+  if (index < 0) return meta;
+  list.splice(index + (after ? 1 : 0), 0, ...moving);
   return { ...meta, order: { ...meta.order, [key]: list } };
+}
+export function reorderChildren(meta: WorkspaceMeta, parent: string, children: string[], dragged: string, target: string, after: boolean): WorkspaceMeta {
+  return reorderChildrenGroup(meta, parent, children, [dragged], target, after);
 }

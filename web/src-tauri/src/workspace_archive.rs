@@ -172,3 +172,298 @@ mod tests {
         assert!(pack(root.to_str().unwrap()).is_err()); fs::remove_dir_all(root).unwrap();
     }
 }
+
+/// Three-way merge for Drive revisions. Never overwrites a changed local file;
+/// replaced/deleted originals are moved to a separate same-volume safety folder
+/// before create-new writes, so a racing editor cannot silently lose its work.
+#[derive(Debug, serde::Serialize)]
+pub struct MergeSummary { pub applied: usize, pub conflicts: usize, pub deleted: usize, pub safety_folder: Option<String> }
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct SnapshotValue<'a> { directory: bool, bytes: &'a [u8] }
+fn snapshot_map(bytes: &[u8]) -> Result<std::collections::BTreeMap<String, SnapshotValue<'_>>, String> {
+    Ok(validate(bytes)?.into_iter().map(|item| (item.name, SnapshotValue { directory: item.directory, bytes: &bytes[item.start..item.start + item.size] })).collect())
+}
+fn path_under(root: &Path, relative: &str) -> Result<PathBuf, String> {
+    if !safe_path(relative) { return Err("Sync encountered an unsafe path.".into()); }
+    let target = relative.split('/').fold(root.to_path_buf(), |base, part| base.join(part));
+    let parent = target.parent().ok_or("Invalid sync path.")?;
+    let resolved = fs::canonicalize(parent).map_err(|_| "A sync parent folder is missing.")?;
+    if !resolved.starts_with(root) { return Err("A sync path points outside the workspace.".into()); }
+    let mut check = root.to_path_buf();
+    for component in parent.strip_prefix(root).map_err(|_| "Invalid sync path.")?.components() {
+        check.push(component);
+        if fs::symlink_metadata(&check).map_err(|_| "A sync parent folder is missing.")?.file_type().is_symlink() { return Err("Sync does not follow symbolic links.".into()); }
+    }
+    Ok(target)
+}
+fn conflict_path(path: &Path, tag: &str, index: usize) -> Result<PathBuf, String> {
+    let name = path.file_name().and_then(|part| part.to_str()).ok_or("A sync filename is not UTF-8.")?;
+    // Keep extensions at the end so conflict copies still open as their type.
+    let (stem, ext) = name.rsplit_once('.').filter(|(stem, _)| !stem.is_empty()).map(|(stem, ext)| (stem, format!(".{ext}"))).unwrap_or((name, String::new()));
+    let suffix = if index == 0 { format!(" (Google conflict {tag}){ext}") } else { format!(" (Google conflict {tag}-{index}){ext}") };
+    if suffix.len() >= 255 { return Err("A sync filename is too long to preserve a conflict.".into()); }
+    let limit = 255 - suffix.len();
+    let mut trimmed = stem.to_string(); while trimmed.len() > limit { trimmed.pop(); }
+    if trimmed.is_empty() { return Err("A sync filename is too long to preserve a conflict.".into()); }
+    Ok(path.with_file_name(format!("{trimmed}{suffix}")))
+}
+// Stage complete bytes in the target directory, then publish atomically without
+// replacing an existing file. A failed/interrupted write never looks complete.
+fn atomic_write_new(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let parent = path.parent().ok_or_else(|| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+    for _ in 0..20 {
+        let mut nonce = [0u8; 16];
+        getrandom::fill(&mut nonce).map_err(|_| std::io::Error::other("Couldn't create temporary sync data"))?;
+        let temp = parent.join(format!(".comet-sync-{:x}.tmp", u128::from_le_bytes(nonce)));
+        let mut file = match OpenOptions::new().write(true).create_new(true).open(&temp) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        };
+        let written = file.write_all(bytes).and_then(|_| file.sync_all());
+        drop(file);
+        let result = written.and_then(|_| crate::rename_without_replace(&temp, path));
+        if result.is_err() { let _ = fs::remove_file(&temp); }
+        return result;
+    }
+    Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, "Couldn't create unique temporary sync data"))
+}
+fn current_file_matches(path: &Path, bytes: &[u8]) -> bool {
+    fs::symlink_metadata(path).ok().is_some_and(|m| m.is_file() && !m.file_type().is_symlink() && m.len() == bytes.len() as u64)
+        && fs::read(path).ok().is_some_and(|old| old == bytes)
+}
+fn conflict_copy(path: &Path, bytes: &[u8]) -> Result<bool, String> {
+    let hash = Sha256::digest(bytes); let tag = hash[..4].iter().map(|b| format!("{b:02x}")).collect::<String>();
+    for index in 0..1000 {
+        let candidate = conflict_path(path, &tag, index)?;
+        match atomic_write_new(&candidate, bytes) {
+            Ok(()) => return Ok(true),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                if current_file_matches(&candidate, bytes) { return Ok(false); }
+            },
+            Err(_) => return Err("Couldn't create a complete sync conflict copy; the original was not overwritten.".into()),
+        }
+    }
+    Err("Too many conflict copies with the same name.".into())
+}
+fn safety_directory(root: &Path, slot: &mut Option<PathBuf>) -> Result<PathBuf, String> {
+    if let Some(path) = slot { return Ok(path.clone()); }
+    let parent = root.parent().ok_or("The workspace has no parent folder for safe sync backups.")?;
+    let mut nonce = [0u8; 8]; getrandom::fill(&mut nonce).map_err(|_| "Couldn't create a safety folder.")?;
+    let target = parent.join(format!("Comet sync safety {:x}", u64::from_le_bytes(nonce)));
+    fs::create_dir(&target).map_err(|_| "Couldn't create a safety folder beside this workspace; nothing was overwritten.")?;
+    *slot = Some(target.clone()); Ok(target)
+}
+fn save_original(root: &Path, source: &Path, safety: &mut Option<PathBuf>, counter: usize) -> Result<PathBuf, String> {
+    let relative = source.strip_prefix(root).map_err(|_| "A sync source is outside the workspace.")?;
+    let target = safety_directory(root, safety)?.join(format!("{counter:05}")).join(relative);
+    fs::create_dir_all(target.parent().ok_or("Invalid safety path.")?).map_err(|_| "Couldn't prepare the safety backup.")?;
+    crate::rename_without_replace(source, &target).map_err(|_| "A local file changed or couldn't be safely moved. Sync stopped without overwriting it.")?;
+    Ok(target)
+}
+pub fn merge(vault: &str, base: Option<&[u8]>, remote: &[u8]) -> Result<MergeSummary, String> {
+    let root = fs::canonicalize(vault).map_err(|_| "Couldn't open the workspace for sync.")?;
+    if !root.is_dir() { return Err("The workspace isn't a folder.".into()); }
+    let local_bytes = pack(vault)?;
+    let local = snapshot_map(&local_bytes)?; let base_map = if let Some(base) = base { snapshot_map(base)? } else { Default::default() }; let remote_map = snapshot_map(remote)?;
+    let mut result = MergeSummary { applied: 0, conflicts: 0, deleted: 0, safety_folder: None };
+    let mut safety = None; let mut counter = 0usize;
+    let attempt = (|| -> Result<(), String> {
+    // Mark folders containing changed/new remote descendants. This avoids
+    // resurrecting an unchanged empty folder deleted locally.
+    let mut changed_ancestors = HashSet::new();
+    for (name, value) in &remote_map {
+        if base_map.get(name).copied() != Some(*value) {
+            let mut current = name.as_str();
+            while let Some((parent, _)) = current.rsplit_once('/') { changed_ancestors.insert(parent.to_string()); current = parent; }
+        }
+    }
+    // Map remote folder paths to local paths. None marks a locally deleted,
+    // unchanged subtree that should not be resurrected.
+    let mut mapped: HashMap<String, Option<String>> = HashMap::new();
+    for (name, remote_value) in remote_map.iter().filter(|(_, value)| value.directory) {
+        let (parent, leaf) = name.rsplit_once('/').unwrap_or(("", name.as_str()));
+        let remapped_parent = mapped.get(parent).and_then(|value| value.as_deref()).is_some_and(|value| value != parent);
+        if mapped.get(parent).is_some_and(Option::is_none) || (!remapped_parent && local.get(name).is_none() && base_map.get(name).copied() == Some(*remote_value) && !changed_ancestors.contains(name)) {
+            mapped.insert(name.clone(), None); continue;
+        }
+        let mapped_parent = mapped.get(parent).and_then(|v| v.as_deref()).unwrap_or(parent);
+        let relative = if mapped_parent.is_empty() { leaf.to_string() } else { format!("{mapped_parent}/{leaf}") };
+        let target = path_under(&root, &relative)?;
+        match fs::symlink_metadata(&target) {
+            Ok(meta) if meta.is_dir() && !meta.file_type().is_symlink() => { mapped.insert(name.clone(), Some(relative)); },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => { fs::create_dir(&target).map_err(|_| "Couldn't create a synced folder.")?; mapped.insert(name.clone(), Some(relative)); result.applied += 1; },
+            Ok(meta) if meta.is_file() && !meta.file_type().is_symlink() => {
+                let hash = Sha256::digest(name.as_bytes()); let tag = hash[..4].iter().map(|b| format!("{b:02x}")).collect::<String>();
+                let mut created = None;
+                for index in 0..1000 {
+                    let candidate = conflict_path(&target, &tag, index)?;
+                    match fs::create_dir(&candidate) {
+                        Ok(()) => { result.conflicts += 1; created = Some(candidate); break; },
+                        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                            // Reuse our deterministic conflict directory on retry;
+                            // individual files are still created without replacement.
+                            if fs::symlink_metadata(&candidate).ok().is_some_and(|m| m.is_dir() && !m.file_type().is_symlink()) { created = Some(candidate); break; }
+                        },
+                        Err(_) => return Err("Couldn't preserve a conflicting remote folder.".into()),
+                    }
+                }
+                let candidate = created.ok_or("Too many conflicting folders.")?;
+                let relative = relative_name(&root, &candidate)?; mapped.insert(name.clone(), Some(relative));
+            },
+            _ => return Err("Sync encountered an unsupported item or symbolic link.".into()),
+        }
+    }
+    for (name, value) in remote_map.iter().filter(|(_, value)| !value.directory) {
+        let (parent, leaf) = name.rsplit_once('/').unwrap_or(("", name.as_str()));
+        if mapped.get(parent).is_some_and(Option::is_none) { continue; }
+        let mapped_parent = mapped.get(parent).and_then(|v| v.as_deref()).unwrap_or(parent);
+        let relative = if mapped_parent.is_empty() { leaf.to_string() } else { format!("{mapped_parent}/{leaf}") };
+        let target = path_under(&root, &relative)?;
+        let changed_parent = mapped_parent != parent;
+        let here = if changed_parent { None } else { local.get(name).copied() };
+        let original = base_map.get(name).copied();
+        if here == Some(*value) || (!changed_parent && original == Some(*value)) || (changed_parent && current_file_matches(&target, value.bytes)) { continue; }
+        let clean_update = !changed_parent && here.is_some() && here == original && !here.unwrap().directory;
+        if clean_update && current_file_matches(&target, here.unwrap().bytes) {
+            counter += 1; let saved = save_original(&root, &target, &mut safety, counter)?;
+            if !current_file_matches(&saved, here.unwrap().bytes) {
+                // An external editor wrote after our snapshot; restore its edit
+                // and preserve the incoming version as a conflict instead.
+                crate::rename_without_replace(&saved, &target).map_err(|_| "A local file changed during sync; its original is in the safety folder.")?;
+                if conflict_copy(&target, value.bytes)? { result.conflicts += 1; }
+                continue;
+            }
+            match atomic_write_new(&target, value.bytes) {
+                Ok(()) => result.applied += 1,
+                Err(_) => { let _ = crate::rename_without_replace(&saved, &target); return Err(format!("Couldn't apply a complete remote file. The local original, if not restored, is safe in {}.", saved.display())); }
+            }
+        } else if here.is_some() || (!changed_parent && original.is_some()) {
+            if conflict_copy(&target, value.bytes)? { result.conflicts += 1; }
+        } else {
+            match atomic_write_new(&target, value.bytes) {
+                Ok(()) => result.applied += 1,
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => { if conflict_copy(&target, value.bytes)? { result.conflicts += 1; } },
+                Err(_) => return Err("Couldn't create a complete synced file.".into()),
+            }
+        }
+    }
+    // Propagate a remote deletion only when the actual local bytes still equal
+    // the common ancestor. Move originals out of the workspace first.
+    for (name, old) in base_map.iter().filter(|(_, value)| !value.directory) {
+        if !remote_map.contains_key(name) && local.get(name) == Some(old) {
+            let target = path_under(&root, name)?;
+            if current_file_matches(&target, old.bytes) {
+                counter += 1; let saved = save_original(&root, &target, &mut safety, counter)?;
+                if current_file_matches(&saved, old.bytes) { result.deleted += 1; }
+                else { crate::rename_without_replace(&saved, &target).map_err(|_| "A local file changed during sync; its original is in the safety folder.")?; }
+            }
+        }
+    }
+    let mut old_dirs: Vec<_> = base_map.iter().filter(|(name, value)| value.directory && !remote_map.contains_key(*name)).map(|(name, _)| name).collect();
+    old_dirs.sort_by_key(|name| std::cmp::Reverse(name.matches('/').count()));
+    for name in old_dirs { if let Ok(path) = path_under(&root, name) { if fs::symlink_metadata(&path).ok().is_some_and(|m| m.is_dir() && !m.file_type().is_symlink()) { let _ = fs::remove_dir(path); } } }
+    Ok(())
+    })();
+    if let Err(error) = attempt {
+        return Err(match &safety { Some(path) => format!("{error} Originals already moved are in {}.", path.display()), None => error });
+    }
+    result.safety_folder = safety.map(|path| path.to_string_lossy().to_string());
+    Ok(result)
+}
+
+#[cfg(test)]
+mod sync_tests {
+    use super::*;
+    fn test_dir(label: &str) -> PathBuf {
+        let mut nonce = [0u8; 8]; getrandom::fill(&mut nonce).unwrap();
+        let dir = std::env::temp_dir().join(format!("comet-sync-test-{label}-{:x}", u64::from_le_bytes(nonce)));
+        fs::create_dir(&dir).unwrap(); dir
+    }
+    #[test]
+    fn three_way_merge_preserves_conflicts_and_propagates_safe_edits_and_deletions() {
+        let area = test_dir("merge"); let base = area.join("base"); let local = area.join("local"); let remote = area.join("remote");
+        for dir in [&base, &local, &remote] { fs::create_dir(dir).unwrap(); fs::write(dir.join("same.txt"), "base").unwrap(); fs::write(dir.join("conflict.txt"), "base").unwrap(); fs::write(dir.join("deleted.txt"), "delete me").unwrap(); }
+        let base_bytes = pack(base.to_str().unwrap()).unwrap();
+        fs::write(local.join("conflict.txt"), "local edit").unwrap();
+        fs::write(remote.join("same.txt"), "remote edit").unwrap(); fs::write(remote.join("conflict.txt"), "remote edit").unwrap(); fs::remove_file(remote.join("deleted.txt")).unwrap(); fs::write(remote.join("new.txt"), "new").unwrap();
+        let remote_bytes = pack(remote.to_str().unwrap()).unwrap();
+        let summary = merge(local.to_str().unwrap(), Some(&base_bytes), &remote_bytes).unwrap();
+        assert_eq!(fs::read_to_string(local.join("same.txt")).unwrap(), "remote edit");
+        assert_eq!(fs::read_to_string(local.join("conflict.txt")).unwrap(), "local edit");
+        assert!(!local.join("deleted.txt").exists()); assert_eq!(fs::read_to_string(local.join("new.txt")).unwrap(), "new");
+        assert_eq!(summary.conflicts, 1); assert_eq!(summary.deleted, 1);
+        let conflict = fs::read_dir(&local).unwrap().map(Result::unwrap).find(|entry| entry.file_name().to_string_lossy().starts_with("conflict (Google conflict ")).unwrap();
+        assert_eq!(fs::read_to_string(conflict.path()).unwrap(), "remote edit");
+        let safety = PathBuf::from(summary.safety_folder.unwrap()); assert_eq!(fs::read_dir(&safety).unwrap().count(), 2);
+        // Retrying with the same baseline does not duplicate the remote conflict.
+        merge(local.to_str().unwrap(), Some(&base_bytes), &remote_bytes).unwrap();
+        assert_eq!(fs::read_dir(&local).unwrap().map(Result::unwrap).filter(|entry| entry.file_name().to_string_lossy().starts_with("conflict (Google conflict ")).count(), 1);
+        fs::remove_dir_all(area).unwrap();
+    }
+    #[test]
+    fn unchanged_remote_does_not_resurrect_a_local_deletion() {
+        let area = test_dir("deletion"); let base = area.join("base"); let local = area.join("local");
+        fs::create_dir(&base).unwrap(); fs::create_dir(&local).unwrap(); fs::write(base.join("gone.md"), "old").unwrap();
+        let bytes = pack(base.to_str().unwrap()).unwrap(); merge(local.to_str().unwrap(), Some(&bytes), &bytes).unwrap();
+        assert_eq!(fs::read_dir(&local).unwrap().count(), 0); fs::remove_dir_all(area).unwrap();
+    }
+    #[test]
+    fn deleted_unchanged_folders_are_not_resurrected() {
+        let area = test_dir("deleted-folder"); let base = area.join("base"); let local = area.join("local");
+        fs::create_dir_all(base.join("deep/sub")).unwrap(); fs::create_dir(&local).unwrap();
+        fs::write(base.join("deep/sub/file.md"), "unchanged").unwrap();
+        let bytes = pack(base.to_str().unwrap()).unwrap();
+        merge(local.to_str().unwrap(), Some(&bytes), &bytes).unwrap();
+        assert!(!local.join("deep").exists());
+        fs::remove_dir_all(area).unwrap();
+    }
+    #[test]
+    fn file_folder_conflict_and_retry_keep_both_without_duplicate_folders() {
+        let area = test_dir("type-conflict"); let base = area.join("base"); let local = area.join("local"); let remote = area.join("remote");
+        fs::create_dir(&base).unwrap(); fs::create_dir(&local).unwrap(); fs::create_dir_all(remote.join("item/sub")).unwrap();
+        fs::write(local.join("item"), "local file").unwrap(); fs::write(remote.join("item/sub/inside.txt"), "remote file").unwrap();
+        let old = pack(base.to_str().unwrap()).unwrap(); let incoming = pack(remote.to_str().unwrap()).unwrap();
+        let first = merge(local.to_str().unwrap(), Some(&old), &incoming).unwrap(); assert_eq!(first.conflicts, 1);
+        merge(local.to_str().unwrap(), Some(&old), &incoming).unwrap();
+        assert_eq!(fs::read_to_string(local.join("item")).unwrap(), "local file");
+        let folders: Vec<_> = fs::read_dir(&local).unwrap().map(Result::unwrap).filter(|e| e.file_type().unwrap().is_dir()).collect();
+        assert_eq!(folders.len(), 1); assert_eq!(fs::read_to_string(folders[0].path().join("sub/inside.txt")).unwrap(), "remote file");
+        fs::remove_dir_all(area).unwrap();
+    }
+    #[test]
+    fn deletions_never_remove_locally_edited_files() {
+        let area = test_dir("changed-delete"); let base = area.join("base"); let local = area.join("local"); let remote = area.join("remote");
+        for dir in [&base, &local, &remote] { fs::create_dir(dir).unwrap(); }
+        fs::write(base.join("a.md"), "old").unwrap(); fs::write(local.join("a.md"), "local changes").unwrap();
+        let old = pack(base.to_str().unwrap()).unwrap(); let incoming = pack(remote.to_str().unwrap()).unwrap();
+        let result = merge(local.to_str().unwrap(), Some(&old), &incoming).unwrap();
+        assert_eq!(result.deleted, 0); assert_eq!(fs::read_to_string(local.join("a.md")).unwrap(), "local changes");
+        fs::remove_dir_all(area).unwrap();
+    }
+    #[test]
+    fn damaged_remote_does_not_change_local_workspace() {
+        let area = test_dir("damaged"); let local = area.join("local"); fs::create_dir(&local).unwrap(); fs::write(local.join("keep.txt"), "safe").unwrap();
+        let mut incoming = pack(local.to_str().unwrap()).unwrap(); incoming[10] ^= 1;
+        assert!(merge(local.to_str().unwrap(), None, &incoming).is_err());
+        assert_eq!(fs::read_to_string(local.join("keep.txt")).unwrap(), "safe"); assert_eq!(fs::read_dir(&local).unwrap().count(), 1);
+        fs::remove_dir_all(area).unwrap();
+    }
+    #[test]
+    fn atomic_create_never_replaces_an_existing_file_or_leaves_partial_data() {
+        let area = test_dir("atomic"); let target = area.join("file"); fs::write(&target, "original").unwrap();
+        assert_eq!(atomic_write_new(&target, b"incoming").unwrap_err().kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read_to_string(target).unwrap(), "original"); assert_eq!(fs::read_dir(&area).unwrap().count(), 1);
+        fs::remove_dir_all(area).unwrap();
+    }
+    #[cfg(unix)]
+    #[test]
+    fn sync_refuses_local_symlinks_before_touching_files() {
+        use std::os::unix::fs::symlink;
+        let area = test_dir("symlink"); let base = area.join("base"); let local = area.join("local");
+        fs::create_dir(&base).unwrap(); fs::create_dir(&local).unwrap(); fs::write(base.join("remote"), "remote").unwrap(); symlink(&base, local.join("linked")).unwrap();
+        let data = pack(base.to_str().unwrap()).unwrap(); assert!(merge(local.to_str().unwrap(), None, &data).is_err());
+        assert!(!local.join("remote").exists()); fs::remove_dir_all(area).unwrap();
+    }
+
+}

@@ -1,7 +1,7 @@
 import { createSampleVault, SAMPLE_ROOT } from '../src/utils/sampleVault.ts';
 import { joinPath } from '../src/utils/vault.ts';
 import { fileKind, isTextFile, youtubeIds } from '../src/utils/fileTypes.ts';
-import { emptyWorkspaceMeta, itemMeta, updateItem, renameMeta, removeMeta, reorderChildren, readWorkspaceMeta, saveWorkspaceMeta } from '../src/utils/workspaceMeta.ts';
+import { emptyWorkspaceMeta, itemMeta, updateItem, renameMeta, removeMeta, reorderChildren, reorderChildrenGroup, readWorkspaceMeta, saveWorkspaceMeta } from '../src/utils/workspaceMeta.ts';
 import { readVaultList, saveVaultList, reorderVaults } from '../src/utils/vaultList.ts';
 
 let failures = 0;
@@ -17,6 +17,10 @@ meta.tags.push({ id: 't1', name: 'Work', color: '#83b8ca' });
 meta = updateItem(meta, '/vault/Projects/note.md', { tags: ['t1'], pinned: true, favorite: true });
 meta = reorderChildren(meta, '/vault/Projects', ['/vault/Projects/note.md', '/vault/Projects/other.md'], '/vault/Projects/note.md', '/vault/Projects/other.md', true);
 check('reorders siblings without moving files', meta.order['/vault/Projects'].join('|') === '/vault/Projects/other.md|/vault/Projects/note.md');
+const group = reorderChildrenGroup(emptyWorkspaceMeta(), '/v', ['/v/a', '/v/b', '/v/c', '/v/d'], ['/v/a', '/v/c'], '/v/d', true);
+check('reorders all selected siblings together, retaining their original order', group.order['/v'].join('|') === '/v/b|/v/d|/v/a|/v/c');
+check('refuses to reorder a selection onto itself', reorderChildrenGroup(group, '/v', ['/v/a', '/v/b'], ['/v/a'], '/v/a', true) === group);
+
 meta = renameMeta(meta, '/vault/Projects', '/vault/Ideas');
 check('remaps item and ordering metadata when a folder moves', itemMeta(meta, '/vault/Ideas/note.md').pinned && itemMeta(meta, '/vault/Ideas/note.md').favorite && meta.order['/vault/Ideas'].includes('/vault/Ideas/note.md') && !meta.items['/vault/Projects/note.md']);
 const movedMetadata = renameMeta(meta, '/vault/Ideas/note.md', '/vault/Elsewhere/note.md');

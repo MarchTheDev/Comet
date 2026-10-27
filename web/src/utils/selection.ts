@@ -12,7 +12,7 @@ export function selectRange(selected: Set<string>, anchor: string, ordered: stri
     if (next.has(path)) next.delete(path); else next.add(path);
     return { selected: next, anchor: path, open: false };
   }
-  return { selected: new Set([path]), anchor: path, open: true };
+  return { selected: new Set(), anchor: path, open: true };
 }
 
 /** Avoid deleting a descendant separately when its selected parent is removed. */

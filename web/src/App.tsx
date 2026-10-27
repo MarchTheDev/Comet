@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type FormEvent, type MouseEvent } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type FormEvent, type MouseEvent } from "react";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
@@ -40,7 +40,7 @@ import { TagDialog } from "./TagDialog";
 import { fileKind, isTextFile } from "./utils/fileTypes";
 import { firstDroppedUrl, serializeShortcut } from "./utils/links";
 import { richTextExtensions } from "./utils/richText";
-import { itemMeta, readWorkspaceMeta, saveWorkspaceMeta, updateItem, renameMeta, removeMeta, reorderChildren, type WorkspaceMeta } from "./utils/workspaceMeta";
+import { itemMeta, readWorkspaceMeta, saveWorkspaceMeta, updateItem, renameMeta, removeMeta, reorderChildren, reorderChildrenGroup, type WorkspaceMeta } from "./utils/workspaceMeta";
 import { identityFor, readWorkspaceIdentities, saveWorkspaceIdentities } from "./utils/workspaceIdentity";
 import { readVaultList, reorderVaults, saveVaultList, vaultLabel } from "./utils/vaultList";
 import { countWords } from "./utils/markdown";
@@ -59,7 +59,7 @@ import {
   isPathInside,
   joinPath,
   normalizePath,
-  noteTitle,
+  noteTitle, displayEntryName,
   parentPath,
   relativePath,
   remapPath,
@@ -89,7 +89,7 @@ type ViewMode = "write" | "source" | "read";
 type WorkspaceView = "note" | "file" | "todo" | "whiteboard" | "all" | "folder" | "pinned" | "favorites" | "tree" | "brain" | "calendar" | "passwords" | "settings";
 type NavigationPoint = { vault: string; view: WorkspaceView; path: string };
 type NavigationHistory = { items: NavigationPoint[]; index: number };
-type CaptureType = "text" | "link" | "image";
+type CaptureType = "text" | "link" | "image" | "file";
 type CreateDialog = { kind: "note" | "folder" | "todo" | "whiteboard"; folder: string };
 type PathCreateDialog = Extract<PathPlan, { kind: "create" }> & { vault: string };
 type DropIndicator = { path: string; position: "before" | "after" | "into"; surface: "sidebar" | "workspace" | "map"; source?: string };
@@ -136,6 +136,15 @@ function App() {
   const navigatingHistory = useRef(false);
   const [mediaUrl, setMediaUrl] = useState(sampleStart.mediaUrl);
   const [layout, setLayout] = useState<WorkspaceLayout>(() => { try { return localStorage.getItem("comet:workspace-layout") === "gallery" ? "gallery" : "list"; } catch { return "list"; } });
+  const [sidebarWidth, setSidebarWidth] = useState(() => { try { const n = Number(localStorage.getItem("comet:sidebar-width:v1")); return n >= 200 && n <= 500 ? n : 260; } catch { return 260; } });
+  const persistSidebarWidth = (value: number) => { const n = Math.max(200, Math.min(500, Math.round(value))); setSidebarWidth(n); try { localStorage.setItem("comet:sidebar-width:v1", String(n)); } catch {} };
+  const resizeSidebar = (event: React.PointerEvent) => {
+    if (event.button !== 0) return; event.preventDefault(); const pointer = event.pointerId, start = event.clientX, width = sidebarWidth, scale = Number(document.documentElement.style.zoom) || 1;
+    let last = width;
+    const move = (next: PointerEvent) => { if (next.pointerId !== pointer) return; last = Math.max(200, Math.min(500, width + (next.clientX - start) / scale)); setSidebarWidth(last); };
+    const end = (next: PointerEvent) => { if (next.pointerId !== pointer) return; window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", end); window.removeEventListener("pointercancel", end); persistSidebarWidth(last); };
+    window.addEventListener("pointermove", move); window.addEventListener("pointerup", end); window.addEventListener("pointercancel", end);
+  };
   const [iconSize, setIconSize] = useState(() => { try { const size = Number(localStorage.getItem("comet:workspace-icon-size")); return size >= 24 && size <= 72 ? size : 32; } catch { return 32; } });
   const [metadata, setMetadata] = useState<WorkspaceMeta>(() => readWorkspaceMeta(SAMPLE_ROOT));
   const [vaults, setVaults] = useState(readVaultList);
@@ -182,11 +191,20 @@ function App() {
   const [dialogError, setDialogError] = useState("");
   const [dialogBusy, setDialogBusy] = useState(false);
   const [captureOpen, setCaptureOpen] = useState(false);
+  const [syncBusy, setSyncBusy] = useState(false);
   const [captureType, setCaptureType] = useState<CaptureType>("text");
   const [captureText, setCaptureText] = useState("");
   const [captureImage, setCaptureImage] = useState("");
   const [desktopInfoOpen, setDesktopInfoOpen] = useState(false);
   const [contextMenu, setContextMenu] = useState<ContextMenu | null>(null);
+  const contextMenuRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const menu = contextMenuRef.current; if (!menu || !contextMenu) return;
+    const scale = Number(document.documentElement.style.zoom) || 1;
+    const rect = menu.getBoundingClientRect();
+    menu.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - rect.width - 8)) / scale}px`;
+    menu.style.top = `${Math.max(8, Math.min(rect.top, window.innerHeight - rect.height - 8)) / scale}px`;
+  }, [contextMenu]);
   const [notice, setNotice] = useState("");
   const [dropIndicator, setDropIndicator] = useState<DropIndicator | null>(null);
   const dropIndicatorRef = useRef<DropIndicator | null>(null);
@@ -1048,6 +1066,7 @@ function App() {
   const submitCapture = async (event: FormEvent) => {
     event.preventDefault();
     if (dialogBusy) return;
+    if (captureType === "file") { setCaptureOpen(false); await upload(captureFolder); return; }
     let body = captureText.trim();
     let captureTitle = captureType === "image" ? fileName(captureImage).replace(/\.[^.]+$/, "") : body.split(/\s+/).slice(0, 6).join(" ");
     if (captureType === "image" && !captureImage) {
@@ -1175,7 +1194,7 @@ function App() {
     return () => { active = false; unlisten.forEach((stop) => stop()); };
   }, [flushAll]);
 
-  const modalOpen = Boolean(bulkDelete || workspaceCustomize || createDialog || pathCreateDialog || renameNode || deleteNode || linkOpen || captureOpen || desktopInfoOpen || searchOpen || tagDialogOpen || moveDialog);
+  const modalOpen = Boolean(syncBusy || bulkDelete || workspaceCustomize || createDialog || pathCreateDialog || renameNode || deleteNode || linkOpen || captureOpen || desktopInfoOpen || searchOpen || tagDialogOpen || moveDialog);
   useEffect(() => {
     if (!modalOpen) return;
     const dialog = document.querySelector<HTMLElement>('[role="dialog"][aria-modal="true"]');
@@ -1302,7 +1321,7 @@ function App() {
     return updateItem(current, path, { tags: tags.includes(id) ? tags.filter((tag) => tag !== id) : [...tags, id] });
   });
 
-  const moveItem = useCallback(async (source: string, folder: string) => {
+  const moveItem = useCallback(async (source: string, folder: string, reportError?: (message: string) => void) => {
     if (!isPathInside(source, vaultRef.current) || !isPathInside(folder, vaultRef.current)) return null;
     const request = ++loadRequest.current;
     const vault = vaultRef.current;
@@ -1335,7 +1354,7 @@ function App() {
       setMoveDialog(null);
       setNotice(`Moved to ${folder === vaultRef.current ? "workspace" : fileName(folder)}. Links in other notes are unchanged.`);
       return next;
-    } catch (error) { setNotice(`Couldn't move: ${errorMessage(error)}`); return null; }
+    } catch (error) { const message = errorMessage(error); if (reportError) reportError(message); else setNotice(`Couldn't move: ${message}`); return null; }
   }, [commitMeta, flushAll, persistSession, refresh, remapNavigation]);
 
   const importPaths = useCallback(async (paths: string[], folder: string) => {
@@ -1419,22 +1438,40 @@ function App() {
       if (paths) await importPaths(Array.isArray(paths) ? paths : [paths], folder);
     } catch (error) { setNotice(`Couldn't choose files: ${errorMessage(error)}`); }
   };
+  const dragPaths = (source: string) => selectionRef.current.has(source) ? selectionRoots([...selectionRef.current]) : [source];
+  const moveItems = async (paths: string[], folder: string): Promise<string[] | null> => {
+    const roots = selectionRoots(paths), vault = vaultRef.current;
+    if (roots.some((path) => isPathInside(folder, path))) { setNotice("A folder cannot be moved into itself or its descendants."); return null; }
+    let moved = 0; const destinations: string[] = [];
+    for (const path of roots) {
+      if (normalizePath(parentPath(path)) === normalizePath(folder)) { destinations.push(path); continue; }
+      let reason = "The workspace changed or the operation was interrupted.";
+      const destination = await moveItem(path, folder, (message) => { reason = message; });
+      if (!destination || vaultRef.current !== vault) { setNotice(`${moved} item${moved === 1 ? "" : "s"} moved. Couldn't move ${fileName(path)}: ${reason} Remaining items were left in place.`); return null; }
+      destinations.push(destination); moved++;
+    }
+    if (roots.length > 1 && moved) setNotice(`Moved ${moved} items to ${folder === vault ? "workspace" : fileName(folder)}.`);
+    return destinations;
+  };
   const dragStart = (event: DragEvent, entry: Entry) => {
     dragSourceRef.current = entry.path;
-    event.dataTransfer.setData("application/x-comet-entry", JSON.stringify({ vault: vaultRef.current, path: entry.path }));
+    event.dataTransfer.setData("application/x-comet-entry", JSON.stringify({ vault: vaultRef.current, path: entry.path, paths: dragPaths(entry.path) }));
     event.dataTransfer.effectAllowed = "move";
   };
-  const draggedPath = (event: DragEvent): string => {
+  const draggedEntries = (event: DragEvent): { source: string; paths: string[] } => {
     try {
       const data = JSON.parse(event.dataTransfer.getData("application/x-comet-entry"));
-      return data.vault === vaultRef.current && typeof data.path === "string" ? data.path : "";
-    } catch { return ""; }
+      if (data.vault !== vaultRef.current || typeof data.path !== "string" || !isPathInside(data.path, vaultRef.current)) return { source: "", paths: [] };
+      const paths: string[] = Array.isArray(data.paths) ? data.paths.filter((path: unknown): path is string => typeof path === "string" && isPathInside(path, vaultRef.current) && normalizePath(path) !== normalizePath(vaultRef.current)) : [];
+      // A selected parent replaces its selected descendants in the drag roots.
+      return { source: data.path, paths: paths.some((root) => isPathInside(data.path, root)) ? selectionRoots(paths) : [data.path] };
+    } catch { return { source: "", paths: [] }; }
   };
   const dropToFolder = (event: DragEvent, folder: string) => {
     event.preventDefault(); event.stopPropagation();
     showDropIndicator(null);
-    const path = draggedPath(event); dragSourceRef.current = "";
-    if (path) { if (parentPath(path) !== folder) void moveItem(path, folder); }
+    const { source, paths } = draggedEntries(event); dragSourceRef.current = "";
+    if (source) { void moveItems(paths, folder); }
     else if (event.dataTransfer.files.length) void importBrowserFiles([...event.dataTransfer.files], folder);
     else { const url = firstDroppedUrl(event.dataTransfer.getData("text/uri-list"), event.dataTransfer.getData("text/plain")); if (url) void importLink(url, folder); }
   };
@@ -1449,13 +1486,18 @@ function App() {
     if (item.kind === "folder" && !isPathInside(item.path, source)) return { path: item.path, position: "into", surface, source };
     return null;
   };
-  const applyTreeDrop = (source: string, item: Entry, indicator: DropIndicator | null) => {
-    if (!indicator || !source || source === item.path) return;
-    if (indicator.position === "into") { void moveItem(source, item.path); return; }
+  const applyTreeDrop = (source: string, item: Entry, indicator: DropIndicator | null, paths = [source]) => {
+    if (!indicator || !source || source === item.path || paths.includes(item.path)) return;
+    if (indicator.position === "into") { void moveItems(paths, item.path); return; }
     const targetParent = parentPath(item.path);
     const siblings = orderItems(entries.filter((entry) => parentPath(entry.path) === targetParent), targetParent).map((entry) => entry.path);
+    if (paths.length > 1 && paths.some((path) => normalizePath(parentPath(path)) !== normalizePath(targetParent))) {
+      const vault = vaultRef.current;
+      void moveItems(paths, targetParent).then((destinations) => { if (destinations && vaultRef.current === vault) commitMeta((current) => reorderChildrenGroup(current, targetParent, [...siblings, ...destinations], destinations, item.path, indicator.position === "after")); });
+      return;
+    }
     if (normalizePath(parentPath(source)) === normalizePath(targetParent)) {
-      commitMeta((current) => reorderChildren(current, targetParent, siblings, source, item.path, indicator.position === "after"));
+      commitMeta((current) => reorderChildrenGroup(current, targetParent, siblings, paths, item.path, indicator.position === "after"));
     } else {
       const vault = vaultRef.current;
       void moveItem(source, targetParent).then((destination) => {
@@ -1472,7 +1514,7 @@ function App() {
   };
   const dropOnTree = (event: DragEvent, item: TreeNode, surface: "sidebar" | "map" = "sidebar") => {
     event.preventDefault(); event.stopPropagation();
-    const source = draggedPath(event); const indicator = treePlacement(source, item, event.currentTarget.getBoundingClientRect(), event.clientY, surface);
+    const { source, paths } = draggedEntries(event); const indicator = treePlacement(source, item, event.currentTarget.getBoundingClientRect(), event.clientY, surface);
     showDropIndicator(null); dragSourceRef.current = "";
     if (!source) {
       const folder = item.kind === "folder" ? item.path : parentPath(item.path);
@@ -1481,12 +1523,12 @@ function App() {
       return;
     }
     if (!indicator && source !== item.path) setNotice("Drop on a folder to move an item, or on a sibling to reorder it.");
-    applyTreeDrop(source, item, indicator);
+    applyTreeDrop(source, item, indicator, paths);
   };
   const startPointerDrag = (event: React.PointerEvent, source: TreeNode) => {
     if (event.button !== 0) return;
     event.preventDefault(); event.stopPropagation();
-    const startX = event.clientX, startY = event.clientY, pointer = event.pointerId;
+    const startX = event.clientX, startY = event.clientY, pointer = event.pointerId, paths = dragPaths(source.path);
     let moving = false;
     const handle = event.currentTarget as HTMLElement;
     try { handle.setPointerCapture(pointer); } catch { /* Pointer capture is optional. */ }
@@ -1506,8 +1548,8 @@ function App() {
       const indicator = dropIndicatorRef.current;
       const item = indicator && entries.find((entry) => entry.path === indicator.path);
       showDropIndicator(null);
-      if (moving && indicator?.path === vaultRef.current && indicator.position === "into") { if (parentPath(source.path) !== vaultRef.current) void moveItem(source.path, vaultRef.current); }
-      else if (moving && item && indicator) applyTreeDrop(source.path, item, indicator);
+      if (moving && indicator?.path === vaultRef.current && indicator.position === "into") { void moveItems(paths, vaultRef.current); }
+      else if (moving && item && indicator) applyTreeDrop(source.path, item, indicator, paths);
     };
     const cancel = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", finish); window.removeEventListener("pointercancel", cancel); showDropIndicator(null); };
     window.addEventListener("pointermove", move); window.addEventListener("pointerup", finish); window.addEventListener("pointercancel", cancel);
@@ -1625,7 +1667,8 @@ function App() {
     <div className={`comet-root mountain-visible${focusMode ? " focus-mode" : ""}${selection.size ? " has-selection" : ""}`} style={{ "--editor-font-size": `${settings.editorFontSize}px` } as CSSProperties} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); showDropIndicator(null); dragSourceRef.current = ""; }} onDragEnd={() => { showDropIndicator(null); dragSourceRef.current = ""; }} onClick={(event) => { if (contextMenu) setContextMenu(null); if (vaultMenuOpen && !(event.target as Element).closest(".workspace-switcher")) setVaultMenuOpen(false); }}>
       <div className="app-shell">
         <button className={`sidebar-scrim${explorerOpen ? " is-open" : ""}`} type="button" aria-label="Close sidebar" aria-hidden={!explorerOpen} tabIndex={explorerOpen ? 0 : -1} onClick={() => setExplorerOpen(false)} />
-        <aside className={`sidebar${explorerOpen ? "" : " is-closed"}`} aria-label="Workspace navigation" aria-hidden={!explorerOpen} inert={!explorerOpen}>
+        <aside className={`sidebar${explorerOpen ? "" : " is-closed"}`} aria-label="Workspace navigation" aria-hidden={!explorerOpen} inert={!explorerOpen} style={{ "--sidebar-width": `${sidebarWidth}px` } as CSSProperties}>
+          <div role="separator" tabIndex={0} aria-label="Resize sidebar" aria-orientation="vertical" aria-valuemin={200} aria-valuemax={500} aria-valuenow={Math.round(sidebarWidth)} className="sidebar-resize" onPointerDown={resizeSidebar} onDoubleClick={() => persistSidebarWidth(260)} onKeyDown={(event) => { if (event.key === "ArrowLeft" || event.key === "ArrowRight") { event.preventDefault(); persistSidebarWidth(sidebarWidth + (event.key === "ArrowRight" ? 10 : -10)); } }} />
           <div className="sidebar-brand">
             <div className="brand-mark" aria-hidden="true"><img src="/comet.svg" alt="" /></div>
             <div className="brand-name">comet<span>.</span></div>
@@ -1712,7 +1755,7 @@ function App() {
           </header>
 
           <div ref={workspaceScrollRef} className={`workspace-scroll without-cover${dropIndicator?.surface === "workspace" && dropIndicator.path === workspaceDestination && dropIndicator.position === "into" ? " drop-target" : ""}`} data-drop-folder={workspaceDestination} onClick={(event) => { const target = event.target as Element; if (!target.closest("button, a, input, select, textarea, [contenteditable=true], .workspace-entry, .brain-node, .todo-card, .todo-link-hit, .note-card, .media-card")) clearSelection(); }} onDragOver={(event) => { event.preventDefault(); showDropIndicator({ path: workspaceDestination, position: "into", surface: "workspace" }); }} onDrop={(event) => dropToFolder(event, workspaceDestination)} onContextMenu={(event) => { if (event.target === event.currentTarget) openNewMenu(event, workspaceDestination); }}>
-            {workspaceView === "tree" ? <TreeExplore key={vaultPath} vault={vaultPath} name={vaultName} tree={tree} onOpen={openEntry} onContext={entryContext} selectedPaths={selection} onActivate={activateSelection} onClearSelection={clearSelection} dropIndicator={dropIndicator?.surface === "map" ? dropIndicator : null} dropGroup={dropIndicator?.surface === "map" ? dropGroup : ""} onDragStart={dragStart} onDragOverNode={(event, item) => dragOverTree(event, item, "map")} onDropNode={(event, item) => dropOnTree(event, item, "map")} onDragOverRoot={(event) => { event.preventDefault(); event.stopPropagation(); const root = (event.target as Element).closest<HTMLElement>("[data-map-path]"); if (root?.dataset.mapPath === vaultPath && (!dragSourceRef.current || normalizePath(parentPath(dragSourceRef.current)) !== normalizePath(vaultPath))) showDropIndicator({ path: vaultPath, position: "into", surface: "map", source: dragSourceRef.current }); else showDropIndicator(null); }} onDropRoot={(event) => { const root = (event.target as Element).closest<HTMLElement>("[data-map-path]"); if (root?.dataset.mapPath === vaultPath) dropToFolder(event, vaultPath); else { event.preventDefault(); event.stopPropagation(); showDropIndicator(null); } }} /> : workspaceView === "brain" ? <BrainExplore key={vaultPath} vault={vaultPath} name={vaultName} entries={entries} onOpen={openEntry} onContext={entryContext} selectedPaths={selection} onActivate={activateSelection} onClearSelection={clearSelection} /> : workspaceView === "calendar" ? <CalendarView key={vaultPath} vault={vaultPath} name={vaultName} desktop={desktopAvailable} onConnect={() => { setSettingsSection("cloud"); void showSettings(); }} /> : workspaceView === "passwords" ? <PasswordsView /> : workspaceView === "settings" ? <SettingsPage settings={settings} persisted={settingsPersisted} isSample={isSample} vault={vaultPath} onImported={(path) => void activateVault(path, true)} modifier={modifier} desktop={desktopAvailable} trayAvailable={trayAvailable} section={settingsSection} onSection={setSettingsSection} version={APP_VERSION} update={availableUpdate} updateStatus={updateStatus} onCheckUpdate={() => void runUpdateCheck()} onInstallUpdate={() => void installUpdate()} onUpdatePage={openUpdatePage} onChange={updateSettings} onBack={() => history.index > 0 ? void navigateHistory(-1) : void showOverview("all")} onOpenVault={() => void openVault()} /> : workspaceView === "whiteboard" && selectedPath && parseWhiteboard(content) ? <div className="todo-workspace"><div className="media-top-actions"><button className="icon-button" type="button" aria-label={`More options for ${selectedName}`} onClick={(event) => handleTreeContext(event, { name: selectedName, path: selectedPath, kind: "file", children: [] })}><MoreHorizontal size={19} /></button></div><Whiteboard key={selectedPath} board={parseWhiteboard(content)!} name={selectedName.replace(/\.comet-whiteboard$/i, "")} saveState={saveState} onChange={updateWhiteboard} onRename={() => openRename({ name: selectedName, path: selectedPath, kind: "file", children: [] })} onRetry={() => void flushAll().catch(() => setNotice("Still couldn't save. Please check the folder and try again."))} /></div> : workspaceView === "todo" && selectedPath && parseTodo(content) ? <div className="todo-workspace"><div className="media-top-actions"><button className={`icon-button ${itemMeta(metadata, selectedPath).pinned ? "active" : ""}`} type="button" aria-label={itemMeta(metadata, selectedPath).pinned ? "Unpin board" : "Pin board"} onClick={() => toggleProperty(selectedPath, "pinned")}><Pin size={17} /></button><button className={`icon-button ${itemMeta(metadata, selectedPath).favorite ? "active" : ""}`} type="button" aria-label={itemMeta(metadata, selectedPath).favorite ? "Remove board from favorites" : "Add board to favorites"} onClick={() => toggleProperty(selectedPath, "favorite")}><Star size={17} /></button><button className="icon-button" type="button" aria-label="Edit board tags" onClick={() => openTags(selectedPath)}><Tag size={17} /></button><button className="icon-button" type="button" aria-label={`More options for ${selectedName}`} onClick={(event) => handleTreeContext(event, { name: selectedName, path: selectedPath, kind: "file", children: [] })}><MoreHorizontal size={19} /></button></div><TodoBoard key={selectedPath} board={parseTodo(content)!} arrowheads={settings.todoArrowheads} name={selectedName.replace(/\.comet-todo$/i, "")} onRename={() => openRename({ name: selectedName, path: selectedPath, kind: "file", children: [] })} saveState={saveState} onChange={updateTodo} onRetry={() => void flushAll().catch(() => setNotice("Still couldn't save. Please check the folder and try again."))} /></div> : workspaceView === "note" && selectedPath ? <section className="note-card" aria-label={`File: ${selectedName}`}>
+            {workspaceView === "tree" ? <TreeExplore key={vaultPath} vault={vaultPath} name={vaultName} tree={tree} onOpen={openEntry} onContext={entryContext} selectedPaths={selection} onActivate={activateSelection} onClearSelection={clearSelection} dropIndicator={dropIndicator?.surface === "map" ? dropIndicator : null} dropGroup={dropIndicator?.surface === "map" ? dropGroup : ""} onDragStart={dragStart} onDragOverNode={(event, item) => dragOverTree(event, item, "map")} onDropNode={(event, item) => dropOnTree(event, item, "map")} onDragOverRoot={(event) => { event.preventDefault(); event.stopPropagation(); const root = (event.target as Element).closest<HTMLElement>("[data-map-path]"); if (root?.dataset.mapPath === vaultPath && (!dragSourceRef.current || normalizePath(parentPath(dragSourceRef.current)) !== normalizePath(vaultPath))) showDropIndicator({ path: vaultPath, position: "into", surface: "map", source: dragSourceRef.current }); else showDropIndicator(null); }} onDropRoot={(event) => { const root = (event.target as Element).closest<HTMLElement>("[data-map-path]"); if (root?.dataset.mapPath === vaultPath) dropToFolder(event, vaultPath); else { event.preventDefault(); event.stopPropagation(); showDropIndicator(null); } }} /> : workspaceView === "brain" ? <BrainExplore key={vaultPath} vault={vaultPath} name={vaultName} entries={entries} onOpen={openEntry} onContext={entryContext} selectedPaths={selection} onActivate={activateSelection} onClearSelection={clearSelection} /> : workspaceView === "calendar" ? <CalendarView key={vaultPath} vault={vaultPath} name={vaultName} desktop={desktopAvailable} onConnect={() => { setSettingsSection("cloud"); void showSettings(); }} /> : workspaceView === "passwords" ? <PasswordsView /> : workspaceView === "settings" ? <SettingsPage settings={settings} persisted={settingsPersisted} isSample={isSample} vault={vaultPath} onImported={(path) => void activateVault(path, true)} onSyncStart={async () => { try { await flushAll(); setSyncBusy(true); return true; } catch { setNotice("Couldn't save before syncing. Retry your save first."); return false; } }} onSyncEnd={async () => { try { await refresh(vaultRef.current); } finally { setSyncBusy(false); } }} modifier={modifier} desktop={desktopAvailable} trayAvailable={trayAvailable} section={settingsSection} onSection={setSettingsSection} version={APP_VERSION} update={availableUpdate} updateStatus={updateStatus} onCheckUpdate={() => void runUpdateCheck()} onInstallUpdate={() => void installUpdate()} onUpdatePage={openUpdatePage} onChange={updateSettings} onBack={() => history.index > 0 ? void navigateHistory(-1) : void showOverview("all")} onOpenVault={() => void openVault()} /> : workspaceView === "whiteboard" && selectedPath && parseWhiteboard(content) ? <div className="todo-workspace"><div className="media-top-actions"><button className="icon-button" type="button" aria-label={`More options for ${selectedName}`} onClick={(event) => handleTreeContext(event, { name: selectedName, path: selectedPath, kind: "file", children: [] })}><MoreHorizontal size={19} /></button></div><Whiteboard key={selectedPath} board={parseWhiteboard(content)!} name={selectedName.replace(/\.comet-whiteboard$/i, "")} saveState={saveState} onChange={updateWhiteboard} onRename={() => openRename({ name: selectedName, path: selectedPath, kind: "file", children: [] })} onRetry={() => void flushAll().catch(() => setNotice("Still couldn't save. Please check the folder and try again."))} /></div> : workspaceView === "todo" && selectedPath && parseTodo(content) ? <div className="todo-workspace"><div className="media-top-actions"><button className={`icon-button ${itemMeta(metadata, selectedPath).pinned ? "active" : ""}`} type="button" aria-label={itemMeta(metadata, selectedPath).pinned ? "Unpin board" : "Pin board"} onClick={() => toggleProperty(selectedPath, "pinned")}><Pin size={17} /></button><button className={`icon-button ${itemMeta(metadata, selectedPath).favorite ? "active" : ""}`} type="button" aria-label={itemMeta(metadata, selectedPath).favorite ? "Remove board from favorites" : "Add board to favorites"} onClick={() => toggleProperty(selectedPath, "favorite")}><Star size={17} /></button><button className="icon-button" type="button" aria-label="Edit board tags" onClick={() => openTags(selectedPath)}><Tag size={17} /></button><button className="icon-button" type="button" aria-label={`More options for ${selectedName}`} onClick={(event) => handleTreeContext(event, { name: selectedName, path: selectedPath, kind: "file", children: [] })}><MoreHorizontal size={19} /></button></div><TodoBoard key={selectedPath} board={parseTodo(content)!} arrowheads={settings.todoArrowheads} name={selectedName.replace(/\.comet-todo$/i, "")} onRename={() => openRename({ name: selectedName, path: selectedPath, kind: "file", children: [] })} saveState={saveState} onChange={updateTodo} onRetry={() => void flushAll().catch(() => setNotice("Still couldn't save. Please check the folder and try again."))} /></div> : workspaceView === "note" && selectedPath ? <section className="note-card" aria-label={`File: ${selectedName}`}>
               <div className="document-header">
                 <div className="document-heading">
                   <div className="document-icon"><FileText size={20} /></div>
@@ -1781,8 +1824,8 @@ function App() {
 
       {notice && <div className="toast" role="status"><AlertCircle size={17} /> <span>{notice}</span><button type="button" onClick={() => setNotice("")} aria-label="Dismiss message"><X size={16} /></button></div>}
 
-      {contextMenu && <div className="context-menu" role="menu" style={{ left: contextMenu.x, top: contextMenu.y }} onClick={(event) => event.stopPropagation()}>
-        <div className="context-heading" title={contextMenu.node?.name ?? contextMenu.folder}>{contextMenu.node?.name ?? `Add to ${contextMenu.folder === vaultPath ? "workspace" : fileName(contextMenu.folder)}`}</div>
+      {contextMenu && <div ref={contextMenuRef} className="context-menu" role="menu" style={{ left: contextMenu.x, top: contextMenu.y }} onClick={(event) => event.stopPropagation()}>
+        <div className="context-heading" title={contextMenu.node?.name ?? contextMenu.folder}>{displayEntryName(contextMenu.node?.name ?? "") || `Add to ${contextMenu.folder === vaultPath ? "workspace" : fileName(contextMenu.folder)}`}</div>
         {contextMenu.node && <button role="menuitem" type="button" onClick={() => { const node = contextMenu.node!; setContextMenu(null); openEntry(node); }}><FolderOpen size={16} /> Open</button>}
         {!isSample && <button role="menuitem" type="button" onClick={() => void revealPath(contextMenu.node?.path ?? contextMenu.folder)}><FolderOpen size={16} /> Open in explorer</button>}
         {(!contextMenu.node || contextMenu.node.kind === "folder") && <>
@@ -1895,15 +1938,15 @@ function App() {
           <div className="modal-icon"><Sparkles size={20} /></div><button className="modal-close icon-button" type="button" onClick={() => setCaptureOpen(false)} aria-label="Close dialog" disabled={dialogBusy}><X size={18} /></button>
           <h2 id="capture-title">Quick capture</h2><p>Save a thought now and come back to it whenever you're ready.</p>
           <div className="capture-tabs" role="tablist" aria-label="Capture type">
-            {(["text", "link", "image"] as const).map((type) => <button key={type} role="tab" type="button" aria-selected={captureType === type} className={captureType === type ? "active" : ""} onClick={() => { setCaptureType(type); setDialogError(""); }}>{type === "text" ? <FileText size={15} /> : type === "link" ? <Link2 size={15} /> : <ImageIcon size={15} />}{type[0].toUpperCase() + type.slice(1)}</button>)}
+            {(["text", "link", "image", "file"] as const).map((type) => <button key={type} role="tab" type="button" aria-selected={captureType === type} className={captureType === type ? "active" : ""} onClick={() => { setCaptureType(type); setDialogError(""); }}>{type === "text" ? <FileText size={15} /> : type === "link" ? <Link2 size={15} /> : type === "image" ? <ImageIcon size={15} /> : <Upload size={15} />}{type[0].toUpperCase() + type.slice(1)}</button>)}
           </div>
           {captureType === "image" && <button className="image-picker" type="button" onClick={() => void chooseImage()}><ImageIcon size={17} /> {captureImage ? fileName(captureImage) : "Choose an image"}</button>}
-          <label className="modal-label" htmlFor="capture-content">{captureType === "link" ? "Link" : captureType === "image" ? "Add a note (optional)" : "Your thought"}</label>
-          <textarea id="capture-content" autoFocus value={captureText} onChange={(event) => { setCaptureText(event.target.value); setDialogError(""); }} placeholder={captureType === "link" ? "https://example.com" : captureType === "image" ? "A few words about this image…" : "What would you like to remember?"} />
+          {captureType !== "file" && <><label className="modal-label" htmlFor="capture-content">{captureType === "link" ? "Link" : captureType === "image" ? "Add a note (optional)" : "Your thought"}</label>
+          <textarea id="capture-content" autoFocus value={captureText} onChange={(event) => { setCaptureText(event.target.value); setDialogError(""); }} placeholder={captureType === "link" ? "https://example.com" : captureType === "image" ? "A few words about this image…" : "What would you like to remember?"} /></>}
           <label className="modal-label" htmlFor="capture-destination">Save to path</label><select id="capture-destination" value={captureFolder} onChange={(event) => setCaptureFolder(event.target.value)}><option value={vaultPath}>Comet (workspace)</option>{entries.filter((entry) => entry.kind === "folder").map((folder) => <option key={folder.path} value={folder.path}>{displayWorkspacePath(folder.path, vaultPath)}</option>)}</select>
-          <span className="input-hint">Saved as a new {captureType === "link" ? "web shortcut (.url)" : "Markdown file"} in the selected folder{captureType === "image" && isSample ? ". Image capture requires a local folder." : "."}</span>
+          <span className="input-hint">{captureType === "file" ? "Choose one or more files to copy into this folder." : <>Saved as a new {captureType === "link" ? "web shortcut (.url)" : "Markdown file"} in the selected folder{captureType === "image" && isSample ? ". Image capture requires a local folder." : "."}</>}</span>
           {dialogError && <div className="dialog-error" role="alert"><AlertCircle size={15} /> {dialogError}</div>}
-          <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setCaptureOpen(false)} disabled={dialogBusy}>Cancel</button><button type="submit" className="primary-button" disabled={dialogBusy}>{dialogBusy ? "Saving…" : "Save capture"}</button></div>
+          <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setCaptureOpen(false)} disabled={dialogBusy}>Cancel</button><button type="submit" className="primary-button" disabled={dialogBusy}>{dialogBusy ? "Saving…" : captureType === "file" ? "Choose files" : "Save capture"}</button></div>
         </form>
       </div>}
 
@@ -1914,6 +1957,7 @@ function App() {
           <div className="modal-actions"><button type="button" className="primary-button" onClick={() => setDesktopInfoOpen(false)}>Back to sample</button></div>
         </div>
       </div>}
+      {syncBusy && <div className="restoring-overlay" role="dialog" aria-modal="true" aria-label="Syncing workspace"><LoaderCircle size={20} className="spin" /> Syncing your workspace safely…</div>}
       {restoring && <div className="restoring-overlay" role="status"><LoaderCircle size={20} className="spin" /> Reopening your workspace…</div>}
     </div>
   );
@@ -1959,7 +2003,7 @@ const TreeNodeView = memo(function TreeBranch({ node, depth, selectedPath, expan
       {folder ? <button type="button" className="tree-disclosure" aria-label={`${openFolder ? "Collapse" : "Expand"} ${node.name}`} aria-expanded={openFolder} onClick={() => onToggle(node.path)}>{openFolder ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</button> : <span className="tree-disclosure" aria-hidden="true" />}
       <button type="button" className="tree-item" onClick={(event) => onActivate(event, node)} aria-pressed={selectedPaths.has(node.path)} aria-current={selected ? "page" : undefined} title={node.name}>
         <span className={`tree-icon ${folder ? "folder" : fileKind(node.path)}`}><FileIcon entry={node} size={16} expanded={openFolder} /></span>
-        <span className="tree-name">{!folder && isMarkdown(node.name) ? noteTitle(node.name) : node.name}</span>{meta.pinned && <Pin size={11} className="tree-badge" />}{meta.favorite && <Star size={11} className="tree-badge" />}
+        <span className="tree-name">{!folder && isMarkdown(node.name) ? noteTitle(node.name) : displayEntryName(node.name)}</span>{meta.pinned && <Pin size={11} className="tree-badge" />}{meta.favorite && <Star size={11} className="tree-badge" />}
       </button>
       <button type="button" className="tree-drag-handle" aria-label={`Drag to arrange ${node.name}`} title="Drag to arrange or move" onPointerDown={(event) => onPointerDrag(event, node)} onClick={(event) => event.stopPropagation()}><GripVertical size={14} /></button>
       <button type="button" className="tree-action" aria-label={`More options for ${node.name}`} title={`More options for ${node.name}`} onClick={(event) => onContext(event, node)}><MoreHorizontal size={16} /></button>

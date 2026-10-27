@@ -49,6 +49,11 @@ export function noteTitle(name: string): string {
   return name.replace(/\.(?:md|markdown)$/i, "");
 }
 
+/** Special Comet document extensions remain on disk, but are not useful labels. */
+export function displayEntryName(name: string): string {
+  return name.replace(/\.(?:comet-todo|comet-whiteboard)$/i, "");
+}
+
 export function isPathInside(path: string, parent: string): boolean {
   if (!path || !parent) return false;
   const normalized = normalizePath(path);

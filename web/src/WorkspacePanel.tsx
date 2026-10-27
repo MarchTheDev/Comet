@@ -3,7 +3,7 @@ import { FileIcon } from "./FileIcon";
 import type { CSSProperties, DragEvent, MouseEvent } from "react";
 import { fileKind, fileKindLabel } from "./utils/fileTypes";
 import { itemMeta, type WorkspaceMeta } from "./utils/workspaceMeta";
-import { noteTitle, parentPath, relativePath, type Entry } from "./utils/vault";
+import { noteTitle, displayEntryName, parentPath, relativePath, type Entry } from "./utils/vault";
 
 export type WorkspaceLayout = "list" | "gallery";
 interface Props {
@@ -48,7 +48,7 @@ export function WorkspacePanel({ title, description, entries, vault, destination
       {entries.map((entry) => {
         const details = itemMeta(metadata, entry.path);
         const tags = metadata.tags.filter((tag) => details.tags.includes(tag.id));
-        const label = entry.kind === "folder" ? entry.name : fileKind(entry.path) === "markdown" ? noteTitle(entry.name) : entry.name;
+        const label = entry.kind === "folder" ? entry.name : fileKind(entry.path) === "markdown" ? noteTitle(entry.name) : displayEntryName(entry.name);
         return <div key={entry.path} className={`workspace-entry${entry.kind === "folder" && dropFolder === entry.path ? " drop-target" : ""}${selectedPaths.has(entry.path) ? " multi-selected" : ""}`} draggable onDragStart={(event) => onDragStart(event, entry)} onContextMenu={(event) => onMenu(event, entry)} data-path={entry.path} data-drop-folder={entry.kind === "folder" ? entry.path : undefined}
           onDragOver={entry.kind === "folder" ? (event) => onDragOver(event, entry.path) : undefined}
           onDrop={entry.kind === "folder" ? (event) => { event.stopPropagation(); onDrop(event, entry.path); } : undefined}>

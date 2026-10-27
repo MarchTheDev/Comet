@@ -66,6 +66,12 @@ on:
 permissions:
   contents: write
 
+# Desktop OAuth client identifiers are public application configuration, not
+# secrets. Google registration/consent verification is done by the project owner.
+env:
+  VITE_GOOGLE_CLIENT_ID: ${{ vars.COMET_GOOGLE_CLIENT_ID }}
+  VITE_GOOGLE_CLIENT_SECRET: ${{ vars.COMET_GOOGLE_CLIENT_SECRET }}
+
 jobs:
   # ----------------------------------------------------------------- the number
   version:

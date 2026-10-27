@@ -19,7 +19,7 @@ check('audio player reserves artwork metadata and lookup space while loading', a
 const board = newWhiteboard(), a = newWhiteboardItem('text', 5, 8), b = newWhiteboardItem('todo', 250, 8);
 board.items.push(a, b); board.connections.push({ from:a.id, to:b.id, color:'#8899aa' });
 check('whiteboards round-trip content and connections', parseWhiteboard(serializeWhiteboard(board))?.connections.length === 1);
-check('whiteboards reject dangling connections and unknown future fields', !parseWhiteboard(JSON.stringify({ ...board, connections:[{from:a.id,to:'missing',color:'#8899aa'}] })) && !parseWhiteboard(JSON.stringify({...board, version:2})));
+check('whiteboards reject dangling connections and unknown future fields', !parseWhiteboard(JSON.stringify({ ...board, connections:[{from:a.id,to:'missing',color:'#8899aa'}] })) && !parseWhiteboard(JSON.stringify({...board, version:3})));
 check('whiteboards reject unsafe embedded image data', !parseWhiteboard(JSON.stringify({ ...board, items:[{...a,type:'image',image:'data:image/svg+xml;base64,PHN2Zz4='}], connections:[] })));
 const salt = crypto.getRandomValues(new Uint8Array(16)), key = await derivePasswordKey('correct horse battery staple', salt);
 const data = {format:'comet-passwords-data',version:1,entries:[{id:'one',name:'Example',website:'https://example.com/',username:'alice@example.com',password:'hidden secret',notes:''}]};

@@ -11,6 +11,7 @@ use tauri_plugin_opener::OpenerExt;
 mod update;
 mod google;
 mod workspace_archive;
+mod artwork;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -503,6 +504,7 @@ pub fn run() {
             list_vault,
             tray_available,
             update::install_update,
+            artwork::lookup_music_cover,
             google::google_status,
             google::google_connect,
             google::google_disconnect,
@@ -513,6 +515,9 @@ pub fn run() {
             google::google_drive_list,
             google::google_drive_backup,
             google::google_drive_import,
+            google::google_sync_list,
+            google::google_sync_import,
+            google::google_sync_now,
             quit_app,
             open_vault_file,
             open_workspace_directory,

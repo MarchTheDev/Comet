@@ -47,6 +47,8 @@ await fire([...document.querySelectorAll('.brain-controls button')].find(button 
 const points = [...document.querySelectorAll('[data-graph-path]')].map(node => node.getAttribute('transform').match(/translate\(([-\d.]+) ([-\d.]+)\)/).slice(1).map(Number));
 let distance = Infinity; for (let i = 0; i < points.length; i++) for (let j = 0; j < i; j++) distance = Math.min(distance, Math.hypot(points[i][0] - points[j][0], points[i][1] - points[j][1]));
 check('notes-only layout separates 150 default nodes even across hidden folders', points.length === 150 && distance > 72);
+let labelsSeparate = true; for (let i = 0; i < points.length; i++) for (let j = 0; j < i; j++) if (Math.abs(points[i][0] - points[j][0]) < 220 && Math.abs(points[i][1] - points[j][1]) < 120) labelsSeparate = false;
+check('node and label bounds never overlap in a dense graph', labelsSeparate);
 const graph = document.querySelector('.brain-stage svg'), beforeZoom = graph.querySelector('g').getAttribute('transform');
 await fire(graph, new dom.window.WheelEvent('wheel', { bubbles: true, cancelable: true, ctrlKey: true, deltaY: -100, clientX: 200, clientY: 200 }));
 check('Ctrl+wheel zooms the graph', graph.querySelector('g').getAttribute('transform') !== beforeZoom);

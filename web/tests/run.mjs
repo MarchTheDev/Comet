@@ -30,6 +30,7 @@ const checks = [
   'tests/exploreInteractions.test.mjs',
   'tests/coverCache.test.mjs',
   'tests/latestFeatures.test.mjs',
+  'tests/passwordRecovery.test.mjs',
   'tests/googleInteractions.test.mjs',
   'tests/whiteboardInteractions.test.mjs',
 ];

@@ -279,9 +279,13 @@ jobs:
         if: steps.published.outputs.state != 'false'
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           tag="v${COMET_VERSION#v}"
-          gh release edit "$tag" --target "$GITHUB_SHA"
+          if ! output=$(gh release edit "$tag" --target "$GITHUB_SHA" 2>&1); then
+            echo "::error title=Could not update draft target::$output"
+            exit 1
+          fi
           actual=$(gh release view "$tag" --json targetCommitish --jq .targetCommitish)
           if [ "$actual" != "$GITHUB_SHA" ]; then
             echo "Draft target $actual does not match build $GITHUB_SHA" >&2

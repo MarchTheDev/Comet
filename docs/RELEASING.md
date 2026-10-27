@@ -3,8 +3,9 @@
 The current [release workflow](../.github/workflows/release.yml) builds Windows
 artifacts and attaches them to a **draft** GitHub release. Nothing is published
 automatically. Review the workflow run and every artifact before publishing.
-The release job can run even if the Windows build fails, so a draft's existence
-alone does not prove that the installers were produced successfully.
+The release job waits for a successful Windows build and artifact upload. A
+pre-existing draft can still be older than the latest commit, so verify its
+target and assets before publishing.
 
 ## Windows artifacts
 
@@ -36,7 +37,9 @@ remove either.
 2. Push the changes and wait for the **Release** workflow. Confirm the Windows
    job succeeded and the four expected files are attached to the draft.
 3. On Windows, run the setup and MSI, check their icon and branding, launch the
-   standalone and portable versions, and exercise file editing and media.
+   standalone and portable versions, and exercise file editing, calendar, media,
+   Explorer reveal, launch-at-login, tray restore, close-to-tray, and tray quit
+   after an edit. Also verify that a failed save prevents closing or quitting.
 4. Review the release notes, then publish the draft when ready. The workflow
    leaves an already-published release untouched.
 

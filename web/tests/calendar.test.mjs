@@ -1,0 +1,46 @@
+import { JSDOM } from 'jsdom';
+import React, { act } from 'react';
+import { createRoot } from 'react-dom/client';
+import { CalendarView } from '../src/CalendarView.tsx';
+import { calendarIcs, dateKey, monthDays, parseCalendarDate, readCalendar, saveCalendar } from '../src/utils/calendar.ts';
+
+let failures = 0;
+function check(name, ok) { if (ok) console.log(`  ok   ${name}`); else { failures++; console.log(`  FAIL ${name}`); } }
+console.log('\nlocal calendar');
+const memory = new Map();
+const store = { getItem: key => memory.get(key) ?? null, setItem: (key, value) => memory.set(key, value) };
+const event = { id: 'e-1', title: 'Trip, Milan', date: '2024-02-29', time: '10:30', notes: 'First line\nSecond; line' };
+check('makes Monday-first month grids across leap days and adjacent months', monthDays(2024, 1).length === 42 && dateKey(monthDays(2024, 1)[0]) === '2024-01-29' && !!parseCalendarDate('2024-02-29') && !parseCalendarDate('2023-02-29'));
+check('keeps separate local calendars for separate workspaces', saveCalendar('/one', [event], store) && readCalendar('/one', store).events[0].title === event.title && readCalendar('/two', store).events.length === 0);
+check('refuses to overwrite events modified by another window', !saveCalendar('/one', [], store, []) && readCalendar('/one', store).events.length === 1);
+const key = [...memory.keys()][0];
+const future = JSON.stringify({ format: 'comet-calendar', version: 2, events: [event], future: 'keep' });
+memory.set(key, future);
+check('unknown or damaged calendar documents are never overwritten', readCalendar('/one', store).status === 'invalid' && !saveCalendar('/one', [], store) && memory.get(key) === future);
+memory.set(key, '');
+check('empty, malformed stored data is protected', readCalendar('/one', store).status === 'invalid' && !saveCalendar('/one', [], store));
+const unavailable = { getItem() { throw new Error('denied'); }, setItem() { throw new Error('denied'); } };
+check('unavailable storage is surfaced rather than treated as an empty calendar', readCalendar('/one', unavailable).status === 'unavailable' && !saveCalendar('/one', [event], unavailable));
+const ics = calendarIcs([event, { ...event, id: 'e-2', title: '🗻'.repeat(40), time: '' }]);
+check('exports local timed and all-day events with escaped notes and folded UTF-8 lines', ics.includes('DTSTART:20240229T103000') && ics.includes('DTSTART;VALUE=DATE:20240229') && ics.includes('SUMMARY:Trip\\, Milan') && ics.includes('DESCRIPTION:First line\\nSecond\\; line') && ics.split('\r\n').every(line => Buffer.byteLength(line) <= 75));
+
+const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', { pretendToBeVisual: true, url: 'https://comet-calendar.test/' });
+dom.window.HTMLElement.prototype.attachEvent = function(name, listener) { this.addEventListener(name.replace(/^on/, ''), listener); };
+dom.window.HTMLElement.prototype.detachEvent = function(name, listener) { this.removeEventListener(name.replace(/^on/, ''), listener); };
+globalThis.window = dom.window; globalThis.document = dom.window.document; globalThis.Node = dom.window.Node; globalThis.HTMLElement = dom.window.HTMLElement; globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+Object.defineProperty(globalThis, 'navigator', { value: dom.window.navigator, configurable: true });
+const root = createRoot(document.getElementById('root'));
+await act(async () => root.render(React.createElement(CalendarView, { vault: '/one', name: 'One' })));
+const fire = async (element, type) => act(async () => element.dispatchEvent(new dom.window.MouseEvent(type, { bubbles: true, cancelable: true })));
+const button = text => [...document.querySelectorAll('button')].find(item => item.textContent.trim() === text);
+await fire(button('New event'), 'click');
+const title = document.querySelector('[aria-label="Event title"]');
+await act(async () => { Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value').set.call(title, 'Dentist'); const inputEvent = new dom.window.Event('propertychange', { bubbles: true }); Object.defineProperty(inputEvent, 'propertyName', { value: 'value' }); title.dispatchEvent(inputEvent); title.dispatchEvent(new dom.window.Event('input', { bubbles: true })); });
+await act(async () => document.querySelector('.calendar-form').dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true })));
+check('calendar form creates an event and saves it on this device', document.querySelector('.calendar-event')?.textContent.includes('Dentist') && readCalendar('/one', dom.window.localStorage).events.some(item => item.title === 'Dentist'));
+await fire(document.querySelector('[aria-label="Delete Dentist"]'), 'click');
+check('deletion requires confirmation', !!document.querySelector('.calendar-delete-confirm') && document.querySelector('.calendar-event')?.textContent.includes('Dentist'));
+await fire([...document.querySelectorAll('.calendar-delete-confirm button')].find(item => item.textContent === 'Delete'), 'click');
+check('confirmed deletion persists', !document.querySelector('.calendar-event') && readCalendar('/one', dom.window.localStorage).events.length === 0);
+await act(async () => root.unmount()); dom.window.close(); delete globalThis.IS_REACT_ACT_ENVIRONMENT;
+globalThis.__cometFailures = (globalThis.__cometFailures ?? 0) + failures;

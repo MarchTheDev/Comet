@@ -18,6 +18,8 @@ const checks = [
   'tests/vault.test.mjs',
   'tests/pathNavigation.test.mjs',
   'tests/settings.test.mjs',
+  'tests/settingsInteractions.test.mjs',
+  'tests/calendar.test.mjs',
   'tests/session.test.mjs',
   'tests/editor.test.mjs',
   'tests/organization.test.mjs',
@@ -25,6 +27,7 @@ const checks = [
   'tests/saveQueue.test.mjs',
   'tests/newFeatures.test.mjs',
   'tests/boardInteractions.test.mjs',
+  'tests/exploreInteractions.test.mjs',
   'tests/coverCache.test.mjs',
 ];
 try {

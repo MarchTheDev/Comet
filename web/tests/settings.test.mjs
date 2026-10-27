@@ -15,6 +15,13 @@ check('saves and restores all preferences, including false values', saveSettings
 memory.set(SETTINGS_KEY, JSON.stringify({ theme: 'system', showCover: false, editorFontSize: 32, interfaceScale: -50, textScale: 1000, todoArrowheads: 'yes', autoCoverArt: false, spellcheck: 'no', reopenWorkspace: false }));
 const partial = readSettings(storage);
 check('validates each saved field and fills missing or invalid values', partial.theme === 'system' && !('showCover' in partial) && partial.editorFontSize === DEFAULT_SETTINGS.editorFontSize && partial.interfaceScale === 100 && partial.textScale === 100 && !partial.todoArrowheads && !partial.autoCoverArt && partial.spellcheck && !partial.reopenWorkspace);
+memory.set(SETTINGS_KEY, JSON.stringify({ textScale: 120 }));
+check('legacy 120% becomes the new 100% without changing its apparent size', readSettings(storage).textScale === 100);
+memory.set(SETTINGS_KEY, JSON.stringify({ textScale: 100 }));
+check('legacy default adopts the larger new default', readSettings(storage).textScale === 100);
+memory.set(SETTINGS_KEY, JSON.stringify({ textScale: 80 }));
+check('other legacy text sizes migrate approximately without changing the look', readSettings(storage).textScale === 65);
+check('tray preferences round-trip as optional, off-by-default settings', saveSettings({ ...DEFAULT_SETTINGS, startInTray: true, closeToTray: true }, storage) && readSettings(storage).startInTray && readSettings(storage).closeToTray);
 check('accepts all additional color themes', ['emerald', 'rubellite', 'navy'].every(theme => { memory.set(SETTINGS_KEY, JSON.stringify({ theme })); return readSettings(storage).theme === theme; }));
 memory.set(SETTINGS_KEY, '{invalid');
 check('falls back safely for corrupt preferences', JSON.stringify(readSettings(storage)) === JSON.stringify(DEFAULT_SETTINGS));

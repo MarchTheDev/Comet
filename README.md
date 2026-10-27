@@ -10,10 +10,10 @@ a built-in sync service.
   list or gallery layout and the size slider to adjust type-specific file icons.
   Create files, folders and to-do boards, or upload files from a `+`, folder or
   background menu. File menus contain actions for that file only.
-- **Move and arrange.** Drag an item onto a folder to move it. In the sidebar,
-  drop above or below another item to place it there—even when that moves it into
-  a different folder; a destination label makes cross-folder drops clear. The
-  **Move to** menu provides a searchable folder picker that also shows files
+- **Move and arrange.** Drag an item onto a folder to move it. In the sidebar
+  or Tree view, drop above or below another item to place it there—even when
+  that moves it into a different folder. A grouped outline highlights the
+  destination folder and its visible contents. The **Move to** menu provides a searchable folder picker that also shows files
   beneath expanded folders (only folders can be selected as destinations).
   Drop files or web links on a folder or workspace to add them. Dropped files are
   limited to 20 MB; use **Upload files** for larger files in the desktop app.
@@ -27,8 +27,8 @@ a built-in sync service.
 - **Explore.** Expand the root and folder nodes in the left-to-right Tree view
   to reveal files. Brain view shows up to 150 items as a network: click a folder
   node to reveal or hide its children, drag the background to pan or a node to
-  arrange it, and click a file to open it. Right-click a node for actions such
-  as Open, Move, Rename and Delete. Node positions are saved on this device.
+  arrange it without moving its neighbors, and click a file to open it.
+  Right-click a node for actions such as Open, Move, Rename and Delete. Node positions are saved on this device.
   Solid lines represent folder membership; dotted lines represent
   links between Markdown notes. Only the first 256K characters of the first 120
   Markdown notes are read for connections, with bounded concurrency; binary files
@@ -46,16 +46,35 @@ a built-in sync service.
   buttons, or keyboard shortcuts to revisit places. Comet follows your system
   theme by default; Settings also offers dark, light, emerald, rubellite and navy
   themes, app and interface-text scaling, editor size, spell check, to-do
-  arrowheads, and reopening the last workspace. The Matterhorn photo is
-  always subtly visible behind the workspace.
+  arrowheads, and reopening the last workspace. Scaling applies when a dragged
+  slider is released. The Matterhorn photo is always subtly visible behind the
+  workspace.
+- **Calendar.** Open Calendar from the sidebar to view a month, select a day,
+  and add, edit, or delete events with an optional time and notes. Each workspace
+  has its own calendar in the local app profile; events are not written into the
+  vault or synced. Export an `.ics` file to back up or share events. Times are
+  floating local times. Comet does not currently provide reminders.
+- **Desktop startup and tray.** In Settings, independently choose launch at
+  system login, start in the system tray, and close to the tray. Open Comet from
+  the tray icon or its menu; use **Quit Comet** in that menu to exit. Re-launching
+  Comet restores an existing tray-resident window. If a tray can't be created,
+  Comet falls back to showing its window. A Linux desktop needs a compatible
+  tray host; re-launching Comet also restores the window. These controls are
+  desktop-only; reset preferences does not change system-login registration.
+- **File explorer.** Use an item's context menu or the folder button beside the
+  path bar to show files and folders in the system file explorer. The workspace
+  dropdown can also open a remembered workspace folder.
 
 Tags, pins, favorites, sidebar ordering, brain-node positions, workspace names
-and icons, remembered workspaces, keyboard shortcuts, and preferences are stored
-in Comet's local webview storage on this device, **not in the files**.
+and icons, remembered workspaces, keyboard shortcuts, calendars, and preferences
+are stored in Comet's local webview storage on this device, **not in the files**.
 They survive moves and renames performed in Comet, but do not travel with the
 vault to a different device or follow an externally moved vault folder. Back up
 your workspace files independently. If local storage is unavailable, these
-preferences last only for the current session.
+preferences last only for the current session. Calendar saves are refused when
+storage is unavailable or the stored calendar is unrecognized, rather than
+silently overwriting existing events. Export calendars separately before
+clearing app storage or moving to another device.
 
 ## Files and editing
 
@@ -70,7 +89,8 @@ are rejected for text editing.
 
 PDFs use locally bundled PDF.js resources. Choose single- or two-page layout,
 fit pages to the available width, drag to pan, and use the zoom buttons or
-Ctrl/Cmd + scroll; zoom follows the page position under the cursor. The custom
+Ctrl/Cmd + scroll; zoom follows the page position under the cursor and keeps the
+previous page visible while the sharper version renders. The custom
 video controls include seeking, volume, playback speed and fullscreen. The audio
 player shows embedded title, artist and cover art when available, a sound-driven
 visualizer, a fullscreen player, and a volume slider that responds to the mouse
@@ -115,7 +135,7 @@ entries within a task, drag card grips to arrange them, and assign colored
 categories from expanded details. Right-click a card or use its options button
 for more actions. Hover a task to reveal its connection dot (always visible on
 touch devices), then drag it onto another task. Click a connection to change its
-color or remove it. Connections have no arrowheads by default; enable them in
+color or remove it; click blank canvas to deselect it. Connections have no arrowheads by default; enable them in
 Settings if wanted. Drag the canvas to look around, or use its zoom controls and
 Ctrl/Cmd + scroll.
 

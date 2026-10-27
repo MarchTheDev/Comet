@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { ChevronDown, ChevronRight, GitBranch, Minus, Network, Plus, RotateCcw } from "lucide-react";
 import { FileIcon } from "./FileIcon";
 import { graphEdges } from "./utils/graph";
@@ -7,19 +7,63 @@ import { readNote } from "./utils/vaultBridge";
 
 interface Common { vault: string; name: string; onOpen: (entry: Entry) => void; selectedPaths: Set<string>; onActivate: (event: React.MouseEvent, entry: Entry, order: string[]) => void; onClearSelection: () => void; onContext?: (event: React.MouseEvent, entry: Entry) => void }
 
-/** A branching workspace map: the root and folder dots reveal their children. */
-export function TreeExplore({ tree, name, selectedPaths, onActivate }: Common & { tree: TreeNode[] }) {
+interface TreeMapProps extends Common {
+  tree: TreeNode[];
+  dropIndicator: { path: string; position: "before" | "after" | "into" } | null;
+  dropGroup: string;
+  onDragStart: (event: DragEvent, entry: Entry) => void;
+  onDragOverNode: (event: DragEvent, entry: TreeNode) => void;
+  onDropNode: (event: DragEvent, entry: TreeNode) => void;
+  onDragOverRoot: (event: DragEvent) => void;
+  onDropRoot: (event: DragEvent) => void;
+}
+
+/** A branching workspace map with safe, shared vault drag-and-drop. */
+export function TreeExplore({ tree, name, vault, selectedPaths, onActivate, onContext, dropIndicator, dropGroup, onDragStart, onDragOverNode, onDropNode, onDragOverRoot, onDropRoot }: TreeMapProps) {
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [rootOpen, setRootOpen] = useState(false);
+  const [height, setHeight] = useState(340);
+  const content = useRef<HTMLDivElement>(null);
+  const previousRects = useRef(new Map<string, { x: number; y: number }>());
   const ordered = useMemo(() => { const result: string[] = []; const walk = (nodes: TreeNode[]) => { for (const node of nodes) { result.push(node.path); if (node.kind === "folder" && expanded.has(node.path)) walk(node.children); } }; if (rootOpen) walk(tree); return result; }, [tree, expanded, rootOpen]);
   const toggle = (path: string) => setExpanded((previous) => { const next = new Set(previous); if (next.has(path)) next.delete(path); else next.add(path); return next; });
-  const branch = (nodes: TreeNode[]): React.ReactNode => <ul className="tree-map-children">{nodes.map((node) => <li className="tree-map-branch" key={node.path}>
-    <button type="button" className={`tree-map-node${selectedPaths.has(node.path) ? " multi-selected" : ""}`} aria-expanded={node.kind === "folder" ? expanded.has(node.path) : undefined} aria-pressed={node.kind === "file" ? selectedPaths.has(node.path) : undefined} onClick={(event) => { if (node.kind === "folder" && !event.ctrlKey && !event.metaKey && !event.shiftKey) toggle(node.path); else onActivate(event, node, ordered); }}>
-      <span className={`tree-map-dot ${node.kind}`} aria-hidden="true" /><span className={`tree-map-icon ${node.kind === "folder" ? "folder" : "file"}`}><FileIcon entry={node} size={17} expanded={expanded.has(node.path)} /></span><span className="tree-map-name">{node.kind === "file" && isMarkdown(node.path) ? noteTitle(node.name) : node.name}</span>{node.kind === "folder" && <><small>{node.children.length}</small>{expanded.has(node.path) ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</>}
-    </button>{node.kind === "folder" && expanded.has(node.path) && (node.children.length ? branch(node.children) : <p className="tree-map-empty">Empty folder</p>)}
-  </li>)}</ul>;
-  return <section className="explore-card tree-map-card" aria-labelledby="tree-title"><div className="explore-heading"><span className="explore-heading-icon"><GitBranch size={20} /></span><div><span className="section-eyebrow">EXPLORE YOUR SPACE</span><h2 id="tree-title">Tree view</h2><p>Start at the workspace, then open the dots to reveal folders and files.</p></div></div>
-    <div className="tree-map"><button type="button" className="tree-map-node tree-map-root" aria-expanded={rootOpen} onClick={() => setRootOpen((open) => !open)}><span className="tree-map-dot root" /><span className="tree-map-name">{name}</span><small>{tree.length} items</small>{rootOpen ? <ChevronDown size={15} /> : <ChevronRight size={15} />}</button>{rootOpen && (tree.length ? branch(tree) : <p className="tree-map-empty">Your workspace is empty.</p>)}</div>
+  // Animate the viewport's actual measured height rather than jumping between
+  // auto heights. Reduced-motion users get immediate changes.
+  useLayoutEffect(() => {
+    const element = content.current; if (!element) return;
+    const measure = () => setHeight(Math.max(340, element.offsetHeight + 48));
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure); observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+  // FLIP existing nodes into their new positions as neighboring branches open.
+  useLayoutEffect(() => {
+    const element = content.current; if (!element) return;
+    const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    const origin = element.getBoundingClientRect(), scale = element.offsetWidth ? origin.width / element.offsetWidth || 1 : 1;
+    const next = new Map<string, { x: number; y: number }>();
+    for (const node of element.querySelectorAll<HTMLElement>("[data-map-path]")) {
+      node.getAnimations?.().forEach((animation) => animation.cancel());
+      const rect = node.getBoundingClientRect(), key = node.dataset.mapPath!;
+      const point = { x: (rect.left - origin.left) / scale, y: (rect.top - origin.top) / scale };
+      const old = previousRects.current.get(key); next.set(key, point);
+      if (!reduce && old && node.animate && (Math.abs(old.x - point.x) > 1 || Math.abs(old.y - point.y) > 1)) node.animate([{ transform: `translate(${old.x - point.x}px, ${old.y - point.y}px)` }, { transform: "translate(0, 0)" }], { duration: 220, easing: "ease-out" });
+    }
+    previousRects.current = next;
+  }, [expanded, rootOpen, tree]);
+  const branch = (nodes: TreeNode[]): React.ReactNode => <ul className="tree-map-children">{nodes.map((node) => {
+    const indicator = dropIndicator?.path === node.path ? dropIndicator.position : undefined;
+    return <li className={`tree-map-branch${node.kind === "folder" && dropGroup === node.path ? " drop-group" : ""}`} key={node.path}>
+      <button type="button" draggable data-map-path={node.path} data-tree-path={node.path} data-drop-folder={node.kind === "folder" ? node.path : undefined} className={`tree-map-node${selectedPaths.has(node.path) ? " multi-selected" : ""}${indicator && indicator !== "into" ? ` drop-${indicator}` : ""}`} aria-expanded={node.kind === "folder" ? expanded.has(node.path) : undefined} aria-pressed={node.kind === "file" ? selectedPaths.has(node.path) : undefined} onDragStart={(event) => { event.stopPropagation(); onDragStart(event, node); }} onDragOver={(event) => onDragOverNode(event, node)} onDrop={(event) => onDropNode(event, node)} onContextMenu={(event) => onContext?.(event, node)} onClick={(event) => { if (node.kind === "folder" && !event.ctrlKey && !event.metaKey && !event.shiftKey) toggle(node.path); else onActivate(event, node, ordered); }}>
+        <span className={`tree-map-dot ${node.kind}`} aria-hidden="true" /><span className={`tree-map-icon ${node.kind === "folder" ? "folder" : "file"}`}><FileIcon entry={node} size={17} expanded={expanded.has(node.path)} /></span><span className="tree-map-name">{node.kind === "file" && isMarkdown(node.path) ? noteTitle(node.name) : node.name}</span>{node.kind === "folder" && <><small>{node.children.length}</small>{expanded.has(node.path) ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</>}
+      </button>{node.kind === "folder" && expanded.has(node.path) && (node.children.length ? branch(node.children) : <p className="tree-map-empty">Empty folder</p>)}
+    </li>;
+  })}</ul>;
+  return <section className="explore-card tree-map-card" aria-labelledby="tree-title"><div className="explore-heading"><span className="explore-heading-icon"><GitBranch size={20} /></span><div><span className="section-eyebrow">EXPLORE YOUR SPACE</span><h2 id="tree-title">Tree view</h2><p>Open a branch to explore. Drag an item onto a folder to move it, or between siblings to reorder.</p></div></div>
+    <div className={`tree-map${dropGroup === vault ? " drop-group" : ""}`} data-map-root={vault} style={{ height }} onDragOver={onDragOverRoot} onDrop={onDropRoot}>
+      <div className="tree-map-content" ref={content}><button type="button" className="tree-map-node tree-map-root" data-map-path={vault} aria-expanded={rootOpen} onClick={() => setRootOpen((open) => !open)}><span className="tree-map-dot root" /><span className="tree-map-name">{name}</span><small>{tree.length} items</small>{rootOpen ? <ChevronDown size={15} /> : <ChevronRight size={15} />}</button>{rootOpen && (tree.length ? branch(tree) : <p className="tree-map-empty">Your workspace is empty.</p>)}</div>
+    </div>
   </section>;
 }
 
@@ -113,12 +157,16 @@ export function BrainExplore({ vault, name, entries, onOpen, onActivate, onConte
     event.preventDefault(); event.stopPropagation();
     const pointer = event.pointerId, start = svgPoint(event.clientX, event.clientY), startX = event.clientX, startY = event.clientY;
     const initialPan = pan, key = node ? normalizePath(node.entry.path) : "";
+    // Default placements are relative to their parents. Freeze what is already
+    // visible before moving a node, so dragging the vault (or a folder) doesn't
+    // drag its neighbors along with it.
+    const frozen = Object.fromEntries(positioned.map(({ entry, x, y }) => [normalizePath(entry.path), { x, y }]));
     let moved = false, nextPoint = node ? { x: node.x, y: node.y } : null;
     const move = (e: PointerEvent) => {
       if (e.pointerId !== pointer) return;
       if (!moved && Math.hypot(e.clientX - startX, e.clientY - startY) < 4) return;
       moved = true; setDragging(true); const current = svgPoint(e.clientX, e.clientY);
-      if (node) { nextPoint = { x: Math.max(-99_999, Math.min(99_999, node.x + (current.x - start.x) / zoom)), y: Math.max(-99_999, Math.min(99_999, node.y + (current.y - start.y) / zoom)) }; setPositions((previous) => ({ ...previous, [key]: nextPoint! })); }
+      if (node) { nextPoint = { x: Math.max(-99_999, Math.min(99_999, node.x + (current.x - start.x) / zoom)), y: Math.max(-99_999, Math.min(99_999, node.y + (current.y - start.y) / zoom)) }; setPositions((previous) => ({ ...frozen, ...previous, [key]: nextPoint! })); }
       else setPan({ x: initialPan.x + current.x - start.x, y: initialPan.y + current.y - start.y });
     };
     const cleanup = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", end); window.removeEventListener("pointercancel", cancel); setDragging(false); };
@@ -129,7 +177,7 @@ export function BrainExplore({ vault, name, entries, onOpen, onActivate, onConte
         // Pointer-up can land outside the original node, in which case no
         // click follows. Do not swallow the user's next intentional click.
         window.setTimeout(() => { suppressClick.current = false; }, 0);
-        const saved = { ...positions, [key]: nextPoint };
+        const saved = { ...frozen, ...positions, [key]: nextPoint };
         try { localStorage.setItem(graphKey(vault), JSON.stringify(saved)); } catch { /* layout is optional */ }
       } else if (!node && !moved) onClearSelection();
     };

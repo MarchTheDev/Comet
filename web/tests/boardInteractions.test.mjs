@@ -8,10 +8,14 @@ let failures = 0;
 function check(name, ok) { if (ok) console.log(`  ok   ${name}`); else { failures++; console.log(`  FAIL ${name}`); } }
 console.log('\nto-do canvas interactions');
 const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', { pretendToBeVisual: true, url: 'https://comet.test/' });
+dom.window.HTMLElement.prototype.attachEvent = function(name, listener) { this.addEventListener(name.replace(/^on/, ''), listener); };
+dom.window.HTMLElement.prototype.detachEvent = function(name, listener) { this.removeEventListener(name.replace(/^on/, ''), listener); };
 globalThis.window = dom.window;
 globalThis.document = dom.window.document;
 globalThis.Node = dom.window.Node;
 globalThis.HTMLElement = dom.window.HTMLElement;
+globalThis.SVGElement = dom.window.SVGElement;
+dom.window.HTMLElement.prototype.setPointerCapture = () => {};
 globalThis.MutationObserver = dom.window.MutationObserver;
 globalThis.getComputedStyle = dom.window.getComputedStyle;
 globalThis.requestAnimationFrame = dom.window.requestAnimationFrame.bind(dom.window);
@@ -49,6 +53,10 @@ await fire(document.querySelector('.todo-link-hit'), new dom.window.MouseEvent('
 await fire(document.querySelector('[aria-label="Color connection from First to Second"]'), new dom.window.MouseEvent('click', { bubbles: true }));
 await fire(document.querySelector('[aria-label="Choose #e78383"]'), new dom.window.MouseEvent('click', { bubbles: true }));
 check('connection color is editable and persisted in the board', current.connections[0].color === '#e78383');
+check('selection highlight is an SVG path following the curve', document.querySelector('.todo-link-selection')?.getAttribute('d') === document.querySelector('.todo-link-line')?.getAttribute('d'));
+await fire(document.querySelector('.todo-canvas-inner'), pointer('pointerdown', 1000, 900));
+check('clicking blank canvas after a color change deselects the connection', !document.querySelector('.todo-link-controls') && !document.querySelector('.todo-connections-svg g.selected'));
+await fire(document.querySelector('.todo-link-hit'), new dom.window.MouseEvent('click', { bubbles: true }));
 await fire(document.querySelector('.todo-link-remove'), new dom.window.MouseEvent('click', { bubbles: true }));
 check('removing a connection keeps both tasks', current.connections.length === 0 && current.tasks.length === 2);
 await fire(document.querySelector('[data-todo-id="first"]'), new dom.window.MouseEvent('contextmenu', { bubbles: true, button: 2, clientX: 40, clientY: 40 }));
@@ -56,7 +64,7 @@ check('right-click exposes useful to-do actions', document.querySelector('.todo-
 const addItem = [...document.querySelectorAll('.todo-context-menu button')].find(button => button.textContent === 'Add item');
 await fire(addItem, new dom.window.MouseEvent('click', { bubbles: true }));
 const itemInput = document.querySelector('[aria-label="New item for First"]');
-await act(async () => { Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value').set.call(itemInput, 'Meeting'); itemInput.dispatchEvent(new dom.window.Event('input', { bubbles: true })); });
+await act(async () => { Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value').set.call(itemInput, 'Meeting'); const property = new dom.window.Event('propertychange', { bubbles: true }); Object.defineProperty(property, 'propertyName', { value: 'value' }); itemInput.dispatchEvent(property); itemInput.dispatchEvent(new dom.window.Event('input', { bubbles: true })); });
 await fire(document.querySelector('.todo-subtask-add'), new dom.window.Event('submit', { bubbles: true, cancelable: true }));
 check('adds a named sub-item without changing the parent title', current.tasks[0].text === 'First' && current.tasks[0].subtasks[0]?.text === 'Meeting');
 await fire(document.querySelector('[aria-label="Zoom board in"]'), new dom.window.MouseEvent('click', { bubbles: true }));

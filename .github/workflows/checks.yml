@@ -74,10 +74,8 @@ jobs:
       # `--message-format=short` puts every compile error on one line with its
       # file and position, which is what the annotations below need.
       #
-      # No `--locked`: the committed Cargo.lock is version 3 and a current Cargo
-      # rewrites it to version 4 on sight, so insisting on the file as it stands
-      # stops the tests before they start. The release builds have never used
-      # `--locked` either, so they resolve the same way this does.
+      # The version 4 Cargo.lock is committed and checked here, so CI cannot
+      # silently resolve a different set of native dependencies.
       - name: cargo test
         working-directory: web/src-tauri
         shell: bash
@@ -86,7 +84,7 @@ jobs:
           # --color=never because cargo colourises even into a pipe, and the
           # escape codes sit between the file name and the word "error", which
           # is exactly where the greps below are looking.
-          cargo test --color=never --message-format=short 2>&1 | tee ../cargo.log
+          cargo test --locked --color=never --message-format=short 2>&1 | tee ../cargo.log
 
       # A failed run's log cannot always be downloaded, so anything worth
       # reading is turned into an annotation, which can.

@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { disable as disableAutostart, enable as enableAutostart, isEnabled as isAutostartEnabled } from "@tauri-apps/plugin-autostart";
 import { ArrowLeft, Check, FolderOpen, Gem, Keyboard, Monitor, Moon, RotateCcw, Sun } from "lucide-react";
 import { keyboardShortcut, shortcutLabel, SHORTCUT_ACTIONS, type ShortcutAction } from "./utils/shortcuts";
 import { DEFAULT_SETTINGS, type Settings, type ThemePreference } from "./utils/settings";
@@ -8,6 +9,8 @@ interface SettingsPageProps {
   persisted: boolean;
   isSample: boolean;
   modifier: string;
+  desktop: boolean;
+  trayAvailable: boolean;
   onChange: (patch: Partial<Settings>) => void;
   onBack: () => void;
   onOpenVault: () => void;
@@ -22,7 +25,7 @@ const themes: { value: ThemePreference; label: string; description: string; icon
   { value: "navy", label: "Navy", description: "A midnight blue", icon: Moon },
 ];
 
-export function SettingsPage({ settings, persisted, isSample, modifier, onChange, onBack, onOpenVault }: SettingsPageProps) {
+export function SettingsPage({ settings, persisted, isSample, modifier, desktop, trayAvailable, onChange, onBack, onOpenVault }: SettingsPageProps) {
   const [recording, setRecording] = useState<ShortcutAction | null>(null);
   const [shortcutError, setShortcutError] = useState("");
   const mac = modifier === "⌘";
@@ -48,15 +51,11 @@ export function SettingsPage({ settings, persisted, isSample, modifier, onChange
               </label>)}
             </div>
           </fieldset>
-          <label className="setting-row scale-setting">
-            <span className="setting-copy"><strong>App scale</strong><small>Resize the whole interface.</small></span>
-            <input type="range" aria-label="App scale" min="75" max="150" step="5" value={settings.interfaceScale} onChange={(event) => onChange({ interfaceScale: Number(event.target.value) })} /><output>{settings.interfaceScale}%</output>
-          </label>
-          <label className="setting-row scale-setting">
-            <span className="setting-copy"><strong>Interface text scale</strong><small>Make labels and other text easier to read.</small></span>
-            <input type="range" aria-label="Interface text scale" min="80" max="140" step="5" value={settings.textScale} onChange={(event) => onChange({ textScale: Number(event.target.value) })} /><output>{settings.textScale}%</output>
-          </label>
+          <ScaleSetting label="App scale" description="Resize the whole interface." min={75} max={150} value={settings.interfaceScale} onCommit={(interfaceScale) => onChange({ interfaceScale })} />
+          <ScaleSetting label="Interface text scale" description="Make labels and other text easier to read." min={65} max={140} value={settings.textScale} onCommit={(textScale) => onChange({ textScale })} />
         </section>
+
+        <DesktopSettings desktop={desktop} trayAvailable={trayAvailable} settings={settings} onChange={onChange} />
 
         <section className="settings-card" aria-labelledby="editor-settings-title">
           <div className="settings-card-heading"><div><h2 id="editor-settings-title">Editor</h2><p>Make a little more room to think.</p></div></div>
@@ -110,5 +109,47 @@ export function SettingsPage({ settings, persisted, isSample, modifier, onChange
         <button className="reset-settings" type="button" onClick={() => onChange({ ...DEFAULT_SETTINGS })}><RotateCcw size={15} /> Reset preferences</button>
       </aside>
     </div>
+  </section>;
+}
+
+/** Defer zoom/reflow until the pointer is released, so the slider stays under it. */
+function ScaleSetting({ label, description, min, max, value, onCommit }: { label: string; description: string; min: number; max: number; value: number; onCommit: (value: number) => void }) {
+  const [draft, setDraft] = useState(value);
+  const dragging = useRef(false);
+  const latest = useRef(value);
+  useEffect(() => { if (!dragging.current) { latest.current = value; setDraft(value); } }, [value]);
+  const finish = () => { if (dragging.current) { dragging.current = false; onCommit(latest.current); } };
+  return <label className="setting-row scale-setting">
+    <span className="setting-copy"><strong>{label}</strong><small>{description} Changes apply when you release the slider.</small></span>
+    <input type="range" aria-label={label} min={min} max={max} step="5" value={draft}
+      onPointerDown={() => { dragging.current = true; }} onPointerUp={finish} onPointerCancel={finish} onBlur={finish}
+      onChange={(event) => { const next = Number(event.target.value); latest.current = next; setDraft(next); if (!dragging.current) onCommit(next); }} />
+    <output>{draft}%</output>
+  </label>;
+}
+
+function DesktopSettings({ desktop, trayAvailable, settings, onChange }: Pick<SettingsPageProps, "desktop" | "trayAvailable" | "settings" | "onChange">) {
+  const [autostart, setAutostart] = useState(false);
+  const [checking, setChecking] = useState(desktop);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    if (!desktop) return;
+    let active = true;
+    void isAutostartEnabled().then((enabled) => { if (active) setAutostart(enabled); }).catch((reason: unknown) => { if (active) setError(`Couldn't check startup: ${String(reason)}`); }).finally(() => { if (active) setChecking(false); });
+    return () => { active = false; };
+  }, [desktop]);
+  const changeAutostart = async (enabled: boolean) => {
+    setChecking(true); setError("");
+    try { if (enabled) await enableAutostart(); else await disableAutostart(); setAutostart(enabled); }
+    catch (reason) { setError(`Couldn't change startup: ${String(reason)}`); }
+    finally { setChecking(false); }
+  };
+  return <section className="settings-card" aria-labelledby="desktop-settings-title">
+    <div className="settings-card-heading"><div><h2 id="desktop-settings-title">Startup &amp; tray</h2><p>{desktop ? "Choose how Comet starts and closes on this device." : "These options are available in the desktop app."}</p></div></div>
+    <label className="setting-row"><span className="setting-copy"><strong>Launch at system login</strong><small>Start Comet when you sign in.</small></span><input className="setting-toggle" type="checkbox" aria-label="Launch at system login" disabled={!desktop || checking} checked={autostart} onChange={(event) => void changeAutostart(event.target.checked)} /></label>
+    <label className="setting-row"><span className="setting-copy"><strong>Start in the system tray</strong><small>Keep the window hidden on launch. Use the tray icon to open it.</small></span><input className="setting-toggle" type="checkbox" aria-label="Start in the system tray" disabled={!desktop || !trayAvailable} checked={settings.startInTray} onChange={(event) => onChange({ startInTray: event.target.checked })} /></label>
+    <label className="setting-row"><span className="setting-copy"><strong>Close to the system tray</strong><small>Closing the window keeps Comet running. Quit from the tray menu.</small></span><input className="setting-toggle" type="checkbox" aria-label="Close to the system tray" disabled={!desktop || !trayAvailable} checked={settings.closeToTray} onChange={(event) => onChange({ closeToTray: event.target.checked })} /></label>
+    {desktop && !trayAvailable && <p className="desktop-settings-note">The system tray isn't available; the window will remain accessible.</p>}
+    {error && <p className="dialog-error" role="alert">{error}</p>}
   </section>;
 }

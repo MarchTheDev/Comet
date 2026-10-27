@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::io::Write;
 use std::path::{Component, PathBuf};
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
 
@@ -98,6 +98,14 @@ async fn open_workspace_directory(app: tauri::AppHandle, path: String) -> Result
     let directory = std::fs::canonicalize(&requested).map_err(|e| e.to_string())?;
     if !directory.is_dir() { return Err("The workspace is not a folder.".into()); }
     app.opener().open_path(directory.to_string_lossy().to_string(), None::<&str>).map_err(|e| e.to_string())
+}
+
+// Reveal only an existing entry inside the selected workspace. Never pass an
+// arbitrary renderer-supplied path to the system file manager.
+#[tauri::command]
+async fn reveal_vault_entry(vault: String, path: String) -> Result<(), String> {
+    let entry = checked_vault_entry(&vault, &path)?;
+    tauri_plugin_opener::reveal_item_in_dir(entry).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -426,15 +434,75 @@ async fn search_vault(vault: String, query: String) -> Vec<SearchHit> {
     hits
 }
 
+struct TrayAvailable(bool);
+
+#[tauri::command]
+fn tray_available(available: tauri::State<'_, TrayAvailable>) -> bool { available.0 }
+
+// The frontend calls this only after the pending save queue has been flushed.
+#[tauri::command]
+fn quit_app(app: tauri::AppHandle) { app.exit(0); }
+
+fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
+fn create_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
+    use tauri::menu::{Menu, MenuItem};
+    use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+    let show = MenuItem::with_id(app, "show", "Open Comet", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Quit Comet", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&show, &quit])?;
+    let mut builder = TrayIconBuilder::with_id("comet-tray")
+        .tooltip("Comet")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "show" => show_main_window(app),
+            "quit" => {
+                // Do not exit directly: the webview owns the autosave queue.
+                if app.get_webview_window("main").is_some() {
+                    let _ = app.emit("comet-request-quit", ());
+                } else { app.exit(0); }
+            }
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
+                show_main_window(tray.app_handle());
+            }
+        });
+    if let Some(icon) = app.default_window_icon() { builder = builder.icon(icon.clone()); }
+    builder.build(app)?;
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // Re-launching a tray-resident Comet restores the existing window.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main_window(app)))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_autostart::Builder::new().build())
+        .setup(|app| {
+            let available = create_tray(app.handle()).is_ok();
+            app.manage(TrayAvailable(available));
+            // If a tray cannot be created, never leave the application hidden.
+            if !available { show_main_window(app.handle()); }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             list_vault,
+            tray_available,
+            quit_app,
             open_vault_file,
             open_workspace_directory,
+            reveal_vault_entry,
             read_note,
             write_note,
             open_vault,
@@ -492,6 +560,7 @@ mod tests {
             fs::create_dir(&outside_folder).unwrap();
             let linked_folder = vault.join("linked-folder");
             std::os::unix::fs::symlink(&outside_folder, &linked_folder).unwrap();
+            assert!(checked_vault_entry(root, linked_folder.to_str().unwrap()).is_err());
             assert!(checked_new_entry(root, linked_folder.join("new.md").to_str().unwrap(), true).is_err());
         }
         fs::remove_dir_all(base).unwrap();
@@ -507,6 +576,7 @@ mod tests {
         let destination_folder = vault.join("destination");
         fs::create_dir_all(&source_folder).unwrap();
         fs::create_dir_all(&destination_folder).unwrap();
+        assert!(checked_vault_entry(vault.to_str().unwrap(), source_folder.to_str().unwrap()).is_ok());
         let source = source_folder.join("note.md");
         let destination = destination_folder.join("note.md");
         let external = base.join("upload.bin");

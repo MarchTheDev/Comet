@@ -1,0 +1,45 @@
+import { JSDOM } from 'jsdom';
+import React, { act, useState } from 'react';
+import { createRoot } from 'react-dom/client';
+import { BrainExplore, TreeExplore } from '../src/ExploreViews.tsx';
+
+let failures = 0;
+function check(name, ok) { if (ok) console.log(`  ok   ${name}`); else { failures++; console.log(`  FAIL ${name}`); } }
+console.log('\ntree and brain interactions');
+const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', { pretendToBeVisual: true, url: 'https://comet-explore.test/' });
+globalThis.window = dom.window; globalThis.document = dom.window.document; globalThis.localStorage = dom.window.localStorage; globalThis.Node = dom.window.Node; globalThis.HTMLElement = dom.window.HTMLElement; globalThis.SVGElement = dom.window.SVGElement; globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+Object.defineProperty(globalThis, 'navigator', { value: dom.window.navigator, configurable: true });
+dom.window.SVGSVGElement.prototype.createSVGPoint = function() { return { x: 0, y: 0, matrixTransform() { return { x: this.x, y: this.y }; } }; };
+dom.window.SVGSVGElement.prototype.getScreenCTM = () => ({ inverse: () => ({}) });
+const root = createRoot(document.getElementById('root'));
+const folder = { name: 'Folder', path: 'comet-sample://vault/Folder', kind: 'folder', children: [{ name: 'Note.md', path: 'comet-sample://vault/Folder/Note.md', kind: 'file', children: [] }] };
+const other = { name: 'Other', path: 'comet-sample://vault/Other', kind: 'folder', children: [] };
+const common = { vault: 'comet-sample://vault', name: 'Workspace', onOpen() {}, onActivate() {}, onClearSelection() {}, selectedPaths: new Set() };
+let started = '', dropped = '';
+function TreeHarness() {
+  const [indicator, setIndicator] = useState(null);
+  return React.createElement(TreeExplore, { ...common, tree: [folder, other], dropIndicator: indicator, dropGroup: indicator?.path ?? '', onDragStart(e, item) { started = item.path; }, onDragOverNode(e, item) { e.preventDefault(); setIndicator({ path: item.path, position: 'into' }); }, onDropNode(e, item) { dropped = item.path; }, onDragOverRoot() {}, onDropRoot() {} });
+}
+const event = (type, options = {}) => new dom.window.MouseEvent(type, { bubbles: true, button: 0, ...options });
+const pointer = (type, x, y) => { const e = event(type, { clientX: x, clientY: y }); Object.defineProperty(e, 'pointerId', { value: 1 }); return e; };
+const fire = async (element, e) => act(async () => element.dispatchEvent(e));
+await act(async () => root.render(React.createElement(TreeHarness)));
+await fire(document.querySelector('.tree-map-root'), event('click'));
+await fire(document.querySelector(`[data-map-path="${folder.path}"]`), event('click'));
+check('tree expands folders and displays their children', !!document.querySelector(`[data-map-path="${folder.children[0].path}"]`));
+await fire(document.querySelector(`[data-map-path="${folder.children[0].path}"]`), event('dragstart'));
+await fire(document.querySelector(`[data-map-path="${other.path}"]`), event('dragover'));
+check('tree nodes expose drag source and grouped folder target', started === folder.children[0].path && !!document.querySelector('.tree-map-branch.drop-group'));
+await fire(document.querySelector(`[data-map-path="${other.path}"]`), event('drop'));
+check('tree drop reaches the destination handler', dropped === other.path);
+await act(async () => root.render(React.createElement(BrainExplore, { ...common, entries: [folder, other] })));
+const rootNode = document.querySelector('[data-graph-root]');
+const rootBefore = rootNode.getAttribute('transform');
+const nodesBefore = [...document.querySelectorAll('[data-graph-path]')].map(node => node.getAttribute('transform'));
+await fire(rootNode, pointer('pointerdown', 100, 100)); await fire(window, pointer('pointermove', 180, 150)); await fire(window, pointer('pointerup', 180, 150));
+const nodesAfter = [...document.querySelectorAll('[data-graph-path]')].map(node => node.getAttribute('transform'));
+check('dragging the brain root moves it but leaves all visible nodes in place', rootNode.getAttribute('transform') !== rootBefore && JSON.stringify(nodesBefore) === JSON.stringify(nodesAfter));
+const saved = JSON.parse(dom.window.localStorage.getItem(`comet:graph-layout:v1:${encodeURIComponent(common.vault)}`));
+check('the independent root and node positions persist together', !!saved[common.vault] && !!saved[folder.path] && !!saved[other.path]);
+await act(async () => root.unmount()); dom.window.close(); delete globalThis.IS_REACT_ACT_ENVIRONMENT;
+globalThis.__cometFailures = (globalThis.__cometFailures ?? 0) + failures;

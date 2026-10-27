@@ -6,6 +6,7 @@ import PdfWorker from "pdfjs-dist/build/pdf.worker.min.mjs?worker&inline";
 function PdfPage({ document: pdf, page, zoom }: { document: PDFDocumentProxy; page: number; zoom: number }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const [rendering, setRendering] = useState(true);
+  const [hasRendered, setHasRendered] = useState(false);
   const [error, setError] = useState("");
   const [dimensions, setDimensions] = useState<{ width: number; height: number } | null>(null);
   useEffect(() => {
@@ -20,15 +21,26 @@ function PdfPage({ document: pdf, page, zoom }: { document: PDFDocumentProxy; pa
       // Reduce raster resolution rather than displayed size when the page is
       // extreme. That keeps zoom and two-page layout geometrically correct.
       const ratio = Math.min(window.devicePixelRatio || 1, 4096 / Math.max(viewport.width, viewport.height), Math.sqrt(8_000_000 / (viewport.width * viewport.height)));
-      const element = canvas.current;
-      element.width = Math.max(1, Math.ceil(viewport.width * ratio)); element.height = Math.max(1, Math.ceil(viewport.height * ratio));
-      element.style.width = "100%"; element.style.height = "100%";
-      task = pdfPage.render({ canvas: element, viewport, transform: ratio === 1 ? undefined : [ratio, 0, 0, ratio, 0, 0] });
-      try { await task.promise; } finally { try { pdfPage.cleanup(); } catch { /* cancelled page */ } }
+      // Render offscreen: resizing a visible canvas clears it immediately and
+      // flashes white. The old page stays visible and scales with the sheet
+      // until the new raster is ready, even across rapid zoom changes.
+      const buffer = window.document.createElement("canvas");
+      buffer.width = Math.max(1, Math.ceil(viewport.width * ratio)); buffer.height = Math.max(1, Math.ceil(viewport.height * ratio));
+      task = pdfPage.render({ canvas: buffer, viewport, transform: ratio === 1 ? undefined : [ratio, 0, 0, ratio, 0, 0] });
+      try {
+        await task.promise;
+        if (!active || !canvas.current) return;
+        const element = canvas.current, context = element.getContext("2d");
+        if (!context) throw new Error("Couldn't display this PDF page.");
+        // Resize and copy in the same turn, before the browser can paint.
+        element.width = buffer.width; element.height = buffer.height;
+        context.drawImage(buffer, 0, 0);
+        setHasRendered(true);
+      } finally { try { pdfPage.cleanup(); } catch { /* cancelled page */ } }
     }).catch((reason: unknown) => { if (active) setError(reason instanceof Error ? reason.message : "Couldn't render this page."); }).finally(() => { if (active) setRendering(false); });
     return () => { active = false; task?.cancel(); };
   }, [pdf, page, zoom]);
-  return <div className="pdf-sheet" data-pdf-page={page} aria-busy={rendering} style={dimensions ? { width: dimensions.width * zoom, height: dimensions.height * zoom } : undefined}><canvas ref={canvas} aria-label={`PDF page ${page}`} />{rendering && <span className="pdf-loading">Rendering page {page}…</span>}{error && <span className="pdf-page-error" role="alert">{error}</span>}</div>;
+  return <div className="pdf-sheet" data-pdf-page={page} aria-busy={rendering} style={dimensions ? { width: dimensions.width * zoom, height: dimensions.height * zoom } : undefined}><canvas ref={canvas} aria-label={`PDF page ${page}`} />{rendering && !hasRendered && <span className="pdf-loading">Rendering page {page}…</span>}{error && <span className="pdf-page-error" role="alert">{error}</span>}</div>;
 }
 
 /** PDF.js is bundled with its worker and resources; documents stay local. */

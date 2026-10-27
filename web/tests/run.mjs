@@ -30,6 +30,7 @@ const checks = [
   'tests/exploreInteractions.test.mjs',
   'tests/coverCache.test.mjs',
   'tests/latestFeatures.test.mjs',
+  'tests/googleInteractions.test.mjs',
 ];
 try {
   for (const file of checks) {
@@ -41,7 +42,7 @@ try {
       platform: 'node',
       outfile: out,
       // Left to Node, so the bundle finds the copies installed here.
-      external: ['jsdom', 'react', 'react-dom', 'react-dom/server', 'lucide-react'],
+      external: ['jsdom', 'react', 'react-dom', 'react-dom/server', 'lucide-react', 'music-metadata'],
       jsx: 'automatic',
       logLevel: 'silent',
     });

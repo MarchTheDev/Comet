@@ -52,7 +52,7 @@ Google Calendar and manual Google Drive workspace snapshots are optional.
   workspace.
 - **Calendar.** Open Calendar from the sidebar to view a month, select a day,
   and add, edit, or delete events with an optional time and notes. Click the
-  month or year to browse, or jump to a year directly. Each workspace has its
+  month or year to browse, or jump directly to any year from 1 to 9999. Each workspace has its
   own calendar in the local app profile. Export local events as `.ics`; local
   events are not part of the workspace files. Optionally connect your primary
   Google Calendar in Settings → Cloud: its events are read on opening, changing
@@ -216,7 +216,8 @@ access in your Google account to remove the grant itself.
 Google Drive access is scoped to files created by Comet. **Upload current
 workspace** creates an immutable, uncompressed snapshot in Drive; **Import as
 new** asks for a destination folder and creates a separate workspace without
-replacing existing files. Upload again after changes; this is manual transfer,
+replacing existing files. Avoid editing files while uploading: snapshots are not
+an atomic filesystem freeze. Upload again after changes; this is manual transfer,
 **not continuous two-way synchronization or conflict merging**. Snapshots are
 limited to 128 MB total, do not follow symbolic links, and reject names that
 cannot be safely transferred across platforms. They contain workspace files,

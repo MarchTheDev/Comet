@@ -60,8 +60,11 @@ pub fn pack(vault: &str) -> Result<Vec<u8>, String> {
             if metadata.is_dir() { pending.push(path); }
             else {
                 let file = File::open(path).map_err(|_| "Couldn't read a workspace file.")?;
-                let mut data = Vec::new(); file.take(size + 1).read_to_end(&mut data).map_err(|_| "Couldn't read a workspace file.")?;
-                if data.len() as u64 != size { return Err("A file changed during the snapshot. Try again after saving it.".into()); }
+                let before = file.metadata().map_err(|_| "Couldn't inspect a workspace file.")?;
+                if !before.is_file() || before.len() != size || before.modified().ok() != metadata.modified().ok() { return Err("A file changed during the snapshot. Try again after saving it.".into()); }
+                let mut data = Vec::new(); (&file).take(size + 1).read_to_end(&mut data).map_err(|_| "Couldn't read a workspace file.")?;
+                let after = file.metadata().map_err(|_| "Couldn't inspect a workspace file.")?;
+                if data.len() as u64 != size || after.len() != size || after.modified().ok() != before.modified().ok() { return Err("A file changed during the snapshot. Try again after saving it.".into()); }
                 result.extend_from_slice(&data);
             }
         }
@@ -147,5 +150,25 @@ mod tests {
         let mut damaged = data.clone(); damaged[10] ^= 1; assert!(validate(&damaged).is_err());
         assert!(!safe_path("../escape")); assert!(!safe_path("C:/outside")); assert!(!safe_path("a\\b")); assert!(!safe_path("folder/NUL.txt"));
         fs::remove_dir_all(root).unwrap();
+    }
+    fn crafted(name: &str) -> Vec<u8> {
+        let mut data = MAGIC.to_vec(); data.push(1); data.extend_from_slice(&(name.len() as u32).to_le_bytes()); data.extend_from_slice(&0u64.to_le_bytes()); data.extend_from_slice(name.as_bytes()); data.push(0);
+        let hash = Sha256::digest(&data); data.extend_from_slice(&hash); data
+    }
+    #[test]
+    fn checksummed_archives_still_reject_traversal_and_missing_parents() {
+        assert!(validate(&crafted("../escape.txt")).is_err());
+        assert!(validate(&crafted("C:/escape.txt")).is_err());
+        assert!(validate(&crafted("missing/file.txt")).is_err());
+        assert!(validate(&crafted("safe.txt")).is_ok());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn refuses_symbolic_links_before_upload() {
+        use std::os::unix::fs::symlink;
+        let mut random = [0u8; 8]; getrandom::fill(&mut random).unwrap();
+        let root = std::env::temp_dir().join(format!("comet-link-{:x}", u64::from_le_bytes(random)));
+        fs::create_dir(&root).unwrap(); symlink("/", root.join("link")).unwrap();
+        assert!(pack(root.to_str().unwrap()).is_err()); fs::remove_dir_all(root).unwrap();
     }
 }

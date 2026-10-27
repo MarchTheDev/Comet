@@ -1,4 +1,7 @@
 import { webcrypto } from 'node:crypto';
+import React from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { AudioPlayer } from '../src/MediaPlayer.tsx';
 import { zipSync, strToU8 } from 'fflate';
 import { boundedEpubResponse, validateEpubArchive } from '../src/utils/epubSafety.ts';
 import { newWhiteboard, newWhiteboardItem, parseWhiteboard, serializeWhiteboard } from '../src/utils/whiteboard.ts';
@@ -11,6 +14,8 @@ let failures = 0; const check = (name, ok) => { if (ok) console.log(`  ok   ${na
 const rejects = async (fn) => { try { await fn(); return false; } catch { return true; } };
 const buf = bytes => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
 console.log('\nwhiteboard, passwords, ebooks and cloud helpers');
+const audioMarkup = renderToStaticMarkup(React.createElement(AudioPlayer, {url: 'data:audio/wav;base64,AA==', name: 'song.wav'}));
+check('audio player reserves artwork metadata and lookup space while loading', audioMarkup.includes('audio-artist') && audioMarkup.includes('audio-cover-slot'));
 const board = newWhiteboard(), a = newWhiteboardItem('text', 5, 8), b = newWhiteboardItem('todo', 250, 8);
 board.items.push(a, b); board.connections.push({ from:a.id, to:b.id, color:'#8899aa' });
 check('whiteboards round-trip content and connections', parseWhiteboard(serializeWhiteboard(board))?.connections.length === 1);
@@ -23,8 +28,10 @@ check('password entries are encrypted with a fresh nonce', !encrypted.includes('
 check('the correct master password restores the encrypted entries', (await unlockPasswordData(encrypted, 'correct horse battery staple')).data.entries[0].password === 'hidden secret');
 check('wrong passwords and modified ciphertext are rejected', await rejects(()=>unlockPasswordData(encrypted, 'wrong')) && await rejects(()=>{const value=JSON.parse(encrypted); value.ciphertext = `${value.ciphertext[0] === 'A' ? 'B' : 'A'}${value.ciphertext.slice(1)}`; return unlockPasswordData(JSON.stringify(value),'correct horse battery staple')}));
 check('unknown vault versions and invalid entries are never accepted', !parsePasswordEnvelope(encrypted.replace('"version":1','"version":2')) && !validPasswordData({...data,entries:[{...data.entries[0],website:'javascript:alert(1)'}]}));
-check('site icons do not disclose local addresses', !faviconUrl('http://127.0.0.1/private') && !faviconUrl('http://printer.local/') && !!faviconUrl('https://example.com/a'));
+check('site icons do not disclose local addresses', !faviconUrl('http://127.0.0.1/private') && !faviconUrl('http://0.0.0.0/') && !faviconUrl('http://100.64.0.1/') && !faviconUrl('http://printer.local/') && !!faviconUrl('https://example.com/a'));
 check('generated passwords have the requested length', makePassword().length === 24);
+const hugeEntries = Array.from({length: 950}, (_, i) => ({id:`${i}`,name:`site ${i}`,website:'',username:'a'.repeat(500),password:'b'.repeat(1000),notes:'🗻'.repeat(2500)}));
+check('a vault too large to read back is rejected before it can be saved', await rejects(()=>encryptPasswordData({...data,entries:hugeEntries}, key, salt)));
 const zip = zipSync({'META-INF/container.xml':strToU8('<container/>'),'OEBPS/chapter.xhtml':strToU8('hello'.repeat(5000))});
 validateEpubArchive(buf(zip)); check('accepts a normal compressed ebook archive', true);
 check('rejects unsafe ebook paths', await rejects(()=>validateEpubArchive(buf(zipSync({'../escape':strToU8('x')})))));

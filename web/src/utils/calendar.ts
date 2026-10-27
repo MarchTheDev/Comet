@@ -9,6 +9,10 @@ export const MAX_CALENDAR_EVENTS = 5000;
 const keyFor = (vault: string) => `${PREFIX}${encodeURIComponent(normalizePath(vault))}`;
 function storage(): Store | undefined { try { return typeof window === "undefined" ? undefined : window.localStorage; } catch { return undefined; } }
 
+/** Create local dates without JavaScript's 1900 offset for years 1–99. */
+export function calendarDate(year: number, month: number, day: number, hour = 12, minute = 0): Date {
+  const date = new Date(0); date.setFullYear(year, month, day); date.setHours(hour, minute, 0, 0); return date;
+}
 /** Dates are local calendar days, not UTC instants. */
 export function dateKey(date: Date): string {
   return `${date.getFullYear().toString().padStart(4, "0")}-${(date.getMonth() + 1).toString().padStart(2, "0")}-${date.getDate().toString().padStart(2, "0")}`;
@@ -17,14 +21,14 @@ export function parseCalendarDate(value: string): Date | null {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
   if (!match) return null;
   const year = Number(match[1]), month = Number(match[2]), day = Number(match[3]);
-  if (year < 100 || year > 9999) return null;
-  const date = new Date(year, month - 1, day, 12);
+  if (year < 1 || year > 9999) return null;
+  const date = calendarDate(year, month - 1, day);
   return date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day ? date : null;
 }
 export function monthDays(year: number, month: number): Date[] {
-  const first = new Date(year, month, 1, 12);
+  const first = calendarDate(year, month, 1);
   const mondayOffset = (first.getDay() + 6) % 7;
-  return Array.from({ length: 42 }, (_, index) => new Date(year, month, 1 - mondayOffset + index, 12));
+  return Array.from({ length: 42 }, (_, index) => calendarDate(year, month, 1 - mondayOffset + index));
 }
 const validEvent = (value: unknown): value is CalendarEvent => {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;

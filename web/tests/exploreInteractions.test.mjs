@@ -41,5 +41,14 @@ const nodesAfter = [...document.querySelectorAll('[data-graph-path]')].map(node 
 check('dragging the brain root moves it but leaves all visible nodes in place', rootNode.getAttribute('transform') !== rootBefore && JSON.stringify(nodesBefore) === JSON.stringify(nodesAfter));
 const saved = JSON.parse(dom.window.localStorage.getItem(`comet:graph-layout:v1:${encodeURIComponent(common.vault)}`));
 check('the independent root and node positions persist together', !!saved[common.vault] && !!saved[folder.path] && !!saved[other.path]);
+const many = Array.from({ length: 150 }, (_, i) => ({ name: `Note${i}.md`, path: `comet-sample://vault/workspace-2/Folder${i}/Note${i}.md`, kind: 'file' }));
+await act(async () => root.render(React.createElement(BrainExplore, { ...common, vault: 'comet-sample://vault/workspace-2', entries: many, key: 'dense' })));
+await fire([...document.querySelectorAll('.brain-controls button')].find(button => button.textContent === 'Notes only'), event('click'));
+const points = [...document.querySelectorAll('[data-graph-path]')].map(node => node.getAttribute('transform').match(/translate\(([-\d.]+) ([-\d.]+)\)/).slice(1).map(Number));
+let distance = Infinity; for (let i = 0; i < points.length; i++) for (let j = 0; j < i; j++) distance = Math.min(distance, Math.hypot(points[i][0] - points[j][0], points[i][1] - points[j][1]));
+check('notes-only layout separates 150 default nodes even across hidden folders', points.length === 150 && distance > 72);
+const graph = document.querySelector('.brain-stage svg'), beforeZoom = graph.querySelector('g').getAttribute('transform');
+await fire(graph, new dom.window.WheelEvent('wheel', { bubbles: true, cancelable: true, ctrlKey: true, deltaY: -100, clientX: 200, clientY: 200 }));
+check('Ctrl+wheel zooms the graph', graph.querySelector('g').getAttribute('transform') !== beforeZoom);
 await act(async () => root.unmount()); dom.window.close(); delete globalThis.IS_REACT_ACT_ENVIRONMENT;
 globalThis.__cometFailures = (globalThis.__cometFailures ?? 0) + failures;

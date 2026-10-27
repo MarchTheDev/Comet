@@ -1784,7 +1784,7 @@ function App() {
       {contextMenu && <div className="context-menu" role="menu" style={{ left: contextMenu.x, top: contextMenu.y }} onClick={(event) => event.stopPropagation()}>
         <div className="context-heading" title={contextMenu.node?.name ?? contextMenu.folder}>{contextMenu.node?.name ?? `Add to ${contextMenu.folder === vaultPath ? "workspace" : fileName(contextMenu.folder)}`}</div>
         {contextMenu.node && <button role="menuitem" type="button" onClick={() => { const node = contextMenu.node!; setContextMenu(null); openEntry(node); }}><FolderOpen size={16} /> Open</button>}
-        {!isSample && <button role="menuitem" type="button" onClick={() => void revealPath(contextMenu.node?.path ?? contextMenu.folder)}><FolderOpen size={16} /> Open in Explorer</button>}
+        {!isSample && <button role="menuitem" type="button" onClick={() => void revealPath(contextMenu.node?.path ?? contextMenu.folder)}><FolderOpen size={16} /> Open in explorer</button>}
         {(!contextMenu.node || contextMenu.node.kind === "folder") && <>
         {contextMenu.node && <div className="context-divider" />}
         <button role="menuitem" type="button" onClick={() => openCreate("note", contextMenu.folder)}><FilePlus2 size={16} /> New file</button>

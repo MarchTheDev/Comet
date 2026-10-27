@@ -1,4 +1,4 @@
-import { dateKey, parseCalendarDate, type CalendarEvent } from "./calendar";
+import { calendarDate, dateKey, parseCalendarDate, type CalendarEvent } from "./calendar";
 export interface GoogleTime { date?: string; dateTime?: string }
 export interface GoogleCalendarEvent extends CalendarEvent { googleId: string; etag: string; start: GoogleTime; end: GoogleTime; recurring: boolean; editable: boolean }
 const item = (value: unknown): value is Record<string, unknown> => Boolean(value && typeof value === "object" && !Array.isArray(value));
@@ -17,11 +17,11 @@ export function parseGoogleEvents(value: unknown): GoogleCalendarEvent[] {
     return [{ id: `google:${raw.id}`, googleId: raw.id, etag: raw.etag, title: title || "(Untitled Google event)", notes: notes.slice(0, 5000), ...beginning, start, end, recurring: typeof raw.recurringEventId === "string", editable: title.length <= 200 && notes.length <= 5000 && Boolean(raw.etag) }];
   });
 }
-const isoDay = (date: string) => { const day = parseCalendarDate(date); if (!day) throw new Error("Enter a valid event date."); return Date.UTC(day.getFullYear(), day.getMonth(), day.getDate()); };
-const dayString = (time: number) => new Date(time).toISOString().slice(0, 10);
+const isoDay = (date: string) => { const day = parseCalendarDate(date); if (!day) throw new Error("Enter a valid event date."); const utc = new Date(0); utc.setUTCFullYear(day.getFullYear(), day.getMonth(), day.getDate()); utc.setUTCHours(0, 0, 0, 0); return utc.getTime(); };
+const dayString = (time: number) => { const value = new Date(time).toISOString(); if (!/^\d{4}-/.test(value)) throw new Error("The event end is outside the supported year range."); return value.slice(0, 10); };
 function startInstant(date: string, time: string): Date {
   const day = parseCalendarDate(date); if (!day || !/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) throw new Error("Enter a valid date and time.");
-  const [hour, minute] = time.split(":").map(Number), value = new Date(day.getFullYear(), day.getMonth(), day.getDate(), hour, minute);
+  const [hour, minute] = time.split(":").map(Number), value = calendarDate(day.getFullYear(), day.getMonth(), day.getDate(), hour, minute);
   if (value.getHours() !== hour || value.getMinutes() !== minute) throw new Error("That local time doesn't exist because the clock changes. Choose another time.");
   return value;
 }

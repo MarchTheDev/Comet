@@ -11,6 +11,7 @@ const memory = new Map();
 const store = { getItem: key => memory.get(key) ?? null, setItem: (key, value) => memory.set(key, value) };
 const event = { id: 'e-1', title: 'Trip, Milan', date: '2024-02-29', time: '10:30', notes: 'First line\nSecond; line' };
 check('makes Monday-first month grids across leap days and adjacent months', monthDays(2024, 1).length === 42 && dateKey(monthDays(2024, 1)[0]) === '2024-01-29' && !!parseCalendarDate('2024-02-29') && !parseCalendarDate('2023-02-29'));
+check('supports years 1 through 9999 without JavaScript’s 1900 offset', parseCalendarDate('0001-01-01')?.getFullYear() === 1 && parseCalendarDate('0099-12-31')?.getFullYear() === 99 && !parseCalendarDate('0000-01-01') && monthDays(99, 0).some(day => dateKey(day) === '0099-01-01'));
 check('keeps separate local calendars for separate workspaces', saveCalendar('/one', [event], store) && readCalendar('/one', store).events[0].title === event.title && readCalendar('/two', store).events.length === 0);
 check('refuses to overwrite events modified by another window', !saveCalendar('/one', [], store, []) && readCalendar('/one', store).events.length === 1);
 const key = [...memory.keys()][0];

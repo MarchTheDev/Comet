@@ -141,7 +141,9 @@ export function BrainExplore({ vault, name, entries, onOpen, onActivate, onConte
       // Place children outward from their parent, rather than on top of the
       // workspace node. Existing user-arranged positions always take priority.
       const angle = rootChild ? sibling * 2.3999632297 - Math.PI / 2 : Math.atan2(origin.y - root.y, origin.x - root.x) + (sibling - ((siblingCounts.get(parent) ?? 1) - 1) / 2) * .7;
-      const radius = rootChild ? 220 + Math.sqrt(sibling / Math.max(1, (siblingCounts.get(parent) ?? 1) - 1)) * (typeof window !== "undefined" && window.innerWidth <= 600 ? 170 : 205) : 155 + Math.floor(sibling / 7) * 55;
+      // Keep at least one node's diameter between default siblings even for
+      // the maximum 150 results; dense graphs can be panned to see outer nodes.
+      const radius = rootChild ? 220 + Math.sqrt(sibling) * 45 : 155 + Math.floor(sibling / 7) * 55;
       const point = positions[normalizePath(entry.path)] ?? { x: origin.x + Math.cos(angle) * radius, y: origin.y + Math.sin(angle) * radius };
       placed.set(normalizePath(entry.path), point);
       return { entry, ...point };

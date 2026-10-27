@@ -4,13 +4,14 @@ export interface PasswordData { format: "comet-passwords-data"; version: 1; entr
 export interface PasswordEnvelope { format: "comet-passwords"; version: 1; kdf: "PBKDF2-SHA256"; iterations: number; salt: string; iv: string; ciphertext: string }
 export const PASSWORD_STORAGE_KEY = "comet:password-vault:v1";
 export const PASSWORD_ITERATIONS = 600_000;
+export const MAX_PASSWORD_ENVELOPE_CHARS = 8_000_000;
 const bytesTo64 = (bytes: Uint8Array) => { let text = ""; for (let i = 0; i < bytes.length; i += 0x8000) text += String.fromCharCode(...bytes.subarray(i, i + 0x8000)); return btoa(text); };
 const from64 = (value: string): Uint8Array => { const raw = atob(value); return Uint8Array.from(raw, (char) => char.charCodeAt(0)); };
 const exact = (value: object, keys: string[]) => Object.keys(value).length === keys.length && keys.every((key) => Object.prototype.hasOwnProperty.call(value, key));
 const object = (value: unknown): value is Record<string, unknown> => Boolean(value && typeof value === "object" && !Array.isArray(value));
 export function parsePasswordEnvelope(raw: string): PasswordEnvelope | null {
   try {
-    if (raw.length > 8_000_000) return null;
+    if (raw.length > MAX_PASSWORD_ENVELOPE_CHARS) return null;
     const v: unknown = JSON.parse(raw);
     if (!object(v) || !exact(v, ["format", "version", "kdf", "iterations", "salt", "iv", "ciphertext"]) || v.format !== "comet-passwords" || v.version !== 1 || v.kdf !== "PBKDF2-SHA256" || !Number.isInteger(v.iterations) || (v.iterations as number) < 600_000 || (v.iterations as number) > 2_000_000 || typeof v.salt !== "string" || typeof v.iv !== "string" || typeof v.ciphertext !== "string" || !/^[A-Za-z0-9+/]+={0,2}$/.test(v.salt) || !/^[A-Za-z0-9+/]+={0,2}$/.test(v.iv) || !/^[A-Za-z0-9+/]+={0,2}$/.test(v.ciphertext) || from64(v.salt).length !== 16 || from64(v.iv).length !== 12 || from64(v.ciphertext).length < 16) return null;
     return v as unknown as PasswordEnvelope;
@@ -33,7 +34,7 @@ export function faviconUrl(website: string): string | null {
   const safe = passwordWebsite(website); if (!safe) return null;
   const host = new URL(safe).hostname.toLowerCase();
   // Never disclose local/private addresses to a third party.
-  if (!host.includes(".") || /^(?:localhost|127\.|10\.|192\.168\.|169\.254\.|172\.(?:1[6-9]|2\d|3[01])\.|\[)/.test(host) || /\.(?:local|internal|localhost)$/.test(host)) return null;
+  if (!host.includes(".") || /^\d+\.\d+\.\d+\.\d+$/.test(host) || host.startsWith("[") || /\.(?:local|internal|localhost|localdomain)$/.test(host)) return null;
   return `https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=64`;
 }
 export async function derivePasswordKey(password: string, salt: Uint8Array, iterations = PASSWORD_ITERATIONS): Promise<CryptoKey> {
@@ -44,7 +45,9 @@ export async function encryptPasswordData(data: PasswordData, key: CryptoKey, sa
   if (!validPasswordData(data)) throw new Error("The password vault contains invalid data.");
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const cipher = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(JSON.stringify(data)));
-  return JSON.stringify({ format: "comet-passwords", version: 1, kdf: "PBKDF2-SHA256", iterations, salt: bytesTo64(salt), iv: bytesTo64(iv), ciphertext: bytesTo64(new Uint8Array(cipher)) } satisfies PasswordEnvelope);
+  const envelope = JSON.stringify({ format: "comet-passwords", version: 1, kdf: "PBKDF2-SHA256", iterations, salt: bytesTo64(salt), iv: bytesTo64(iv), ciphertext: bytesTo64(new Uint8Array(cipher)) } satisfies PasswordEnvelope);
+  if (envelope.length > MAX_PASSWORD_ENVELOPE_CHARS) throw new Error("This vault is too large to save safely. Your existing vault was not changed.");
+  return envelope;
 }
 export async function unlockPasswordData(raw: string, password: string): Promise<{ data: PasswordData; key: CryptoKey; salt: Uint8Array; iterations: number }> {
   const envelope = parsePasswordEnvelope(raw); if (!envelope) throw new Error("Unknown or damaged password vault; it has not been changed.");

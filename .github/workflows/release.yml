@@ -272,3 +272,18 @@ jobs:
           files: files/*/*
           body_path: notes.md
           fail_on_unmatched_files: true
+
+      # GitHub can keep the old target when an existing draft is reused. Ensure
+      # that publishing this draft will tag the same commit that built its files.
+      - name: Match draft target to the build
+        if: steps.published.outputs.state != 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="v${COMET_VERSION#v}"
+          gh release edit "$tag" --target "$GITHUB_SHA"
+          actual=$(gh release view "$tag" --json targetCommitish --jq .targetCommitish)
+          if [ "$actual" != "$GITHUB_SHA" ]; then
+            echo "Draft target $actual does not match build $GITHUB_SHA" >&2
+            exit 1
+          fi

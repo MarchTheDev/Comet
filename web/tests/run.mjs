@@ -31,6 +31,7 @@ const checks = [
   'tests/coverCache.test.mjs',
   'tests/latestFeatures.test.mjs',
   'tests/googleInteractions.test.mjs',
+  'tests/whiteboardInteractions.test.mjs',
 ];
 try {
   for (const file of checks) {

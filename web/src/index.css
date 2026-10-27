@@ -1319,7 +1319,8 @@ button.tree-disclosure:hover { color: var(--accent-ink); background: var(--accen
 .whiteboard-toolbar { display:flex; align-items:center; flex-wrap:wrap; gap:6px; padding:10px 14px; border-bottom:1px solid var(--border); color:var(--text-secondary); font-size:calc(11px * var(--interface-text-scale,1)); }
 .whiteboard-toolbar button { display:inline-flex; align-items:center; gap:6px; min-height:32px; padding:5px 9px; color:var(--text-secondary); border:1px solid var(--border); border-radius:7px; background:var(--panel-raised); font-weight:700; }
 .whiteboard-toolbar button:hover { color:var(--accent-ink); border-color:var(--accent); background:var(--accent-soft); }
-.whiteboard-stage { min-height:520px; }
+.whiteboard-stage { height:min(65vh,720px); min-height:400px; }
+@media (max-width:600px) { .whiteboard-stage { min-height:310px; } }
 .whiteboard-item { position:absolute; display:flex; flex-direction:column; width:240px; height:150px; border:1px solid color-mix(in srgb,var(--item-color) 60%,var(--border)); border-radius:12px; background:var(--panel-raised); box-shadow:0 8px 25px #0002; }
 .whiteboard-item-header { display:flex; align-items:center; gap:4px; height:34px; padding:3px 6px; color:var(--text-muted); border-bottom:1px solid var(--border); }
 .whiteboard-item-header span { flex:1; font-size:9px; font-weight:800; letter-spacing:.08em; }
@@ -1411,3 +1412,4 @@ button.tree-disclosure:hover { color: var(--accent-ink); background: var(--accen
 /* Reserve metadata and lookup lines before and after artwork arrives. */
 .audio-artist { min-height:1.4em; margin:3px 0 0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .audio-cover-slot { min-height:1.5em; }
+.whiteboard-item:hover .todo-connect-dot, .whiteboard-item:focus-within .todo-connect-dot { opacity:1; }

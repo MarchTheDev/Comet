@@ -29,6 +29,7 @@ const checks = [
   'tests/boardInteractions.test.mjs',
   'tests/exploreInteractions.test.mjs',
   'tests/coverCache.test.mjs',
+  'tests/latestFeatures.test.mjs',
 ];
 try {
   for (const file of checks) {

@@ -10,6 +10,7 @@ use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
 mod update;
 mod google;
+mod workspace_archive;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -509,6 +510,9 @@ pub fn run() {
             google::google_calendar_create,
             google::google_calendar_update,
             google::google_calendar_delete,
+            google::google_drive_list,
+            google::google_drive_backup,
+            google::google_drive_import,
             quit_app,
             open_vault_file,
             open_workspace_directory,

@@ -23,8 +23,17 @@ export function Whiteboard({ board, name, saveState, onChange, onRename, onRetry
   const point = (item: WhiteboardItem) => positions[item.id] ?? { x: item.x, y: item.y };
   const rect = (item: WhiteboardItem) => ({ ...point(item), width: WIDTH, height: HEIGHT });
   const dimensions = board.items.reduce((size, item) => ({ width: Math.max(size.width, point(item).x + 420), height: Math.max(size.height, point(item).y + 320) }), { width: 1800, height: 1100 });
-  const add = (type: WhiteboardItemType, image = "") => { const el = stage.current; const x = clamp(((el?.scrollLeft ?? 0) + 120) / zoomRef.current), y = clamp(((el?.scrollTop ?? 0) + 100) / zoomRef.current); if (!onChange({ ...latest.current, items: [...latest.current.items, newWhiteboardItem(type, x, y, image)] })) setError("This board is full or the image is too large to save."); else setError(""); };
-  const update = (id: string, patch: Partial<WhiteboardItem>) => onChange({ ...latest.current, items: latest.current.items.map((item) => item.id === id ? { ...item, ...patch } : item) });
+  const add = (type: WhiteboardItemType, image = "") => {
+    const el = stage.current, scale = zoomRef.current, count = latest.current.items.length;
+    const columns = Math.max(1, Math.floor(((el?.clientWidth ?? 800) / scale - 100) / 270));
+    const x = clamp((el?.scrollLeft ?? 0) / scale + 80 + (count % columns) * 270), y = clamp((el?.scrollTop ?? 0) / scale + 80 + (Math.floor(count / columns) % 8) * 180);
+    if (!onChange({ ...latest.current, items: [...latest.current.items, newWhiteboardItem(type, x, y, image)] })) setError("This board is full or the image is too large to save."); else setError("");
+  };
+  const update = (id: string, patch: Partial<WhiteboardItem>) => {
+    const ok = onChange({ ...latest.current, items: latest.current.items.map((item) => item.id === id ? { ...item, ...patch } : item) });
+    if (!ok) setError("This change exceeds the board's save limit. Your previous content is intact."); else setError("");
+    return ok;
+  };
   const move = (event: ReactPointerEvent, item: WhiteboardItem) => {
     if (event.button !== 0) return; event.preventDefault(); event.stopPropagation(); cleanupDrag.current?.();
     const id = event.pointerId, sx = event.clientX, sy = event.clientY, scale = (stage.current?.offsetWidth ? stage.current.getBoundingClientRect().width / stage.current.offsetWidth : 1) * zoomRef.current;

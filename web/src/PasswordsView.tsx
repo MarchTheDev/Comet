@@ -11,21 +11,27 @@ export function PasswordsView() {
   const [stored, setStored] = useState<string | null | undefined>(() => { try { return readStored(); } catch { return undefined; } });
   const [vault, setVault] = useState<Unlocked | null>(null), [master, setMaster] = useState(""), [confirm, setConfirm] = useState(""), [busy, setBusy] = useState(false), [error, setError] = useState(""), [notice, setNotice] = useState("");
   const [query, setQuery] = useState(""), [draft, setDraft] = useState<PasswordEntry | null>(null), [revealed, setRevealed] = useState(false), [deleting, setDeleting] = useState(""), [icons, setIcons] = useState(false), [importRaw, setImportRaw] = useState("");
-  const working = useRef(false), importFile = useRef<HTMLInputElement>(null), session = useRef(vault); session.current = vault;
-  const lock = () => { session.current = null; setVault(null); setDraft(null); setRevealed(false); setMaster(""); setConfirm(""); setError(""); setNotice(""); };
+  const working = useRef(false), importFile = useRef<HTMLInputElement>(null), session = useRef(vault), generation = useRef(0); session.current = vault;
+  const lock = () => { generation.current++; session.current = null; setVault(null); setDraft(null); setRevealed(false); setMaster(""); setConfirm(""); setError(""); setNotice(""); try { setStored(readStored()); } catch { setStored(undefined); } };
+  useEffect(() => {
+    const visibility = () => { if (document.hidden) lock(); };
+    document.addEventListener("visibilitychange", visibility);
+    return () => { generation.current++; session.current = null; document.removeEventListener("visibilitychange", visibility); };
+  }, []);
   useEffect(() => {
     if (!vault) return;
     let timer = window.setTimeout(lock, 5 * 60_000);
     const activity = () => { window.clearTimeout(timer); timer = window.setTimeout(lock, 5 * 60_000); };
-    const visibility = () => { if (document.hidden) lock(); };
-    window.addEventListener("pointerdown", activity); window.addEventListener("keydown", activity); document.addEventListener("visibilitychange", visibility);
-    return () => { window.clearTimeout(timer); window.removeEventListener("pointerdown", activity); window.removeEventListener("keydown", activity); document.removeEventListener("visibilitychange", visibility); };
+    window.addEventListener("pointerdown", activity); window.addEventListener("keydown", activity);
+    return () => { window.clearTimeout(timer); window.removeEventListener("pointerdown", activity); window.removeEventListener("keydown", activity); };
   }, [Boolean(vault)]); // A new save must not reset the inactivity timer.
   const authenticate = async (event: FormEvent) => {
     event.preventDefault(); if (working.current || stored === undefined) return; working.current = true; setBusy(true); setError("");
+    const started = generation.current;
     try {
       if (stored || importRaw) {
         const raw = stored || importRaw, result = await unlockPasswordData(raw, master);
+        if (started !== generation.current || document.hidden) return;
         if (!stored) { if (readStored() !== null) throw new Error("A vault already exists on this device. It was not overwritten."); localStorage.setItem(PASSWORD_STORAGE_KEY, raw); setStored(raw); setImportRaw(""); }
         setVault({ ...result, raw });
       } else {
@@ -34,6 +40,7 @@ export function PasswordsView() {
         if (readStored() !== null) throw new Error("A vault already exists on this device. Reload to unlock it.");
         const salt = crypto.getRandomValues(new Uint8Array(16)), key = await derivePasswordKey(master, salt);
         const data: PasswordData = { format: "comet-passwords-data", version: 1, entries: [] }, raw = await encryptPasswordData(data, key, salt);
+        if (started !== generation.current || document.hidden) return;
         if (readStored() !== null) throw new Error("A vault was created elsewhere; it wasn't overwritten.");
         localStorage.setItem(PASSWORD_STORAGE_KEY, raw); setStored(raw); setVault({ data, key, salt, iterations: PASSWORD_ITERATIONS, raw });
       }

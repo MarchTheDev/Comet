@@ -9,6 +9,7 @@ use std::net::TcpListener;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tauri_plugin_opener::OpenerExt;
+use tauri_plugin_dialog::DialogExt;
 
 const SERVICE: &str = "com.marco.comet.google";
 static CALENDAR_CONNECTING: AtomicBool = AtomicBool::new(false);
@@ -151,7 +152,7 @@ fn event_patch(value: &Value, creating: bool) -> bool {
     true
 }
 async fn response_json(mut response: reqwest::Response) -> Result<Value, String> {
-    if !response.status().is_success() { return Err(format!("Google Calendar returned {}. Refresh and try again.", response.status().as_u16())); }
+    if !response.status().is_success() { return Err(format!("Google returned {}. Refresh and try again.", response.status().as_u16())); }
     if response.content_length().is_some_and(|length| length > 8 * 1024 * 1024) { return Err("Google's response is too large.".into()); }
     let mut bytes = Vec::new();
     while let Some(chunk) = response.chunk().await.map_err(|_| "Couldn't read Google's response.")? {
@@ -195,6 +196,65 @@ pub async fn google_calendar_delete(id: String, etag: String) -> Result<(), Stri
     if !event_id(&id) || etag.is_empty() || etag.len() > 512 || etag.chars().any(char::is_control) { return Err("Invalid calendar event.".into()); }
     let response = client()?.delete(format!("https://www.googleapis.com/calendar/v3/calendars/primary/events/{id}")).bearer_auth(token("calendar").await?).header("If-Match", etag).send().await.map_err(|_| "Couldn't reach Google Calendar.")?;
     if response.status().is_success() { Ok(()) } else if response.status().as_u16() == 412 { Err("This Google event changed elsewhere. Refresh before deleting it.".into()) } else { Err(format!("Google Calendar returned {}. Refresh and try again.", response.status().as_u16())) }
+}
+
+// Drive snapshots are immutable and explicit: no existing file or workspace is
+// overwritten, so two devices cannot silently destroy each other's changes.
+fn drive_id(value: &str) -> bool { !value.is_empty() && value.len() <= 200 && value.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-')) }
+fn drive_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder().user_agent(concat!("Comet/", env!("CARGO_PKG_VERSION")))
+        .redirect(reqwest::redirect::Policy::none()).timeout(Duration::from_secs(900)).build().map_err(|_| "Couldn't initialize the network connection.".into())
+}
+#[tauri::command]
+pub async fn google_drive_list() -> Result<Vec<Value>, String> {
+    let access = token("drive").await?; let client = drive_client()?; let mut result = Vec::new(); let mut page = String::new();
+    for _ in 0..10 {
+        let response = client.get("https://www.googleapis.com/drive/v3/files").bearer_auth(&access)
+            .query(&[("q", "trashed = false and appProperties has { key='cometFormat' and value='1' }"), ("fields", "nextPageToken,files(id,name,modifiedTime,size)"), ("pageSize", "100"), ("orderBy", "modifiedTime desc"), ("pageToken", page.as_str())])
+            .send().await.map_err(|_| "Couldn't reach Google Drive.")?;
+        let data = response_json(response).await?;
+        if let Some(files) = data.get("files").and_then(Value::as_array) { result.extend(files.iter().filter(|item| item.get("id").and_then(Value::as_str).is_some_and(drive_id)).cloned()); }
+        page = data.get("nextPageToken").and_then(Value::as_str).unwrap_or("").to_string();
+        if page.is_empty() { return Ok(result); }
+        if page.len() > 2000 { return Err("Google returned an invalid page token.".into()); }
+    }
+    Err("Too many snapshots to list. Remove old snapshots in Google Drive.".into())
+}
+#[tauri::command]
+pub async fn google_drive_backup(vault: String) -> Result<(), String> {
+    let access = token("drive").await?;
+    let name = std::path::Path::new(&vault).file_name().and_then(|value| value.to_str()).unwrap_or("Workspace").chars().filter(|c| !c.is_control() && !matches!(c, '/' | '\\')).take(100).collect::<String>();
+    let snapshot = tauri::async_runtime::spawn_blocking(move || crate::workspace_archive::pack(&vault)).await.map_err(|_| "Couldn't prepare the workspace snapshot.")??;
+    let mut nonce = [0u8; 16]; getrandom::fill(&mut nonce).map_err(|_| "Couldn't prepare the upload.")?;
+    let boundary = format!("comet{:x}", u128::from_le_bytes(nonce));
+    let metadata = serde_json::to_string(&json!({ "name": format!("Comet - {name}.comet-workspace"), "mimeType": "application/octet-stream", "appProperties": {"cometFormat": "1"} })).map_err(|_| "Couldn't prepare snapshot information.")?;
+    let mut body = format!("--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n{metadata}\r\n--{boundary}\r\nContent-Type: application/octet-stream\r\n\r\n").into_bytes();
+    body.extend_from_slice(&snapshot); body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    let response = drive_client()?.post("https://www.googleapis.com/upload/drive/v3/files").query(&[("uploadType", "multipart"), ("fields", "id")]).bearer_auth(access)
+        .header("Content-Type", format!("multipart/related; boundary={boundary}")).body(body).send().await.map_err(|_| "The upload was interrupted. The local workspace was not changed; check Google Drive before retrying.")?;
+    let reply = response_json(response).await?;
+    if !reply.get("id").and_then(Value::as_str).is_some_and(drive_id) { return Err("Google returned an invalid upload result. Check Drive before retrying.".into()); }
+    Ok(())
+}
+#[tauri::command]
+pub async fn google_drive_import(app: tauri::AppHandle, id: String) -> Result<Option<String>, String> {
+    if !drive_id(&id) { return Err("Invalid Google Drive snapshot.".into()); }
+    let selected = app.dialog().file().set_title("Choose a folder for the new imported workspace").blocking_pick_folder();
+    let Some(parent) = selected.and_then(|path| path.into_path().ok()) else { return Ok(None); };
+    let access = token("drive").await?; let client = drive_client()?;
+    let url = format!("https://www.googleapis.com/drive/v3/files/{id}");
+    let metadata = response_json(client.get(&url).query(&[("fields", "id,appProperties,size,trashed")]).bearer_auth(&access).send().await.map_err(|_| "Couldn't reach Google Drive.")?).await?;
+    if metadata.pointer("/appProperties/cometFormat").and_then(Value::as_str) != Some("1") || metadata.get("trashed").and_then(Value::as_bool) == Some(true) { return Err("This isn't a Comet workspace snapshot.".into()); }
+    if metadata.get("size").and_then(Value::as_str).and_then(|s| s.parse::<usize>().ok()).is_some_and(|size| size > crate::workspace_archive::MAX_ARCHIVE) { return Err("The snapshot exceeds the 128 MB import limit.".into()); }
+    let mut response = client.get(&url).query(&[("alt", "media")]).bearer_auth(access).send().await.map_err(|_| "Couldn't download the snapshot.")?;
+    if !response.status().is_success() || response.content_length().is_some_and(|size| size > crate::workspace_archive::MAX_ARCHIVE as u64) { return Err("The snapshot is missing or exceeds the 128 MB limit.".into()); }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|_| "The snapshot download was interrupted.")? {
+        if bytes.len() + chunk.len() > crate::workspace_archive::MAX_ARCHIVE { return Err("The snapshot exceeds the 128 MB import limit.".into()); }
+        bytes.extend_from_slice(&chunk);
+    }
+    let path = tauri::async_runtime::spawn_blocking(move || crate::workspace_archive::unpack(&bytes, &parent)).await.map_err(|_| "The import was interrupted.")??;
+    Ok(Some(path.to_string_lossy().to_string()))
 }
 
 #[cfg(test)]

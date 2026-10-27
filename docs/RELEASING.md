@@ -38,8 +38,9 @@ remove either.
    job succeeded and the four expected files are attached to the draft.
 3. On Windows, run the setup and MSI, check their icon and branding, launch the
    standalone and portable versions, and exercise file editing, calendar, media,
-   Explorer reveal, launch-at-login, tray restore, close-to-tray, and tray quit
-   after an edit. Also verify that a failed save prevents closing or quitting.
+   Explorer reveal, launch-at-login, tray restore, close-to-tray, tray quit,
+   whiteboards, password locking/backup, EPUB reading, Google OAuth/calendar,
+   Drive snapshot upload/import and the update handoff after an edit. Also verify that a failed save prevents closing or quitting.
 4. Review the release notes, then publish the draft when ready. The workflow
    leaves an already-published release untouched.
 
@@ -58,3 +59,10 @@ The resulting installers are under `web/src-tauri/target/release/bundle/`, and
 workflow makes the portable zip from that same executable. Other Tauri targets
 can be built manually with their platform prerequisites, but the current
 workflow does not produce Linux or macOS release artifacts.
+
+Published releases are checked at startup. The Windows updater expects a public
+`v<version>` release containing `Comet-<version>-windows_setup.exe` with GitHub's
+SHA-256 asset digest. It downloads only from GitHub's release hosts, verifies the
+digest and launches the installer after user confirmation. This does not provide
+independent code-signature verification; signing releases is recommended. Test
+the update from an older installed version before relying on this flow.

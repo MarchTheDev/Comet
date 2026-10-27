@@ -11,6 +11,8 @@ interface SettingsPageProps {
   settings: Settings;
   persisted: boolean;
   isSample: boolean;
+  vault?: string;
+  onImported?: (path: string) => void;
   modifier: string;
   desktop: boolean;
   trayAvailable: boolean;
@@ -36,7 +38,7 @@ const themes: { value: ThemePreference; label: string; description: string; icon
   { value: "navy", label: "Navy", description: "A midnight blue", icon: Moon },
 ];
 
-export function SettingsPage({ settings, persisted, isSample, modifier, desktop, trayAvailable, onChange, onBack, onOpenVault, section = "general", onSection, version = "", update = null, updateStatus = "", onCheckUpdate = () => {}, onInstallUpdate = () => {}, onUpdatePage = () => {} }: SettingsPageProps) {
+export function SettingsPage({ settings, persisted, isSample, vault = "", onImported = () => {}, modifier, desktop, trayAvailable, onChange, onBack, onOpenVault, section = "general", onSection, version = "", update = null, updateStatus = "", onCheckUpdate = () => {}, onInstallUpdate = () => {}, onUpdatePage = () => {} }: SettingsPageProps) {
   const [recording, setRecording] = useState<ShortcutAction | null>(null);
   const [shortcutError, setShortcutError] = useState("");
   const mac = modifier === "⌘";
@@ -48,7 +50,7 @@ export function SettingsPage({ settings, persisted, isSample, modifier, desktop,
     </div>
 
     {onSection && <div className="settings-tabs" role="tablist" aria-label="Settings sections"><button type="button" role="tab" aria-selected={section === "general"} onClick={() => onSection("general")}>General</button><button type="button" role="tab" aria-selected={section === "updates"} onClick={() => onSection("updates")}>Updates{update && <span className="update-dot" />}</button><button type="button" role="tab" aria-selected={section === "cloud"} onClick={() => onSection("cloud")}>Cloud</button></div>}
-    {section === "cloud" ? <GoogleSettings desktop={desktop} /> : section === "updates" ? <UpdatesSettings version={version} update={update} status={updateStatus} desktop={desktop} onCheck={onCheckUpdate} onInstall={onInstallUpdate} onPage={onUpdatePage} /> : <div className="settings-layout">
+    {section === "cloud" ? <GoogleSettings desktop={desktop} vault={vault} isSample={isSample} onImported={onImported} /> : section === "updates" ? <UpdatesSettings version={version} update={update} status={updateStatus} desktop={desktop} onCheck={onCheckUpdate} onInstall={onInstallUpdate} onPage={onUpdatePage} /> : <div className="settings-layout">
       <div className="settings-main">
         <section className="settings-card" aria-labelledby="appearance-title">
           <div className="settings-card-heading"><div><h2 id="appearance-title">Appearance</h2><p>Set the mood for your workspace.</p></div></div>

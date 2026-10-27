@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import ePub, { type Book, type Rendition, type Location, type NavItem } from "epubjs";
 import { BookOpen, ChevronLeft, ChevronRight, ExternalLink, Minus, Plus } from "lucide-react";
-import { validateEpubArchive } from "./utils/epubSafety";
+import { boundedEpubResponse, validateEpubArchive } from "./utils/epubSafety";
 
 const positionKey = (path: string) => `comet:epub-position:v1:${encodeURIComponent(path)}`;
 const internalLink = (href: string) => !/^(?:[a-z][a-z0-9+.-]*:|\/\/|\/)/i.test(href) && !href.includes("\\") && !href.split("/").includes("..");
@@ -16,9 +16,7 @@ export function EpubView({ url, path, sample, onOpenExternal }: { url: string; p
     setError(""); setReady(false); setToc([]);
     void (async () => {
       const response = await fetch(url, { signal: controller.signal });
-      if (!response.ok) throw new Error("The file could not be read.");
-      if (Number(response.headers.get("content-length") || 0) > 100 * 1024 * 1024) throw new Error("EPUB files are limited to 100 MB.");
-      const data = await response.arrayBuffer(); validateEpubArchive(data);
+      const data = await boundedEpubResponse(response); validateEpubArchive(data);
       if (!active || !host.current) return;
       book = ePub(data, { replacements: "blobUrl" });
       // Inject CSP before the XHTML is serialized into the sandboxed iframe.

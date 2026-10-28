@@ -1,5 +1,5 @@
 import { JSDOM } from 'jsdom';
-import { DriveSyncRunner, bindingKey, readDriveBinding, saveDriveBinding, validBinding } from '../src/utils/incrementalSync.ts';
+import { DriveSyncRunner, activityKey, bindingKey, readDriveActivity, readDriveBinding, saveDriveBinding, validBinding } from '../src/utils/incrementalSync.ts';
 
 let failures = 0;
 const check = (name, ok) => { if (ok) console.log(`  ok   ${name}`); else { failures++; console.log(`  FAIL ${name}`); } };
@@ -8,11 +8,11 @@ const dom = new JSDOM('', { url:'https://comet-incremental.test/' });
 globalThis.localStorage = dom.window.localStorage;
 const vault='/my/workspace', initial={group:'a'.repeat(32),base:'base1',enabled:true};
 const applied={applied:1,deleted:1,conflicts:1,safetyFolder:'/safe',changedPaths:['notes/a.md','gone.md']};
-let calls=[], saved=[], current=true, block=false, failure='', more=0, sequence=0;
+let calls=[], saved=[], current=true, block=false, failure='', more=0, sequence=0, incoming=true, beforeIncoming=null;
 const adapter={
   phase: phase => calls.push(`phase:${phase}`),
-  prepare: async (path, group, base) => { calls.push(['prepare',path,group,base]); if(failure==='prepare') throw Error('offline'); return {ticket:'b'.repeat(32),incoming:true}; },
-  beforeApply: async () => {calls.push('before'); return !block;},
+  prepare: async (path, group, base) => { calls.push(['prepare',path,group,base]); if(failure==='prepare') throw Error('offline'); return {ticket:'b'.repeat(32),incoming}; },
+  beforeApply: async (_vault, flag) => {calls.push('before'); beforeIncoming=flag; return !block;},
   apply: async () => {calls.push('apply'); if(failure==='apply') throw Error('partial merge'); return applied;},
   afterApply: async (_vault, result) => {calls.push(['after',result]); if(failure==='refresh') throw Error('refresh failed');},
   publish: async () => {calls.push('publish'); if(failure==='publish') throw Error('offline upload'); return {group:initial.group,base:`base${++sequence+1}`,uploaded:1,downloaded:1,more:more-- > 0};},
@@ -24,6 +24,7 @@ const runner=new DriveSyncRunner(adapter);
 let result=await runner.run(vault,initial);
 check('network preparation precedes guarded local application and background publication', JSON.stringify(calls.map(x=>Array.isArray(x)?x[0]:x))===JSON.stringify(['phase:checking','prepare','before','phase:applying','apply','after','phase:uploading','publish','save']));
 check('successful publication advances the baseline and reports conflict backups',saved[0].base==='base2'&&result.summary.conflicts===1&&result.summary.safetyFolder==='/safe'&&result.summary.changedPaths.includes('gone.md'));
+incoming=false;calls=[];saved=[];await runner.run(vault,initial);check('local-only capture is distinguished from an incoming merge',beforeIncoming===false);incoming=true;calls=[];saved=[];
 calls=[];saved=[];failure='prepare';try {await runner.run(vault,initial);}catch(e){check('offline preparation preserves the original baseline and never blocks the editor',e.message.includes('offline')&&!saved.length&&!calls.includes('before'));}
 failure='publish';calls=[];try{await runner.run(vault,initial);}catch(e){check('interrupted publication releases the guard and never advances baseline',e.message.includes('/safe')&&!saved.length&&calls.some(c=>Array.isArray(c)&&c[0]==='after')&&calls.includes('abort'));}
 failure='apply';calls=[];try{await runner.run(vault,initial);}catch(e){check('a partial local merge always refreshes and aborts without publication',e.message.includes('partial merge')&&calls.some(c=>Array.isArray(c)&&c[0]==='after'&&c[1]===null)&&!calls.includes('publish')&&calls.includes('abort'));}
@@ -35,5 +36,6 @@ calls=[];saved=[];more=2;result=await runner.run(vault,initial);check('concurren
 check('a valid binding requires a scoped workspace ID, baseline, and explicit enabled flag',validBinding(initial)&&!validBinding({...initial,base:'../escape'})&&!validBinding({...initial,group:'other'})&&!validBinding({...initial,enabled:undefined}));
 saveDriveBinding(vault,initial);check('workspace bindings round-trip independently of legacy snapshot bindings',JSON.stringify(readDriveBinding(vault))===JSON.stringify(initial)&&bindingKey(vault).includes('drive-incremental'));
 localStorage.setItem(bindingKey(vault),'{bad json');check('corrupt sync state never turns into a valid binding',readDriveBinding(vault)===null);
+localStorage.setItem(activityKey(vault),JSON.stringify([{time:9e99,kind:'sync',text:'invalid'},{time:1,kind:'conflict',text:'safe copy'}]));check('invalid activity timestamps cannot crash the settings view',readDriveActivity(vault).length===1&&readDriveActivity(vault)[0].text==='safe copy');
 dom.window.close();delete globalThis.localStorage;
 globalThis.__cometFailures=(globalThis.__cometFailures??0)+failures;

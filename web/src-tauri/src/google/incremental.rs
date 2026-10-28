@@ -287,6 +287,7 @@ async fn build_manifest(access: &str, group: &str, manifests: &[Manifest], snaps
 }
 
 struct Job {
+    prepared_at: Instant,
     ticket: String,
     vault: String,
     group: String,
@@ -302,6 +303,19 @@ struct Job {
     downloads: usize,
     snapshot: Option<Vec<u8>>,
     summary: workspace_archive::MergeSummary,
+}
+// If a webview vanishes while a network preparation is completing, its ticket
+// can be orphaned. Only an idle job in the slot may expire; active apply or
+// upload operations have already taken it out and can never be reclaimed here.
+fn acquire_sync() -> bool {
+    if SYNCING.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_ok() { return true; }
+    if let Ok(mut slot) = PREPARED.lock() {
+        if slot.as_ref().is_some_and(|job| job.prepared_at.elapsed() > Duration::from_secs(120)) {
+            slot.take(); SYNCING.store(false, Ordering::Release);
+            return SYNCING.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_ok();
+        }
+    }
+    false
 }
 fn ticket() -> Result<String, String> {
     let mut nonce = [0u8; 16]; getrandom::fill(&mut nonce).map_err(|_| "Couldn't start sync.")?;
@@ -322,13 +336,13 @@ fn put_job(job: Job) -> Result<(), String> {
 pub struct Prepared { ticket: String, incoming: bool }
 #[tauri::command]
 pub async fn google_incremental_prepare(app: tauri::AppHandle, vault: String, group: String, base: String) -> Result<Prepared, String> {
-    if SYNCING.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() { return Err("A workspace sync is already running.".into()); }
+    if !acquire_sync() { return Err("A workspace sync is already running.".into()); }
     let guard = ConnectingGuard(&SYNCING);
     if (!group.is_empty() && !group_id(&group)) || (!base.is_empty() && !drive_id(&base)) || (group.is_empty() != base.is_empty()) { return Err("Invalid workspace sync state.".into()); }
     let access = token("drive").await?;
     let display = std::path::Path::new(&vault).file_name().and_then(|value| value.to_str()).unwrap_or("Workspace").chars().filter(|c| !c.is_control() && !matches!(c, '/' | '\\')).take(100).collect::<String>();
     let group = if group.is_empty() { ticket()? } else { group };
-    let mut job = Job { ticket: ticket()?, vault, group: group.clone(), base: base.clone(), name: format!("Comet sync - {display}"), parents: if base.is_empty() { Vec::new() } else { vec![base.clone()] }, manifests: Vec::new(), ancestor: None, incoming: None, remote_id: None, remote_descends_base: false, more: false, downloads: 0, snapshot: None, summary: workspace_archive::MergeSummary { applied: 0, conflicts: 0, deleted: 0, safety_folder: None, changed_paths: Vec::new() } };
+    let mut job = Job { prepared_at: Instant::now(), ticket: ticket()?, vault, group: group.clone(), base: base.clone(), name: format!("Comet sync - {display}"), parents: if base.is_empty() { Vec::new() } else { vec![base.clone()] }, manifests: Vec::new(), ancestor: None, incoming: None, remote_id: None, remote_descends_base: false, more: false, downloads: 0, snapshot: None, summary: workspace_archive::MergeSummary { applied: 0, conflicts: 0, deleted: 0, safety_folder: None, changed_paths: Vec::new() } };
     if !base.is_empty() {
         let all = revisions3(&access).await?;
         let history: Vec<_> = all.into_iter().filter(|r| r.group == group).collect();
@@ -366,6 +380,7 @@ pub async fn google_incremental_prepare(app: tauri::AppHandle, vault: String, gr
         }
     }
     let reply = Prepared { ticket: job.ticket.clone(), incoming: job.incoming.is_some() };
+    job.prepared_at = Instant::now();
     put_job(job)?;
     // The guard is released by publish or abort, not when preparation returns.
     std::mem::forget(guard);

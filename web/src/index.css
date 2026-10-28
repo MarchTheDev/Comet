@@ -1636,3 +1636,8 @@ button.tree-disclosure:hover { color: var(--accent-ink); background: var(--accen
 .drive-automatic h3 small { font-size:.72em; color:var(--text-muted); font-weight:500; }
 .drive-sync-detail { font-size:calc(10px * var(--interface-text-scale,1)); }
 @media (max-width:760px) { .sync-status-button span { display:none; } }
+.drive-activity { margin:12px 0; color:var(--text-secondary); font-size:calc(10px * var(--interface-text-scale,1)); }
+.drive-activity summary { color:var(--accent-ink); cursor:pointer; font-weight:700; }
+.drive-activity ol { max-height:220px; overflow:auto; margin:9px 0 0; padding:0; list-style:none; }
+.drive-activity li { display:grid; gap:3px; padding:8px 0; border-top:1px solid var(--border); overflow-wrap:anywhere; }
+.drive-activity time { color:var(--text-muted); }

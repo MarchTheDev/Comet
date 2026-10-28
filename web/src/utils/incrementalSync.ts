@@ -23,12 +23,27 @@ export function saveDriveBinding(vault: string, binding: DriveBinding): void {
   const saved = readDriveBinding(vault);
   if (!saved || saved.group !== binding.group || saved.base !== binding.base || saved.enabled !== binding.enabled) throw new Error("This device could not save its Drive sync state.");
 }
+export interface DriveActivity { time: number; kind: "sync" | "conflict" | "error"; text: string }
+export const activityKey = (vault: string) => `comet:drive-activity:v1:${encodeURIComponent(vault)}`;
+export function readDriveActivity(vault: string): DriveActivity[] {
+  try {
+    const value: unknown = JSON.parse(localStorage.getItem(activityKey(vault)) || "[]");
+    if (!Array.isArray(value)) return [];
+    return value.filter((item): item is DriveActivity => item && Number.isSafeInteger(item.time) && item.time >= 0 && item.time <= 8_640_000_000_000_000 && ["sync", "conflict", "error"].includes(item.kind) && typeof item.text === "string" && item.text.length <= 20_000).slice(0, 50);
+  } catch { return []; }
+}
+export function recordDriveActivity(vault: string, entry: DriveActivity): DriveActivity[] {
+  const next = [{ ...entry, text: entry.text.slice(0, 20_000) }, ...readDriveActivity(vault)].slice(0, 50);
+  // Activity is helpful but never required to advance a durable sync baseline.
+  try { localStorage.setItem(activityKey(vault), JSON.stringify(next)); } catch { /* keep in memory for this session */ }
+  return next;
+}
 export interface DriveAdapter {
   prepare(vault: string, group: string, base: string): Promise<DrivePrepared>;
   apply(ticket: string): Promise<DriveApplied>;
   publish(ticket: string): Promise<DrivePublished>;
   abort(ticket: string): Promise<void>;
-  beforeApply(vault: string): Promise<boolean>;
+  beforeApply(vault: string, incoming: boolean): Promise<boolean>;
   afterApply(vault: string, result: DriveApplied | null): Promise<void>;
   isCurrent(vault: string): boolean;
   save(vault: string, binding: DriveBinding): void;
@@ -49,8 +64,9 @@ export class DriveSyncRunner {
         const prepared = await this.adapter.prepare(vault, current?.group ?? "", current?.base ?? "");
         if (!prepared || !/^[0-9a-f]{32}$/i.test(prepared.ticket)) throw new Error("Drive returned an invalid sync operation.");
         ticket = prepared.ticket;
+        if (typeof prepared.incoming !== "boolean") throw new Error("Drive returned an invalid sync operation.");
         if (!this.adapter.isCurrent(vault)) return null;
-        if (!(await this.adapter.beforeApply(vault))) return null;
+        if (!(await this.adapter.beforeApply(vault, prepared.incoming))) return null;
         applying = true;
         let applied: DriveApplied | null = null;
         try {

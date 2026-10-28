@@ -575,9 +575,30 @@ function App() {
 
   // Network transfers happen without blocking the editor. Only the short local
   // merge/capture phase takes this guard, after all buffered edits are flushed.
-  const syncFocus = useRef<HTMLElement | null>(null);
-  const beforeIncrementalApply = useCallback(async (vault: string): Promise<boolean> => {
-    if (vaultRef.current !== vault || activeUploads.current || syncInFlight.current || document.querySelector('[role="dialog"][aria-modal="true"]')) return false;
+  const syncFocus = useRef<HTMLElement | null>(null), syncGuardOwned = useRef(false);
+  const syncActivity = useRef({ pointers: new Set<number>(), composing: false, lastInput: 0 });
+  useEffect(() => {
+    const down = (event: PointerEvent) => { syncActivity.current.pointers.add(event.pointerId); syncActivity.current.lastInput = Date.now(); };
+    const up = (event: PointerEvent) => syncActivity.current.pointers.delete(event.pointerId);
+    const input = () => { syncActivity.current.lastInput = Date.now(); };
+    const compositionStart = () => { syncActivity.current.composing = true; input(); };
+    const compositionEnd = () => { syncActivity.current.composing = false; input(); };
+    const blur = () => { syncActivity.current.pointers.clear(); syncActivity.current.composing = false; };
+    window.addEventListener("pointerdown", down, true); window.addEventListener("pointerup", up, true); window.addEventListener("pointercancel", up, true);
+    window.addEventListener("keydown", input, true); window.addEventListener("input", input, true);
+    window.addEventListener("compositionstart", compositionStart, true); window.addEventListener("compositionend", compositionEnd, true); window.addEventListener("blur", blur);
+    return () => { window.removeEventListener("pointerdown", down, true); window.removeEventListener("pointerup", up, true); window.removeEventListener("pointercancel", up, true); window.removeEventListener("keydown", input, true); window.removeEventListener("input", input, true); window.removeEventListener("compositionstart", compositionStart, true); window.removeEventListener("compositionend", compositionEnd, true); window.removeEventListener("blur", blur); };
+  }, []);
+  const beforeIncrementalApply = useCallback(async (vault: string, incoming: boolean): Promise<boolean> => {
+    if (vaultRef.current !== vault || activeUploads.current || syncInFlight.current) return false;
+    if (!incoming) {
+      // Capturing local-only changes never writes into the workspace. Keep the
+      // editor usable; a change during capture is retried on the next pass.
+      try { await flushAll(); return vaultRef.current === vault; }
+      catch { setNotice("Couldn't save before syncing. Retry your save first."); return false; }
+    }
+    if (document.querySelector('[role="dialog"][aria-modal="true"]') || syncActivity.current.pointers.size || syncActivity.current.composing || Date.now() - syncActivity.current.lastInput < 1500) return false;
+    syncGuardOwned.current = true;
     syncInFlight.current = true;
     syncFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     syncFocus.current?.blur();
@@ -589,12 +610,13 @@ function App() {
       await flushAll();
       if (vaultRef.current === vault) return true;
     } catch { setNotice("Couldn't save before syncing. Retry your save first."); }
-    syncInFlight.current = false; setSyncBusy(false);
+    syncGuardOwned.current = false; syncInFlight.current = false; setSyncBusy(false);
     editorRef.current?.setEditable(modeRef.current === "write" && isMarkdown(selectedRef.current), false);
     const focus = syncFocus.current; syncFocus.current = null; if (focus?.isConnected) focus.focus({ preventScroll: true });
     return false;
   }, [flushAll]);
   const afterIncrementalApply = useCallback(async (vault: string, result: DriveApplied | null) => {
+    if (!syncGuardOwned.current) return;
     try {
       if (vaultRef.current !== vault) return;
       const next = await listVault(vault); setEntries(next);
@@ -627,7 +649,7 @@ function App() {
       if (["note", "file", "todo", "whiteboard"].includes(workspaceViewRef.current)) setWorkspaceView("all");
       throw new Error(`The workspace changed, but the open file could not be refreshed. Reopen it before editing: ${errorMessage(error)}`);
     } finally {
-      syncInFlight.current = false; setSyncBusy(false);
+      syncGuardOwned.current = false; syncInFlight.current = false; setSyncBusy(false);
       editorRef.current?.setEditable(modeRef.current === "write" && isMarkdown(selectedRef.current), false);
       const focus = syncFocus.current; syncFocus.current = null;
       if (focus?.isConnected) window.requestAnimationFrame(() => { if (focus.isConnected) focus.focus({ preventScroll: true }); });
@@ -1794,7 +1816,7 @@ function App() {
   const openUpdatePage = () => { if (!availableUpdate) return; if (desktopAvailable) void openUrl(availableUpdate.page); else window.open(availableUpdate.page, "_blank", "noopener,noreferrer"); };
 
   const updateTodo = (board: TodoDocument) => {
-    if (workspaceView !== "todo" || selectedRef.current !== selectedPath || fileKind(selectedPath) !== "todo") return false;
+    if (syncInFlight.current || workspaceView !== "todo" || selectedRef.current !== selectedPath || fileKind(selectedPath) !== "todo") return false;
     const next = serializeTodo(board);
     const textError = editableTextError(next);
     if (textError || !parseTodo(next)) { setNotice(textError || "This change exceeds the to-do board limits and wasn't saved."); return false; }
@@ -1803,7 +1825,7 @@ function App() {
   };
 
   const updateWhiteboard = (board: WhiteboardDocument) => {
-    if (workspaceView !== "whiteboard" || selectedRef.current !== selectedPath || fileKind(selectedPath) !== "whiteboard") return false;
+    if (syncInFlight.current || workspaceView !== "whiteboard" || selectedRef.current !== selectedPath || fileKind(selectedPath) !== "whiteboard") return false;
     const next = serializeWhiteboard(board), textError = editableTextError(next);
     if (textError || !parseWhiteboard(next)) { setNotice(textError || "This change exceeds whiteboard limits and wasn't saved."); return false; }
     contentRef.current = next; setContent(next); queueSave(selectedPath, next); return true;
@@ -1893,7 +1915,7 @@ function App() {
                 </div>}
               </form>
             <div className="topbar-actions">
-              {incremental.binding && <button type="button" className={`sync-status-button ${incremental.status}`} onClick={() => { setSettingsSection("cloud"); void showSettings(); }} title={incremental.detail || "Google Drive sync"} aria-label={`Google Drive sync: ${!incremental.connected ? "disconnected" : incremental.status}`}><Cloud size={16} /><span>{!incremental.connected ? "Disconnected" : incremental.status === "synced" ? "Synced" : incremental.status === "error" ? "Sync issue" : incremental.status === "paused" ? "Paused" : incremental.status === "waiting" ? "Waiting" : "Syncing…"}</span></button>}
+              {incremental.binding && <button type="button" className={`sync-status-button ${incremental.status}`} onClick={() => { setSettingsSection("cloud"); void showSettings(); }} title={incremental.detail || "Google Drive sync"} aria-label={`Google Drive sync: ${!incremental.connected ? "disconnected" : incremental.status}`}><Cloud size={16} /><span>{!incremental.connected ? "Disconnected" : incremental.status === "synced" ? "Last sync OK" : incremental.status === "error" ? "Sync issue" : incremental.status === "paused" ? "Paused" : incremental.status === "waiting" ? "Waiting" : "Syncing…"}</span></button>}
               {!isSample && <button className="icon-button" type="button" aria-label="Show current path in file explorer" title="Show current path in file explorer" onClick={() => void revealPath(currentLocation)}><FolderOpen size={17} /></button>}
               {selection.size > 0 && <button className="selection-clear icon-button" type="button" aria-label="Clear selection" title="Clear selection (Escape)" onClick={() => { const empty = new Set<string>(); selectionRef.current = empty; selectionAnchor.current = ""; selectionAnchorOpened.current = false; setSelection(empty); }}><X size={15} /></button>}
               {selection.size > 0 && <button className="selection-trash icon-button" type="button" aria-label={`Delete ${selection.size} selected items`} title={`Delete ${selection.size} selected items`} onClick={openBulkDelete}><Trash2 size={17} /><span>{selection.size}</span></button>}

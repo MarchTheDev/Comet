@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { DriveSyncRunner, readDriveBinding, saveDriveBinding, type DriveApplied, type DriveBinding, type DrivePhase, type DrivePrepared, type DrivePublished } from "./incrementalSync";
+import { DriveSyncRunner, readDriveActivity, readDriveBinding, recordDriveActivity, saveDriveBinding, type DriveActivity, type DriveApplied, type DriveBinding, type DrivePhase, type DrivePrepared, type DrivePublished } from "./incrementalSync";
 
 export type DriveStatus = "off" | "paused" | "waiting" | "checking" | "applying" | "uploading" | "error" | "synced";
 export interface IncrementalDriveController {
@@ -9,13 +9,14 @@ export interface IncrementalDriveController {
   detail: string;
   busy: boolean;
   connected: boolean;
+  activity: DriveActivity[];
   start(): Promise<void>;
   retry(): Promise<void>;
   pause(): void;
   resume(): void;
   connectionChanged(connected: boolean): void;
 }
-interface Options { desktop: boolean; vault: string; isSample: boolean; beforeApply(vault: string): Promise<boolean>; afterApply(vault: string, result: DriveApplied | null): Promise<void> }
+interface Options { desktop: boolean; vault: string; isSample: boolean; beforeApply(vault: string, incoming: boolean): Promise<boolean>; afterApply(vault: string, result: DriveApplied | null): Promise<void> }
 const INTERVAL = 30_000;
 const MAX_RETRY = 5 * 60_000;
 export function useIncrementalDrive(options: Options): IncrementalDriveController {
@@ -23,6 +24,7 @@ export function useIncrementalDrive(options: Options): IncrementalDriveControlle
   const [binding, setBinding] = useState(() => readDriveBinding(options.vault));
   const [status, setStatus] = useState<DriveStatus>(binding?.enabled ? "waiting" : binding ? "paused" : "off");
   const [detail, setDetail] = useState("");
+  const [activity, setActivity] = useState(() => readDriveActivity(options.vault));
   const [connected, setConnected] = useState(false), connectionRef = useRef(false);
   const [busy, setBusy] = useState(false), busyRef = useRef(false);
   const timer = useRef<number | null>(null), failures = useRef(0), mounted = useRef(true), runnerVault = useRef("");
@@ -38,7 +40,7 @@ export function useIncrementalDrive(options: Options): IncrementalDriveControlle
     apply: (ticket) => invoke<DriveApplied>("google_incremental_apply", { ticket }),
     publish: (ticket) => invoke<DrivePublished>("google_incremental_publish", { ticket }),
     abort: (ticket) => invoke("google_incremental_abort", { ticket }),
-    beforeApply: (vault) => latest.current.beforeApply(vault),
+    beforeApply: (vault, incoming) => latest.current.beforeApply(vault, incoming),
     afterApply: (vault, result) => latest.current.afterApply(vault, result),
     isCurrent: (vault) => mounted.current && latest.current.vault === vault && connectionRef.current,
     save: (vault, next) => saveDriveBinding(vault, next),
@@ -57,7 +59,11 @@ export function useIncrementalDrive(options: Options): IncrementalDriveControlle
       if (result) {
         failures.current = 0; setBinding(result.binding); setStatus("synced");
         const { applied, deleted, conflicts, uploaded, downloaded, safetyFolder, more } = result.summary;
-        setDetail(`Last sync: ${uploaded} files uploaded, ${downloaded} downloaded, ${applied} incoming changes, ${deleted} deletions, ${conflicts} conflict copies.${safetyFolder ? ` Originals are in ${safetyFolder}.` : ""}${more ? " More revisions will be checked shortly." : ""}`);
+        const description = `Last sync: ${uploaded} ${uploaded === 1 ? "file" : "files"} uploaded, ${downloaded} downloaded, ${applied} incoming changes, ${deleted} deletions, ${conflicts} conflict copies.${safetyFolder ? ` Originals are in ${safetyFolder}.` : ""}${more ? " More revisions will be checked shortly." : ""}`;
+        setDetail(description);
+        if (!current || result.binding.base !== current.base || uploaded || downloaded || applied || deleted || conflicts || safetyFolder) {
+          setActivity(recordDriveActivity(vault, { time: Date.now(), kind: conflicts ? "conflict" : "sync", text: description }));
+        }
         schedule(more ? 1000 : INTERVAL);
       } else {
         setStatus("waiting"); setDetail("Waiting until the workspace is ready to sync.");
@@ -65,7 +71,9 @@ export function useIncrementalDrive(options: Options): IncrementalDriveControlle
       }
     } catch (error) {
       if (!mounted.current || latest.current.vault !== vault) return;
-      setStatus("error"); setDetail(error instanceof Error ? error.message : String(error));
+      const description = error instanceof Error ? error.message : String(error);
+      setStatus("error"); setDetail(description);
+      if (failures.current === 0) setActivity(recordDriveActivity(vault, { time: Date.now(), kind: "error", text: description }));
       failures.current += 1;
       if (readDriveBinding(vault)?.enabled && connectionRef.current) schedule(Math.min(MAX_RETRY, 15_000 * 2 ** Math.min(failures.current - 1, 5)));
     } finally {
@@ -82,7 +90,7 @@ export function useIncrementalDrive(options: Options): IncrementalDriveControlle
     return () => { mounted.current = false; if (timer.current !== null) window.clearTimeout(timer.current); };
   }, []);
   useEffect(() => {
-    const current = readDriveBinding(options.vault); setBinding(current); setDetail("");
+    const current = readDriveBinding(options.vault); setBinding(current); setActivity(readDriveActivity(options.vault)); setDetail("");
     setStatus(current?.enabled ? "waiting" : current ? "paused" : "off");
     failures.current = 0;
     if (timer.current !== null) { window.clearTimeout(timer.current); timer.current = null; }
@@ -120,5 +128,5 @@ export function useIncrementalDrive(options: Options): IncrementalDriveControlle
     try { const next = { ...current, enabled: true }; saveDriveBinding(vault, next); setBinding(next); setStatus("waiting"); setDetail(""); if (connectionRef.current) schedule(250); }
     catch { setStatus("error"); setDetail("Couldn't save the sync setting on this device."); }
   }, [schedule]);
-  return { binding, status, detail, busy, connected, start, retry, pause, resume, connectionChanged };
+  return { binding, status, detail, busy, connected, activity, start, retry, pause, resume, connectionChanged };
 }

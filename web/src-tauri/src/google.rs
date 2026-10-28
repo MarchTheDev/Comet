@@ -1,5 +1,6 @@
-//! Google desktop OAuth. Uses the system browser, PKCE and a loopback callback;
-//! refresh tokens live only in the operating system credential store.
+pub mod incremental;
+// Google desktop OAuth. Uses the system browser, PKCE and a loopback callback;
+// refresh tokens live only in the operating system credential store.
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -411,7 +412,7 @@ pub async fn google_sync_now(vault: String, group: String, base: String) -> Resu
     if current_heads.is_empty() { return Err("Google returned an invalid sync revision history. No local files were changed.".into()); }
     let base_ancestors = ancestor_distances(&base, &group_revs);
     let remote = current_heads.iter().find(|head| head.id != base && !base_ancestors.contains_key(&head.id)).map(|item| item.id.clone());
-    let mut summary = crate::workspace_archive::MergeSummary { applied: 0, conflicts: 0, deleted: 0, safety_folder: None };
+    let mut summary = crate::workspace_archive::MergeSummary { applied: 0, conflicts: 0, deleted: 0, safety_folder: None, changed_paths: Vec::new() };
     let mut parents = vec![base.clone()];
     let remote_snapshot = if let Some(remote_id) = remote {
         let ancestor = common_ancestor(&base, &remote_id, &group_revs);

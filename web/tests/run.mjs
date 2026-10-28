@@ -36,6 +36,8 @@ const checks = [
   'tests/passwordRecovery.test.mjs',
   'tests/passwordBackup.test.mjs',
   'tests/googleInteractions.test.mjs',
+  'tests/incrementalSync.test.mjs',
+  'tests/incrementalInteractions.test.mjs',
   'tests/whiteboardInteractions.test.mjs',
   'tests/uploadInteractions.test.mjs',
   'tests/droppedUpload.test.mjs',

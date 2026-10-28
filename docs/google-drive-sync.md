@@ -1,10 +1,28 @@
-# Google Drive sync direction
+# Google Drive workspace sync
 
-## Decision
+## What is implemented
 
-Use automatic, file-level incremental sync while Comet is running, with an offline queue and separate conflict copies. The intent is one Google Connect flow for Calendar and Drive, not a separate app or a Google developer project per user. The project owner must register and configure the desktop OAuth client, enable the APIs, and complete any applicable Google consent/verification steps before distributing it. Drive access uses the existing `drive.file` scope; workspace files on Drive are not encrypted by Comet. The device password vault, local calendar data, settings, and local display metadata remain excluded.
+Comet has a **preview** of automatic, file-level Google Drive sync. After the user opts in for a local workspace, Comet checks for changes while it is open (including in the tray), normally every 30 seconds, and retries after connection errors with backoff. Local files remain usable offline; when the app and connection are available again, the current local state is compared with the last saved baseline. Nothing syncs while Comet is fully closed.
 
-**This document is the agreed direction, not a description of a completed implementation.** Current Comet sync is explicitly initiated from Settings and uses unencrypted, immutable whole-workspace revisions, with a 128 MB / 20,000-item snapshot limit. It does not run automatically. Existing manual sync, imports, and backups must remain usable until the new protocol is implemented and migration is verified.
+The app uploads immutable file-content blobs and a small, immutable workspace manifest. Unchanged content is reused from the previous manifest, so a routine sync does not upload the entire workspace. An app cache of verified baseline data avoids repeatedly downloading unchanged files; when it is missing, Comet reconstructs the baseline from Drive. A manifest is published only after its new blobs have uploaded. Separate concurrent revisions form multiple heads and are merged using a common ancestor. Conflicting file edits are kept as separate files. Before replacing or deleting an unchanged local file, Comet rechecks it and moves the original into a safety folder beside the workspace; new files use staged, no-replace writes. Unsafe paths, links, duplicate case-insensitive names, damaged data and incomplete revision histories stop sync without silently replacing changed local files.
+
+Network preparation and upload occur without blocking the editor. For the local merge and snapshot capture, Comet briefly blocks editing, flushes pending saves and refreshes any open file that changed. Sync status and a retry button are available in Cloud settings; the top bar also shows the workspace status. Pause affects only this device.
+
+### Important limitations
+
+- **Preview, not yet verified with real Google accounts.** The automated tests cover local merge safety and simulated Drive interactions; two-device authorization, network interruption, quota, installed-app behavior and Google API behavior still need real-world testing before relying on this as the only copy of important data.
+- This implementation reuses the checked local archive and therefore supports **at most 128 MiB and 20,000 items per synced workspace**. It holds archive data in memory and does not yet stream large files. Importing a large file is still unrestricted, but sync stops with an error if the workspace exceeds this limit; no local files are discarded. This limit and bounded-memory streaming remain work to do.
+- Workspace content, filenames and manifests on Drive are **not end-to-end encrypted by Comet**. Google receives the workspace data. The separately stored device password vault, local calendar events, settings and display metadata are not included. If the user deliberately places an exported password backup or other sensitive file *inside* the workspace, it is an ordinary workspace file and will be included.
+- Drive history and uploaded blobs are not automatically garbage-collected, so usage grows over time. Interrupted transfers may leave unreferenced blobs. Do not manually remove Comet revisions or blobs that another device might still need; missing history or data stops sync safely.
+- The cache holds up to three recent verified, unencrypted workspace archives per sync group in the app's local cache directory. They are disposable; missing caches can increase the next download. Normal device protections apply.
+- A Google sign-in configured with one OAuth client may not see private app properties created by a different OAuth client. Use the same publisher-configured app on all devices. If the account or baseline is missing, Comet stops rather than treating the workspace as new.
+- The preview uses periodic scanning, not a filesystem watcher, so changes can take a short time to appear. It can process up to five concurrent heads per pass and schedules another pass if more remain.
+
+## Existing manual sync and moving to automatic sync
+
+The previous version-2 manual whole-workspace revision system and older one-off backups are still available in Cloud settings. They remain independent of the new version-3 protocol. Starting automatic sync from a workspace formerly using manual sync creates a **separate** Drive workspace; it does not delete or rewrite the older history. The old manual sync button is disabled for a workspace linked to automatic sync to avoid mixing unrelated histories. Import the new automatic workspace into a new local folder on each other device; existing local folders are never overwritten. This is not an in-place migration of a version-2 history.
+
+Keep an independent backup and test with non-critical data first. Do not run another folder-sync service on the same workspace at the same time.
 
 ## Preparing a one-click desktop release
 
@@ -12,26 +30,14 @@ Google requires Comet's publisher to create an OAuth application once; there is 
 
 1. In a project owned by Comet's publisher, enable the Google Drive API and Google Calendar API. Configure the OAuth consent screen for the intended audience; while the app is in testing, add the Google accounts that may sign in. Complete any verification Google requires for public distribution and the requested `calendar.events` and `drive.file` scopes.
 2. Create a **Desktop app** OAuth client. In the GitHub repository's **Settings → Secrets and variables → Actions → Variables**, set `COMET_GOOGLE_CLIENT_ID` to the client ID and, only if Google requires it, `COMET_GOOGLE_CLIENT_SECRET` to the desktop client secret. Rebuild the installer through the Release workflow. For a local build use `VITE_GOOGLE_CLIENT_ID` and, if needed, `VITE_GOOGLE_CLIENT_SECRET`.
-3. Install that build, click **Connect Google**, and sign in on Google's browser page. Verify Calendar and manual Drive revisions with two real devices, including offline failures and conflicts, before publishing. Credentials belong in the system credential store; never put a user's Google password or refresh token in GitHub variables.
+3. Install that build, click **Connect Google**, and sign in on Google's browser page. Test Calendar and the automatic Drive preview with two real devices, including simultaneous edits, offline recovery, deletions, interrupted uploads and imports, before publishing or using it for important work. Credentials belong in the system credential store; never put a user's Google password or refresh token in GitHub variables.
 
 The desktop client identifier and any bundled desktop client secret are public application configuration, not a private credential. No client has been registered or verified by this repository change, and the release workflow cannot create a Google project on the publisher's behalf. An iPhone port requires its own mobile OAuth design and should not reuse the desktop loopback flow.
 
-## Proposed behavior
+## Obsidian research and differences
 
-- With explicit consent, a workspace is linked to a Drive sync identity. A second device chooses a new local destination; nothing is imported over an existing workspace.
-- While Comet is open (including its tray), watch or periodically scan local changes, debounce saves, and poll Drive for remote changes. Show sync/offline/error/conflict state and a manual retry. Do not claim to sync while Comet is fully closed.
-- Keep working offline. Persist pending changes and their baseline; retry with backoff when connectivity returns. Google disconnection, missing state, quota failures, and storage errors must stop safely and be visible, not silently discard work.
-- Transfer changed file contents rather than repeatedly uploading the whole workspace. Stream large files with bounded memory; verify size and content hashes. A small versioned manifest can describe a full workspace and immutable file blobs; the manifest is published only after the referenced blobs are durable. Store only app-created data accessible under `drive.file`.
-- Reconcile against a known common ancestor. Concurrent edits keep both versions under portable, distinguishable names. Deletion versus modification must preserve the modified content; no silently overwriting a changed file. Before replacing or removing an unchanged local file, recheck its contents and preserve the original in a safety location. Use staged, no-replace writes and reject unsafe paths, symlinks, duplicate case-insensitive names, and malformed manifests.
-- Multiple devices may publish concurrently. Treat concurrent manifests as separate heads and merge them; do not rely on last-writer-wins or a non-atomic Drive listing. Avoid unsafe garbage collection of blobs still referenced by any history or device.
-- Existing version-2 snapshot workspaces need an explicit, resumable migration with an intact snapshot fallback. A failed transfer or migration must not advance the baseline or modify the old remote history. Clearly describe any limits and storage growth.
+[Obsidian's local and remote vault documentation](https://obsidian.md/help/sync/vault-types) describes an app-managed remote vault, file-level transfers and offline changes queued until the app reconnects. Its [sync status and activity](https://obsidian.md/help/sync/messages) make progress and errors visible. Its [conflict documentation](https://obsidian.md/help/sync/troubleshoot) describes automatic Markdown merging and last-modified behavior by default, plus an optional conflict-copy mode. Comet follows the requested **keep both** policy instead of silently choosing a last writer.
 
-## Validation before enabling
+Obsidian Sync is Obsidian's separate hosted service, not Google Drive. It offers [end-to-end encryption](https://obsidian.md/help/sync/security); Comet's Drive preview does not. Obsidian's documentation describes observable behavior, not the complete details of its server protocol. This implementation is Comet's own Drive protocol, not a claim of compatibility with Obsidian Sync.
 
-Exercise local/remote edits and deletes, simultaneous heads, crashes between each upload/apply/baseline step, offline replay, partial and corrupted downloads, filename portability, links, large files, storage exhaustion, OAuth expiry, and migration. Verify real Drive authorization and cross-device operation with a configured project-owned client. Do not enable automatic background sync merely by running the current full-snapshot command on a timer: it is not incremental and would inherit its size and interruption limitations.
-
-## References
-
-- [Obsidian Sync](https://obsidian.md/sync) is Obsidian's hosted service, separate from Google Drive; it supports offline use and end-to-end encryption.
-- [Obsidian's third-party sync guidance](https://obsidian.md/help/sync-notes) describes using a locally available Drive folder on desktop and cautions against mixing services on the same vault.
-- [Google OAuth for native apps](https://developers.google.com/identity/protocols/oauth2/native-app) describes browser authorization and PKCE for an app-registered desktop client.
+Google's [native OAuth guidance](https://developers.google.com/identity/protocols/oauth2/native-app) describes the browser, PKCE and app-registered desktop client approach used here. The existing limited [`drive.file` scope](https://developers.google.com/drive/api/guides/api-specific-auth) is used for Comet-created files.

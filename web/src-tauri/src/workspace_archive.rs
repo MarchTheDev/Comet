@@ -7,7 +7,7 @@ use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 
 pub const MAX_ARCHIVE: usize = 128 * 1024 * 1024;
-const MAX_ENTRIES: usize = 20_000;
+pub(crate) const MAX_ENTRIES: usize = 20_000;
 const MAGIC: &[u8] = b"COMETWS1\0";
 
 fn valid_part(name: &str) -> bool {
@@ -17,7 +17,7 @@ fn valid_part(name: &str) -> bool {
     if (stem.starts_with("COM") || stem.starts_with("LPT")) && stem.len() == 4 && matches!(stem.as_bytes()[3], b'1'..=b'9') { return false; }
     true
 }
-fn safe_path(name: &str) -> bool { name.len() <= 2048 && name.split('/').count() <= 32 && name.split('/').all(valid_part) }
+pub(crate) fn safe_path(name: &str) -> bool { name.len() <= 2048 && name.split('/').count() <= 32 && name.split('/').all(valid_part) }
 fn relative_name(root: &Path, path: &Path) -> Result<String, String> {
     let relative = path.strip_prefix(root).map_err(|_| "An item is outside the workspace.")?;
     let mut parts = Vec::new();
@@ -114,6 +114,45 @@ fn validate(bytes: &[u8]) -> Result<Vec<Item>, String> {
     Ok(items)
 }
 
+/// A validated view over an archive, used by the incremental Drive protocol.
+/// Contents are borrowed so inspecting a snapshot does not copy the workspace.
+#[derive(Debug)]
+pub(crate) struct ArchiveEntry<'a> {
+    pub name: String,
+    pub directory: bool,
+    pub bytes: &'a [u8],
+}
+pub(crate) fn entries(bytes: &[u8]) -> Result<Vec<ArchiveEntry<'_>>, String> {
+    Ok(validate(bytes)?.into_iter().map(|item| ArchiveEntry {
+        name: item.name, directory: item.directory, bytes: &bytes[item.start..item.start + item.size],
+    }).collect())
+}
+/// Reconstitute the existing, checksummed interchange format from individually
+/// verified file contents. Validate the complete tree before exposing it.
+pub(crate) fn assemble<'a>(items: impl IntoIterator<Item = ArchiveEntry<'a>>) -> Result<Vec<u8>, String> {
+    let mut result = MAGIC.to_vec();
+    let mut count = 0usize;
+    for item in items {
+        count += 1;
+        if count > MAX_ENTRIES || !safe_path(&item.name) || (item.directory && !item.bytes.is_empty()) {
+            return Err("Invalid incremental workspace manifest.".into());
+        }
+        let needed = 13usize.checked_add(item.name.len()).and_then(|n| n.checked_add(item.bytes.len())).ok_or("Workspace is too large.")?;
+        if result.len().checked_add(needed).and_then(|n| n.checked_add(33)).is_none_or(|n| n > MAX_ARCHIVE) {
+            return Err("This workspace exceeds the 128 MB sync limit. Local files were preserved.".into());
+        }
+        result.push(if item.directory { 2 } else { 1 });
+        result.extend_from_slice(&(item.name.len() as u32).to_le_bytes());
+        result.extend_from_slice(&(item.bytes.len() as u64).to_le_bytes());
+        result.extend_from_slice(item.name.as_bytes());
+        result.extend_from_slice(item.bytes);
+    }
+    result.push(0);
+    let hash = Sha256::digest(&result); result.extend_from_slice(&hash);
+    validate(&result)?;
+    Ok(result)
+}
+
 pub fn unpack(bytes: &[u8], parent: &Path) -> Result<PathBuf, String> {
     let mut items = validate(bytes)?;
     let parent = fs::canonicalize(parent).map_err(|_| "Couldn't open the chosen import folder.")?;
@@ -154,6 +193,15 @@ mod tests {
         assert!(!safe_path("../escape")); assert!(!safe_path("C:/outside")); assert!(!safe_path("a\\b")); assert!(!safe_path("folder/NUL.txt"));
         fs::remove_dir_all(root).unwrap();
     }
+    #[test]
+    fn incremental_archive_views_round_trip_and_validate_the_complete_tree() {
+        let original = assemble(vec![ArchiveEntry { name: "folder".into(), directory: true, bytes: &[] }, ArchiveEntry { name: "folder/note.md".into(), directory: false, bytes: b"hello" }]).unwrap();
+        let rebuilt = assemble(entries(&original).unwrap()).unwrap();
+        assert_eq!(rebuilt, original);
+        assert!(assemble(vec![ArchiveEntry { name: "../escape".into(), directory: false, bytes: b"x" }]).is_err());
+        assert!(assemble(vec![ArchiveEntry { name: "missing/note".into(), directory: false, bytes: b"x" }]).is_err());
+        assert!(assemble(vec![ArchiveEntry { name: "A".into(), directory: false, bytes: b"x" }, ArchiveEntry { name: "a".into(), directory: false, bytes: b"y" }]).is_err());
+    }
     fn crafted(name: &str) -> Vec<u8> {
         let mut data = MAGIC.to_vec(); data.push(1); data.extend_from_slice(&(name.len() as u32).to_le_bytes()); data.extend_from_slice(&0u64.to_le_bytes()); data.extend_from_slice(name.as_bytes()); data.push(0);
         let hash = Sha256::digest(&data); data.extend_from_slice(&hash); data
@@ -180,7 +228,7 @@ mod tests {
 /// replaced/deleted originals are moved to a separate same-volume safety folder
 /// before create-new writes, so a racing editor cannot silently lose its work.
 #[derive(Debug, serde::Serialize)]
-pub struct MergeSummary { pub applied: usize, pub conflicts: usize, pub deleted: usize, pub safety_folder: Option<String> }
+pub struct MergeSummary { pub applied: usize, pub conflicts: usize, pub deleted: usize, pub safety_folder: Option<String>, pub changed_paths: Vec<String> }
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct SnapshotValue<'a> { directory: bool, bytes: &'a [u8] }
 fn snapshot_map(bytes: &[u8]) -> Result<std::collections::BTreeMap<String, SnapshotValue<'_>>, String> {
@@ -271,7 +319,7 @@ pub fn merge(vault: &str, base: Option<&[u8]>, remote: &[u8]) -> Result<MergeSum
     if !root.is_dir() { return Err("The workspace isn't a folder.".into()); }
     let local_bytes = pack(vault)?;
     let local = snapshot_map(&local_bytes)?; let base_map = if let Some(base) = base { snapshot_map(base)? } else { Default::default() }; let remote_map = snapshot_map(remote)?;
-    let mut result = MergeSummary { applied: 0, conflicts: 0, deleted: 0, safety_folder: None };
+    let mut result = MergeSummary { applied: 0, conflicts: 0, deleted: 0, safety_folder: None, changed_paths: Vec::new() };
     let mut safety = None; let mut counter = 0usize;
     let attempt = (|| -> Result<(), String> {
     // Mark folders containing changed/new remote descendants. This avoids
@@ -340,14 +388,14 @@ pub fn merge(vault: &str, base: Option<&[u8]>, remote: &[u8]) -> Result<MergeSum
                 continue;
             }
             match atomic_write_new(&target, value.bytes) {
-                Ok(()) => result.applied += 1,
+                Ok(()) => { result.applied += 1; result.changed_paths.push(relative.clone()); },
                 Err(_) => { let _ = crate::rename_without_replace(&saved, &target); return Err(format!("Couldn't apply a complete remote file. The local original, if not restored, is safe in {}.", saved.display())); }
             }
         } else if here.is_some() || (!changed_parent && original.is_some()) {
             if conflict_copy(&root, &target, value.bytes)? { result.conflicts += 1; }
         } else {
             match atomic_write_new(&target, value.bytes) {
-                Ok(()) => result.applied += 1,
+                Ok(()) => { result.applied += 1; result.changed_paths.push(relative.clone()); },
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => { if conflict_copy(&root, &target, value.bytes)? { result.conflicts += 1; } },
                 Err(_) => return Err("Couldn't create a complete synced file.".into()),
             }
@@ -360,7 +408,7 @@ pub fn merge(vault: &str, base: Option<&[u8]>, remote: &[u8]) -> Result<MergeSum
             let target = path_under(&root, name)?;
             if current_file_matches(&target, old.bytes) {
                 counter += 1; let saved = save_original(&root, &target, &mut safety, counter)?;
-                if current_file_matches(&saved, old.bytes) { result.deleted += 1; }
+                if current_file_matches(&saved, old.bytes) { result.deleted += 1; result.changed_paths.push(name.clone()); }
                 else { crate::rename_without_replace(&saved, &target).map_err(|_| "A local file changed during sync; its original is in the safety folder.")?; }
             }
         }

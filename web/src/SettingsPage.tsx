@@ -5,6 +5,7 @@ import { ArrowLeft, Check, FolderOpen, Gem, Keyboard, Monitor, Moon, RotateCcw, 
 import { keyboardShortcut, shortcutLabel, SHORTCUT_ACTIONS, type ShortcutAction } from "./utils/shortcuts";
 import { PasswordSettings } from "./PasswordSettings";
 import { GoogleSettings } from "./GoogleSettings";
+import type { IncrementalDriveController } from "./utils/useIncrementalDrive";
 import { UpdatesSettings } from "./UpdatesSettings";
 import type { UpdateInfo } from "./utils/updates";
 import { DEFAULT_SETTINGS, type Settings, type ThemePreference } from "./utils/settings";
@@ -17,6 +18,7 @@ interface SettingsPageProps {
   onImported?: (path: string) => void;
   onSyncStart?: () => Promise<boolean>;
   onSyncEnd?: () => Promise<void>;
+  incremental?: IncrementalDriveController;
   modifier: string;
   desktop: boolean;
   trayAvailable: boolean;
@@ -52,7 +54,7 @@ const themes: { value: ThemePreference; label: string; description: string; icon
   { value: "onyx", label: "Onyx", description: "Deep charcoal", icon: Moon },
 ];
 
-export function SettingsPage({ settings, persisted, isSample, vault = "", onImported = () => {}, onSyncStart, onSyncEnd, modifier, desktop, trayAvailable, onChange, onBack, onOpenVault, onOpenPasswords = () => {}, section = "general", onSection, version = "", update = null, updateStatus = "", onCheckUpdate = () => {}, onInstallUpdate = () => {}, onUpdatePage = () => {} }: SettingsPageProps) {
+export function SettingsPage({ settings, persisted, isSample, vault = "", onImported = () => {}, onSyncStart, onSyncEnd, incremental, modifier, desktop, trayAvailable, onChange, onBack, onOpenVault, onOpenPasswords = () => {}, section = "general", onSection, version = "", update = null, updateStatus = "", onCheckUpdate = () => {}, onInstallUpdate = () => {}, onUpdatePage = () => {} }: SettingsPageProps) {
   const [recording, setRecording] = useState<ShortcutAction | null>(null);
   const [shortcutError, setShortcutError] = useState("");
   const mac = modifier === "⌘";
@@ -64,7 +66,7 @@ export function SettingsPage({ settings, persisted, isSample, vault = "", onImpo
     </div>
 
     {onSection && <div className="settings-tabs" role="tablist" aria-label="Settings sections"><button type="button" role="tab" aria-selected={section === "general"} onClick={() => onSection("general")}>General</button><button type="button" role="tab" aria-selected={section === "passwords"} onClick={() => onSection("passwords")}>Passwords</button><button type="button" role="tab" aria-selected={section === "updates"} onClick={() => onSection("updates")}>Updates{update && <span className="update-dot" />}</button><button type="button" role="tab" aria-selected={section === "cloud"} onClick={() => onSection("cloud")}>Cloud</button></div>}
-    {section === "passwords" ? <PasswordSettings onOpenVault={onOpenPasswords} /> : section === "cloud" ? <GoogleSettings desktop={desktop} vault={vault} isSample={isSample} onImported={onImported} onSyncStart={onSyncStart} onSyncEnd={onSyncEnd} /> : section === "updates" ? <UpdatesSettings version={version} update={update} status={updateStatus} desktop={desktop} onCheck={onCheckUpdate} onInstall={onInstallUpdate} onPage={onUpdatePage} /> : <div className="settings-layout">
+    {section === "passwords" ? <PasswordSettings onOpenVault={onOpenPasswords} /> : section === "cloud" ? <GoogleSettings desktop={desktop} vault={vault} isSample={isSample} onImported={onImported} onSyncStart={onSyncStart} onSyncEnd={onSyncEnd} incremental={incremental} /> : section === "updates" ? <UpdatesSettings version={version} update={update} status={updateStatus} desktop={desktop} onCheck={onCheckUpdate} onInstall={onInstallUpdate} onPage={onUpdatePage} /> : <div className="settings-layout">
       <div className="settings-main">
         <section className="settings-card" aria-labelledby="appearance-title">
           <div className="settings-card-heading"><div><h2 id="appearance-title">Appearance</h2><p>Set the mood for your workspace.</p></div></div>

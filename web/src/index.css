@@ -1496,10 +1496,10 @@ button.tree-disclosure:hover { color: var(--accent-ink); background: var(--accen
 .capture-file-selection { margin:9px 0; padding:10px; color:var(--text-secondary); border:1px solid var(--border); border-radius:8px; background:var(--panel-raised); font-size:calc(10.5px * var(--interface-text-scale,1)); }
 .capture-file-selection > button { float:right; color:var(--accent-ink); border:0; background:transparent; font-weight:700; }.capture-file-selection ul { max-height:75px; overflow:auto; margin:6px 0 0; padding-left:18px; }.capture-file-selection li { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .capture-destination-label { margin:16px 0 0; }.capture-modal .move-search { margin-top:7px; }.capture-modal .move-folder-list { max-height:min(24vh,190px); }
-.upload-stack { position:fixed; z-index:35; right:20px; bottom:75px; display:grid; gap:8px; width:min(340px,calc(100vw - 32px)); max-height:min(70vh,560px); overflow:auto; }
+.upload-stack { position:fixed; z-index:35; right:20px; bottom:75px; display:grid; gap:8px; width:min(340px,calc(100vw - 32px)); overflow:visible; }
 .upload-card { padding:14px; color:var(--text-secondary); border:1px solid var(--border-strong); border-radius:12px; background:var(--panel-raised); box-shadow:0 14px 35px #0003; font-size:calc(11px * var(--interface-text-scale,1)); }
 .upload-card-heading { display:flex; align-items:center; gap:10px; }.upload-card-heading > div { display:grid; flex:1; gap:3px; min-width:0; }.upload-card-heading strong { color:var(--text); }.upload-card-heading small { color:var(--text-muted); }
-.upload-current { display:block; overflow:hidden; margin:11px 0 7px; text-overflow:ellipsis; white-space:nowrap; }.upload-card progress:not(.sr-only) { display:block; width:100%; height:6px; accent-color:var(--accent); }.upload-errors { max-height:100px; overflow:auto; margin:10px 0 0; padding-left:18px; color:var(--text-secondary); line-height:1.5; overflow-wrap:anywhere; }
+.upload-current { display:block; overflow:hidden; margin:11px 0 7px; text-overflow:ellipsis; white-space:nowrap; }.upload-card progress:not(.sr-only) { display:block; width:100%; height:6px; accent-color:var(--accent); }.upload-errors { margin:10px 0 0; padding-left:18px; color:var(--text-secondary); line-height:1.5; }.upload-errors li { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 @media (max-width:600px) { .upload-stack { right:12px; bottom:70px; } }
 .capture-modal input[hidden] { display:none; }
 .whiteboard-shape-hint { display:inline-flex; align-items:center; gap:6px; color:var(--text-muted); font-size:calc(10px * var(--interface-text-scale,1)); }
@@ -1607,7 +1607,14 @@ button.tree-disclosure:hover { color: var(--accent-ink); background: var(--accen
 .toolbar-select .app-select-root { max-width:120px; } .size-select .app-select-root { max-width:80px; }
 .video-control-row .app-select-trigger { min-width:65px; min-height:27px; padding:3px 7px; color:#fff; border-color:#ffffff36; background:#172a33; font-size:calc(10px * var(--interface-text-scale,1)); }
 .video-control-row .app-select-trigger:hover:not(:disabled), .video-control-row .app-select-trigger[aria-expanded="true"] { color:#fff; background:#273d47; }
-.upload-stack { overflow-x:hidden; overflow-y:auto; }
+/* Only one upload is visible at a time. Paging, rather than scrolling, keeps
+   concurrent uploads reachable without moving the fixed notification. */
+.upload-card[hidden] { display:none; }
+.upload-pager { display:flex; align-items:center; justify-content:center; gap:12px; padding:2px 8px; border:1px solid var(--border-strong); border-radius:10px; background:var(--panel-raised); color:var(--text-secondary); font-size:calc(10px * var(--interface-text-scale,1)); box-shadow:0 8px 24px #0003; }
+.upload-details-button { margin-top:5px; padding:0; color:var(--accent-ink); border:0; background:transparent; font:inherit; font-weight:700; cursor:pointer; }
+.upload-details-backdrop { z-index:70; }
+.upload-details-dialog { width:min(480px,100%); max-height:min(75vh,600px); display:flex; flex-direction:column; padding:20px; color:var(--text); border:1px solid var(--border-strong); border-radius:14px; background:var(--panel-raised); box-shadow:0 16px 38px #0004; }
+.upload-details-heading { display:flex; justify-content:space-between; align-items:center; gap:12px; }.upload-details-heading h2 { margin:0; font-size:16px; }.upload-details-dialog p { color:var(--text-secondary); }.upload-details-dialog ul { min-height:0; overflow:auto; margin:0; padding:0 0 0 20px; color:var(--text-secondary); overflow-wrap:anywhere; line-height:1.6; }
 
 /* Connection controls remain usable above the local focus-ordered layers. */
 .whiteboard .todo-link-controls { z-index:1100; }
@@ -1619,3 +1626,13 @@ button.tree-disclosure:hover { color: var(--accent-ink); background: var(--accen
 @keyframes upload-card-out { from { opacity:1; transform:translateY(0) scale(1); } to { opacity:0; transform:translateY(8px) scale(.97); } }
 @media (prefers-reduced-motion:reduce) { .upload-card:not(.is-leaving), .upload-card.is-leaving { animation:none; } }
 .whiteboard-toolbar .board-clear-button:disabled { opacity:.5; cursor:default; }
+
+/* Incremental Drive status is visible outside Settings without covering work. */
+.sync-status-button { display:inline-flex; align-items:center; gap:5px; padding:5px 8px; border:1px solid var(--border); border-radius:9px; background:var(--panel-soft); color:var(--text-secondary); font:inherit; font-size:calc(10px * var(--interface-text-scale,1)); cursor:pointer; }
+.sync-status-button.error { color:var(--danger, #bc5656); border-color:currentColor; }
+.drive-sync-state { display:flex; align-items:center; gap:8px; margin:12px 0; color:var(--text); font-size:calc(11px * var(--interface-text-scale,1)); }
+.drive-sync-dot { width:8px; height:8px; flex:none; border-radius:50%; background:var(--text-muted); }
+.drive-sync-dot.synced { background:#65a781; }.drive-sync-dot.error { background:#d56b68; }.drive-sync-dot.checking,.drive-sync-dot.applying,.drive-sync-dot.uploading { background:var(--accent); }
+.drive-automatic h3 small { font-size:.72em; color:var(--text-muted); font-weight:500; }
+.drive-sync-detail { font-size:calc(10px * var(--interface-text-scale,1)); }
+@media (max-width:760px) { .sync-status-button span { display:none; } }

@@ -53,7 +53,21 @@ await act(async()=>root.render(React.createElement(UploadProgress,{uploads:[{...
 check('one card can leave while another upload remains active',document.querySelectorAll('.upload-card').length===2&&document.querySelector('.upload-card.is-leaving')&&document.querySelector('.upload-card.copying:not(.is-leaving)'));
 const exit=[...scheduled.entries()].find(([,timer])=>timer.ms===UPLOAD_EXIT_MS);scheduled.delete(exit[0]);await act(async()=>exit[1].callback());
 check('the exited card is removed without interrupting the active upload',document.querySelectorAll('.upload-card').length===1&&document.querySelector('.upload-card.copying'));
+// A fixed notification never scrolls, even with overlapping batches or long errors.
+const batches = Array.from({length: 5}, (_, index) => ({...base,id:`batch-${index}`,phase:index===1?'failed':'copying',errors:index===1?['a very long first error','second error detail']:undefined}));
+await act(async()=>root.render(React.createElement(UploadProgress,{uploads:batches,onDismiss(){}})));
+check('overlapping uploads use one stationary visible card and accessible paging',document.querySelectorAll('.upload-card:not([hidden]):not(.is-leaving)').length===1&&!!document.querySelector('[aria-label="Next upload"]')&&document.querySelector('.upload-pager').textContent.includes('1 of 5'));
+const wheel=new dom.window.WheelEvent('wheel',{deltaY:300,bubbles:true,cancelable:true});document.querySelector('.upload-stack').dispatchEvent(wheel);
+check('mouse wheel is canceled over the notification instead of moving it or the underlying page',wheel.defaultPrevented);
+await click(document.querySelector('[aria-label="Next upload"]'));
+check('paging reaches the next upload without scrolling',document.querySelector('.upload-card:not([hidden])')?.textContent.includes('Upload needs attention')&&document.querySelector('.upload-pager').textContent.includes('2 of 5'));
+await click(document.querySelector('.upload-details-button'));
+check('all import errors are available in a separate details dialog',document.querySelector('[role="dialog"]')?.textContent.includes('second error detail'));
+check('auto-dismiss is paused while the user reads import errors',![...scheduled.values()].some(timer=>timer.ms===UPLOAD_FEEDBACK_MS));
+await act(async()=>document.dispatchEvent(new dom.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true})));
+check('Escape closes error details and restores the notification',!document.querySelector('[role="dialog"]')&&document.querySelector('.upload-details-button')===document.activeElement);
 const css=readFileSync('src/index.css','utf8');
+check('the upload container has no scrollable overflow',!css.includes('.upload-stack { overflow-x:hidden; overflow-y:auto;')&&!/\.upload-stack\s*\{[^}]*overflow\s*:\s*auto/.test(css));
 check('upload cards define enter and exit animation with reduced-motion support',css.includes('upload-card-in')&&css.includes('upload-card-out')&&/prefers-reduced-motion:reduce[^}]*\.upload-card/.test(css));
 await act(async()=>root.render(React.createElement(UploadProgress,{uploads:[],onDismiss(){}})));
 await act(async () => root.unmount());check('unmount cleans up pending exit and feedback timers',scheduled.size===0);

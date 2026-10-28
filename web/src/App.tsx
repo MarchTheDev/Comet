@@ -1,6 +1,7 @@
 import { AppSelect } from "./AppSelect";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type FormEvent, type MouseEvent } from "react";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { flushSync } from "react-dom";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -8,7 +9,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { EditorContent, useEditor, useEditorState } from "@tiptap/react";
 import {
   AlertCircle, ArrowLeft, ArrowRight, Bold, BookOpen, CalendarDays, CheckCircle2,
-  ChevronDown, ChevronRight, Code2, FileCode2, FilePlus2, FileText,
+  ChevronDown, ChevronRight, Cloud, Code2, FileCode2, FilePlus2, FileText,
   FolderOpen, FolderPlus, GitBranch, GripVertical, Network, Image as ImageIcon, Italic, KeyRound, Link2, List,
   ListChecks, LoaderCircle, Maximize2, Minimize2,
   MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pencil, Plus, Quote, Redo2,
@@ -56,6 +57,8 @@ import { readSettings, saveSettings, type Settings } from "./utils/settings";
 import { loadMarkdownNote } from "./utils/editor";
 import { SAMPLE_ROOT, SAMPLE_WELCOME, sampleVault } from "./utils/sampleVault";
 import { SaveQueue, type SaveState } from "./utils/saveQueue";
+import { useIncrementalDrive } from "./utils/useIncrementalDrive";
+import type { DriveApplied } from "./utils/incrementalSync";
 import { clearSession, readSampleSelection, readSession, saveSampleSelection, saveSession } from "./utils/session";
 import {
   buildTree,
@@ -135,6 +138,7 @@ function App() {
   const [selectedPath, setSelectedPath] = useState(sampleStart.path);
   const [content, setContent] = useState(sampleStart.content);
   const [workspaceView, setWorkspaceView] = useState<WorkspaceView>(sampleStart.view);
+  const workspaceViewRef = useRef(workspaceView); workspaceViewRef.current = workspaceView;
   const [folderPath, setFolderPath] = useState("");
   const [history, setHistory] = useState<NavigationHistory>(() => ({ items: [{ vault: SAMPLE_ROOT, view: sampleStart.view, path: sampleStart.path }], index: 0 }));
   const historyRef = useRef(history); historyRef.current = history;
@@ -568,6 +572,68 @@ function App() {
     }
   }, [expandParents, flushAll, persistSession, recordNavigation]);
   selectNoteRef.current = (path) => { void selectNote(path); };
+
+  // Network transfers happen without blocking the editor. Only the short local
+  // merge/capture phase takes this guard, after all buffered edits are flushed.
+  const syncFocus = useRef<HTMLElement | null>(null);
+  const beforeIncrementalApply = useCallback(async (vault: string): Promise<boolean> => {
+    if (vaultRef.current !== vault || activeUploads.current || syncInFlight.current || document.querySelector('[role="dialog"][aria-modal="true"]')) return false;
+    syncInFlight.current = true;
+    syncFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    syncFocus.current?.blur();
+    editorRef.current?.setEditable(false, false);
+    // Render the blocking layer before awaiting native work so a focused
+    // textarea cannot accept a new edit after the save queue is flushed.
+    flushSync(() => setSyncBusy(true));
+    try {
+      await flushAll();
+      if (vaultRef.current === vault) return true;
+    } catch { setNotice("Couldn't save before syncing. Retry your save first."); }
+    syncInFlight.current = false; setSyncBusy(false);
+    editorRef.current?.setEditable(modeRef.current === "write" && isMarkdown(selectedRef.current), false);
+    const focus = syncFocus.current; syncFocus.current = null; if (focus?.isConnected) focus.focus({ preventScroll: true });
+    return false;
+  }, [flushAll]);
+  const afterIncrementalApply = useCallback(async (vault: string, result: DriveApplied | null) => {
+    try {
+      if (vaultRef.current !== vault) return;
+      const next = await listVault(vault); setEntries(next);
+      const selected = selectedRef.current;
+      const selectedChanged = !result || result.changedPaths.some((relative) => normalizePath(joinPath(vault, relative)) === normalizePath(selected));
+      if (!selected || !selectedChanged) return;
+      const stillExists = next.some((entry) => entry.kind === "file" && normalizePath(entry.path) === normalizePath(selected));
+      if (!stillExists) {
+        selectedRef.current = ""; contentRef.current = ""; setSelectedPath(""); setContent(""); setMediaUrl("");
+        loadMarkdownNote(editorRef.current, "");
+        if (["note", "file", "todo", "whiteboard"].includes(workspaceViewRef.current)) setWorkspaceView("all");
+        setNotice("The open file was removed on another device. Its original is in the sync safety folder.");
+        return;
+      }
+      if (isTextFile(selected) || ["link", "todo", "whiteboard"].includes(fileKind(selected))) {
+        const nextContent = await readNote(vault, selected);
+        if (nextContent !== contentRef.current) {
+          contentRef.current = nextContent; setContent(nextContent);
+          if (isMarkdown(selected)) loadMarkdownNote(editorRef.current, nextContent);
+          setSaveState("saved");
+        }
+      } else {
+        // Force media elements to request the replaced on-disk file again.
+        setMediaUrl(`${convertFileSrc(selected)}?cometSync=${Date.now()}`);
+      }
+    } catch (error) {
+      // Never leave a stale editor open after an uncertain partial merge.
+      selectedRef.current = ""; contentRef.current = ""; setSelectedPath(""); setContent(""); setMediaUrl("");
+      loadMarkdownNote(editorRef.current, "");
+      if (["note", "file", "todo", "whiteboard"].includes(workspaceViewRef.current)) setWorkspaceView("all");
+      throw new Error(`The workspace changed, but the open file could not be refreshed. Reopen it before editing: ${errorMessage(error)}`);
+    } finally {
+      syncInFlight.current = false; setSyncBusy(false);
+      editorRef.current?.setEditable(modeRef.current === "write" && isMarkdown(selectedRef.current), false);
+      const focus = syncFocus.current; syncFocus.current = null;
+      if (focus?.isConnected) window.requestAnimationFrame(() => { if (focus.isConnected) focus.focus({ preventScroll: true }); });
+    }
+  }, []);
+  const incremental = useIncrementalDrive({ desktop: desktopAvailable, vault: vaultPath, isSample, beforeApply: beforeIncrementalApply, afterApply: afterIncrementalApply });
 
   useEffect(() => {
     if (!lastSession) return;
@@ -1827,6 +1893,7 @@ function App() {
                 </div>}
               </form>
             <div className="topbar-actions">
+              {incremental.binding && <button type="button" className={`sync-status-button ${incremental.status}`} onClick={() => { setSettingsSection("cloud"); void showSettings(); }} title={incremental.detail || "Google Drive sync"} aria-label={`Google Drive sync: ${!incremental.connected ? "disconnected" : incremental.status}`}><Cloud size={16} /><span>{!incremental.connected ? "Disconnected" : incremental.status === "synced" ? "Synced" : incremental.status === "error" ? "Sync issue" : incremental.status === "paused" ? "Paused" : incremental.status === "waiting" ? "Waiting" : "Syncing…"}</span></button>}
               {!isSample && <button className="icon-button" type="button" aria-label="Show current path in file explorer" title="Show current path in file explorer" onClick={() => void revealPath(currentLocation)}><FolderOpen size={17} /></button>}
               {selection.size > 0 && <button className="selection-clear icon-button" type="button" aria-label="Clear selection" title="Clear selection (Escape)" onClick={() => { const empty = new Set<string>(); selectionRef.current = empty; selectionAnchor.current = ""; selectionAnchorOpened.current = false; setSelection(empty); }}><X size={15} /></button>}
               {selection.size > 0 && <button className="selection-trash icon-button" type="button" aria-label={`Delete ${selection.size} selected items`} title={`Delete ${selection.size} selected items`} onClick={openBulkDelete}><Trash2 size={17} /><span>{selection.size}</span></button>}
@@ -1837,7 +1904,7 @@ function App() {
           </header>
 
           <div ref={workspaceScrollRef} className={`workspace-scroll without-cover${dropIndicator?.surface === "workspace" && dropIndicator.path === workspaceDestination && dropIndicator.position === "into" ? " drop-target" : ""}`} data-drop-folder={workspaceDestination} onClick={(event) => { const target = event.target as Element; if (!target.closest("button, a, input, select, textarea, [contenteditable=true], .workspace-entry, .brain-node, .todo-card, .todo-link-hit, .note-card, .media-card")) clearSelection(); }} onDragOver={(event) => { event.preventDefault(); showDropIndicator({ path: workspaceDestination, position: "into", surface: "workspace" }); }} onDrop={(event) => dropToFolder(event, workspaceDestination)} onContextMenu={(event) => { if (event.target === event.currentTarget) openNewMenu(event, workspaceDestination); }}>
-            {workspaceView === "tree" ? <TreeExplore key={vaultPath} vault={vaultPath} name={vaultName} tree={tree} onOpen={openEntry} onContext={entryContext} selectedPaths={selection} onActivate={activateSelection} onClearSelection={clearSelection} dropIndicator={dropIndicator?.surface === "map" ? dropIndicator : null} dropGroup={dropIndicator?.surface === "map" ? dropGroup : ""} onDragStart={dragStart} onDragOverNode={(event, item) => dragOverTree(event, item, "map")} onDropNode={(event, item) => dropOnTree(event, item, "map")} onDragOverRoot={(event) => { event.preventDefault(); event.stopPropagation(); const root = (event.target as Element).closest<HTMLElement>("[data-map-path]"); if (root?.dataset.mapPath === vaultPath && (!dragSourceRef.current || normalizePath(parentPath(dragSourceRef.current)) !== normalizePath(vaultPath))) showDropIndicator({ path: vaultPath, position: "into", surface: "map", source: dragSourceRef.current }); else showDropIndicator(null); }} onDropRoot={(event) => { const root = (event.target as Element).closest<HTMLElement>("[data-map-path]"); if (root?.dataset.mapPath === vaultPath) dropToFolder(event, vaultPath); else { event.preventDefault(); event.stopPropagation(); showDropIndicator(null); } }} /> : workspaceView === "brain" ? <BrainExplore key={vaultPath} vault={vaultPath} name={vaultName} entries={entries} onOpen={openEntry} onContext={entryContext} selectedPaths={selection} onActivate={activateSelection} onClearSelection={clearSelection} /> : workspaceView === "calendar" ? <CalendarView key={vaultPath} vault={vaultPath} name={vaultName} desktop={desktopAvailable} onConnect={() => { setSettingsSection("cloud"); void showSettings(); }} /> : workspaceView === "passwords" ? <PasswordsView onManage={() => { setSettingsSection("passwords"); void showSettings(); }} /> : workspaceView === "settings" ? <SettingsPage settings={settings} persisted={settingsPersisted} isSample={isSample} vault={vaultPath} onImported={(path) => void activateVault(path, true)} onSyncStart={async () => { if (activeUploads.current) { setNotice("Wait for file imports to finish before syncing."); return false; } syncInFlight.current = true; try { await flushAll(); setSyncBusy(true); return true; } catch { syncInFlight.current = false; setNotice("Couldn't save before syncing. Retry your save first."); return false; } }} onSyncEnd={async () => { try { await refresh(vaultRef.current); } finally { syncInFlight.current = false; setSyncBusy(false); } }} modifier={modifier} desktop={desktopAvailable} trayAvailable={trayAvailable} section={settingsSection} onSection={setSettingsSection} version={APP_VERSION} update={availableUpdate} updateStatus={updateStatus} onCheckUpdate={() => void runUpdateCheck()} onInstallUpdate={() => void installUpdate()} onUpdatePage={openUpdatePage} onChange={updateSettings} onBack={() => history.index > 0 ? void navigateHistory(-1) : void showOverview("all")} onOpenVault={() => void openVault()} onOpenPasswords={() => void showOverview("passwords")} /> : workspaceView === "whiteboard" && selectedPath && parseWhiteboard(content) ? <div className="todo-workspace"><div className="media-top-actions"><button className="icon-button" type="button" aria-label={`More options for ${selectedName}`} onClick={(event) => handleTreeContext(event, { name: selectedName, path: selectedPath, kind: "file", children: [] })}><MoreHorizontal size={19} /></button></div><Whiteboard key={selectedPath} path={selectedPath} board={parseWhiteboard(content)!} name={selectedName.replace(/\.comet-whiteboard$/i, "")} saveState={saveState} onChange={updateWhiteboard} onRename={() => openRename({ name: selectedName, path: selectedPath, kind: "file", children: [] })} onRetry={() => void flushAll().catch(() => setNotice("Still couldn't save. Please check the folder and try again."))} /></div> : workspaceView === "todo" && selectedPath && parseTodo(content) ? <div className="todo-workspace"><div className="media-top-actions"><button className={`icon-button ${itemMeta(metadata, selectedPath).pinned ? "active" : ""}`} type="button" aria-label={itemMeta(metadata, selectedPath).pinned ? "Unpin board" : "Pin board"} onClick={() => toggleProperty(selectedPath, "pinned")}><Pin size={17} /></button><button className={`icon-button ${itemMeta(metadata, selectedPath).favorite ? "active" : ""}`} type="button" aria-label={itemMeta(metadata, selectedPath).favorite ? "Remove board from favorites" : "Add board to favorites"} onClick={() => toggleProperty(selectedPath, "favorite")}><Star size={17} /></button><button className="icon-button" type="button" aria-label="Edit board tags" onClick={() => openTags(selectedPath)}><Tag size={17} /></button><button className="icon-button" type="button" aria-label={`More options for ${selectedName}`} onClick={(event) => handleTreeContext(event, { name: selectedName, path: selectedPath, kind: "file", children: [] })}><MoreHorizontal size={19} /></button></div><TodoBoard key={selectedPath} board={parseTodo(content)!} arrowheads={settings.todoArrowheads} name={selectedName.replace(/\.comet-todo$/i, "")} onRename={() => openRename({ name: selectedName, path: selectedPath, kind: "file", children: [] })} saveState={saveState} onChange={updateTodo} onRetry={() => void flushAll().catch(() => setNotice("Still couldn't save. Please check the folder and try again."))} /></div> : workspaceView === "note" && selectedPath ? <section className="note-card" aria-label={`File: ${selectedName}`}>
+            {workspaceView === "tree" ? <TreeExplore key={vaultPath} vault={vaultPath} name={vaultName} tree={tree} onOpen={openEntry} onContext={entryContext} selectedPaths={selection} onActivate={activateSelection} onClearSelection={clearSelection} dropIndicator={dropIndicator?.surface === "map" ? dropIndicator : null} dropGroup={dropIndicator?.surface === "map" ? dropGroup : ""} onDragStart={dragStart} onDragOverNode={(event, item) => dragOverTree(event, item, "map")} onDropNode={(event, item) => dropOnTree(event, item, "map")} onDragOverRoot={(event) => { event.preventDefault(); event.stopPropagation(); const root = (event.target as Element).closest<HTMLElement>("[data-map-path]"); if (root?.dataset.mapPath === vaultPath && (!dragSourceRef.current || normalizePath(parentPath(dragSourceRef.current)) !== normalizePath(vaultPath))) showDropIndicator({ path: vaultPath, position: "into", surface: "map", source: dragSourceRef.current }); else showDropIndicator(null); }} onDropRoot={(event) => { const root = (event.target as Element).closest<HTMLElement>("[data-map-path]"); if (root?.dataset.mapPath === vaultPath) dropToFolder(event, vaultPath); else { event.preventDefault(); event.stopPropagation(); showDropIndicator(null); } }} /> : workspaceView === "brain" ? <BrainExplore key={vaultPath} vault={vaultPath} name={vaultName} entries={entries} onOpen={openEntry} onContext={entryContext} selectedPaths={selection} onActivate={activateSelection} onClearSelection={clearSelection} /> : workspaceView === "calendar" ? <CalendarView key={vaultPath} vault={vaultPath} name={vaultName} desktop={desktopAvailable} onConnect={() => { setSettingsSection("cloud"); void showSettings(); }} /> : workspaceView === "passwords" ? <PasswordsView onManage={() => { setSettingsSection("passwords"); void showSettings(); }} /> : workspaceView === "settings" ? <SettingsPage incremental={incremental} settings={settings} persisted={settingsPersisted} isSample={isSample} vault={vaultPath} onImported={(path) => void activateVault(path, true)} onSyncStart={async () => { if (activeUploads.current) { setNotice("Wait for file imports to finish before syncing."); return false; } syncInFlight.current = true; try { await flushAll(); setSyncBusy(true); return true; } catch { syncInFlight.current = false; setNotice("Couldn't save before syncing. Retry your save first."); return false; } }} onSyncEnd={async () => { try { await refresh(vaultRef.current); } finally { syncInFlight.current = false; setSyncBusy(false); } }} modifier={modifier} desktop={desktopAvailable} trayAvailable={trayAvailable} section={settingsSection} onSection={setSettingsSection} version={APP_VERSION} update={availableUpdate} updateStatus={updateStatus} onCheckUpdate={() => void runUpdateCheck()} onInstallUpdate={() => void installUpdate()} onUpdatePage={openUpdatePage} onChange={updateSettings} onBack={() => history.index > 0 ? void navigateHistory(-1) : void showOverview("all")} onOpenVault={() => void openVault()} onOpenPasswords={() => void showOverview("passwords")} /> : workspaceView === "whiteboard" && selectedPath && parseWhiteboard(content) ? <div className="todo-workspace"><div className="media-top-actions"><button className="icon-button" type="button" aria-label={`More options for ${selectedName}`} onClick={(event) => handleTreeContext(event, { name: selectedName, path: selectedPath, kind: "file", children: [] })}><MoreHorizontal size={19} /></button></div><Whiteboard key={selectedPath} path={selectedPath} board={parseWhiteboard(content)!} name={selectedName.replace(/\.comet-whiteboard$/i, "")} saveState={saveState} onChange={updateWhiteboard} onRename={() => openRename({ name: selectedName, path: selectedPath, kind: "file", children: [] })} onRetry={() => void flushAll().catch(() => setNotice("Still couldn't save. Please check the folder and try again."))} /></div> : workspaceView === "todo" && selectedPath && parseTodo(content) ? <div className="todo-workspace"><div className="media-top-actions"><button className={`icon-button ${itemMeta(metadata, selectedPath).pinned ? "active" : ""}`} type="button" aria-label={itemMeta(metadata, selectedPath).pinned ? "Unpin board" : "Pin board"} onClick={() => toggleProperty(selectedPath, "pinned")}><Pin size={17} /></button><button className={`icon-button ${itemMeta(metadata, selectedPath).favorite ? "active" : ""}`} type="button" aria-label={itemMeta(metadata, selectedPath).favorite ? "Remove board from favorites" : "Add board to favorites"} onClick={() => toggleProperty(selectedPath, "favorite")}><Star size={17} /></button><button className="icon-button" type="button" aria-label="Edit board tags" onClick={() => openTags(selectedPath)}><Tag size={17} /></button><button className="icon-button" type="button" aria-label={`More options for ${selectedName}`} onClick={(event) => handleTreeContext(event, { name: selectedName, path: selectedPath, kind: "file", children: [] })}><MoreHorizontal size={19} /></button></div><TodoBoard key={selectedPath} board={parseTodo(content)!} arrowheads={settings.todoArrowheads} name={selectedName.replace(/\.comet-todo$/i, "")} onRename={() => openRename({ name: selectedName, path: selectedPath, kind: "file", children: [] })} saveState={saveState} onChange={updateTodo} onRetry={() => void flushAll().catch(() => setNotice("Still couldn't save. Please check the folder and try again."))} /></div> : workspaceView === "note" && selectedPath ? <section className="note-card" aria-label={`File: ${selectedName}`}>
               <div className="document-header">
                 <div className="document-heading">
                   <div className="document-icon"><FileText size={20} /></div>
@@ -2029,7 +2096,7 @@ function App() {
           {captureType === "file" && <>
             <input ref={captureInputRef} type="file" multiple hidden onChange={(event) => { const files = [...(event.currentTarget.files ?? [])]; event.currentTarget.value = ""; if (files.length) { setCaptureFiles(files); setCapturePaths([]); setDialogError(""); } }} />
             <button type="button" className={`capture-dropzone${captureDragOver ? " drag-over" : ""}`} onClick={() => void chooseCaptureFiles()} onDragEnter={(event) => { event.preventDefault(); event.stopPropagation(); setCaptureDragOver(true); }} onDragOver={(event) => { event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = "copy"; setCaptureDragOver(true); }} onDragLeave={(event) => { event.preventDefault(); event.stopPropagation(); if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setCaptureDragOver(false); }} onDrop={(event) => { event.preventDefault(); event.stopPropagation(); setCaptureDragOver(false); const files = [...event.dataTransfer.files]; if (files.length) { setCaptureFiles(files); setCapturePaths([]); setDialogError(""); } else setDialogError("Drop files here, or choose files using the button."); }}>
-              <span className="capture-drop-icon"><Upload size={21} /></span><strong>Drop files here or click to browse</strong><small>{isSample ? "Up to 20 MB per file · browser storage may be smaller" : "Browse for files of any size · drops up to 20 MB"}</small>
+              <span className="capture-drop-icon"><Upload size={21} /></span><strong>Drop files here or click to browse</strong><small>{isSample ? "Browser storage space varies by device" : "Browse or drop files of any size"}</small>
             </button>
             {(captureFiles.length > 0 || capturePaths.length > 0) && <div className="capture-file-selection"><strong>{captureFiles.length || capturePaths.length} {(captureFiles.length || capturePaths.length) === 1 ? "file" : "files"} selected</strong><button type="button" onClick={() => { setCaptureFiles([]); setCapturePaths([]); }}>Clear</button><ul>{(captureFiles.length ? captureFiles.map((file) => file.name) : capturePaths.map(fileName)).map((name, index) => <li key={`${index}:${name}`} title={name}>{name}</li>)}</ul></div>}
           </>}

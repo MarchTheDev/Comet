@@ -1,0 +1,49 @@
+import { JSDOM } from 'jsdom';
+import React, { act } from 'react';
+import { createRoot } from 'react-dom/client';
+import { GoogleSettings } from '../src/GoogleSettings.tsx';
+import { useIncrementalDrive } from '../src/utils/useIncrementalDrive.ts';
+import { bindingKey } from '../src/utils/incrementalSync.ts';
+
+let failures=0;const check=(name,ok)=>{if(ok)console.log(`  ok   ${name}`);else{failures++;console.log(`  FAIL ${name}`);}};
+console.log('\nautomatic Drive settings and retry (mocked native bridge)');
+const dom=new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>',{pretendToBeVisual:true,url:'https://comet-automatic.test/'});
+globalThis.window=dom.window;globalThis.document=dom.window.document;globalThis.localStorage=dom.window.localStorage;globalThis.Node=dom.window.Node;globalThis.HTMLElement=dom.window.HTMLElement;globalThis.IS_REACT_ACT_ENVIRONMENT=true;
+Object.defineProperty(globalThis,'navigator',{value:dom.window.navigator,configurable:true});
+const timeouts=new Map(), realSet=window.setTimeout, realClear=window.clearTimeout;let timeId=0;
+window.setTimeout=(fn,ms)=>{const id=++timeId;timeouts.set(id,{fn,ms});return id;};window.clearTimeout=id=>timeouts.delete(id);
+let offline=false, sequence=0, before=0, after=0, imported='';const calls=[];
+window.__TAURI_INTERNALS__={invoke:async(cmd,args={})=>{calls.push({cmd,args});
+  if(cmd==='google_status')return true;if(cmd==='google_incremental_recover')return;
+  if(cmd==='google_drive_list'||cmd==='google_sync_list')return [];
+  if(cmd==='google_incremental_list')return [{group:'a'.repeat(32),id:'base1',name:'Comet sync - Vault',modified:'',branches:1}];
+  if(cmd==='google_incremental_prepare'){if(offline)throw Error('offline');return {ticket:'b'.repeat(32),incoming:true};}
+  if(cmd==='google_incremental_apply')return {applied:1,deleted:0,conflicts:1,safetyFolder:'/safety',changedPaths:['note.md']};
+  if(cmd==='google_incremental_publish')return {group:'a'.repeat(32),base:`base${++sequence}`,uploaded:1,downloaded:1,more:false};
+  if(cmd==='google_incremental_abort')return;
+  if(cmd==='google_incremental_import')return {path:'/imported',group:args.group,base:args.id};
+}};
+window.confirm=()=>true;
+function Harness(){
+  const sync=useIncrementalDrive({desktop:true,vault:'/vault',isSample:false,beforeApply:async()=>{before++;return true;},afterApply:async()=>{after++;}});
+  return React.createElement(GoogleSettings,{desktop:true,vault:'/vault',isSample:false,incremental:sync,onImported:path=>{imported=path;}});
+}
+const root=createRoot(document.getElementById('root'));
+const button=text=>[...document.querySelectorAll('button')].find(item=>item.textContent.trim()===text);
+const click=async element=>act(async()=>element.dispatchEvent(new dom.window.MouseEvent('click',{bubbles:true,cancelable:true})));
+await act(async()=>root.render(React.createElement(Harness)));
+check('settings distinguish the automatic preview from legacy full-snapshot sync',document.querySelector('.drive-automatic')?.textContent.includes('Automatic workspace sync')&&document.querySelector('.drive-snapshots:not(.drive-automatic)')?.textContent.includes('Legacy manual sync'));
+await click(button('Start automatic sync'));
+check('explicit start creates a persistent binding and guards the local merge',before===1&&after===1&&JSON.parse(localStorage.getItem(bindingKey('/vault'))).base==='base1'&&document.querySelector('.drive-sync-state')?.textContent.includes('Last sync complete'));
+check('automatic preview reports changed-file counts, conflicts and safety location',document.querySelector('.drive-sync-detail')?.textContent.includes('1 files uploaded')&&document.querySelector('.drive-sync-detail')?.textContent.includes('/safety'));
+check('completed sync schedules another background scan without repeating the old snapshot command',[...timeouts.values()].some(t=>t.ms===30000)&&!calls.some(c=>c.cmd==='google_sync_now'));
+offline=true;await click(button('Sync changes now'));
+check('network failures retain the baseline and expose an error with retry backoff',JSON.parse(localStorage.getItem(bindingKey('/vault'))).base==='base1'&&document.querySelector('.drive-automatic .dialog-error')?.textContent.includes('offline')&&[...timeouts.values()].some(t=>t.ms===15000));
+offline=false;const retry=[...timeouts.entries()].find(([,t])=>t.ms===15000);timeouts.delete(retry[0]);await act(async()=>retry[1].fn());
+check('a queued retry publishes against the previous baseline when connectivity returns',calls.filter(c=>c.cmd==='google_incremental_prepare').at(-1).args.base==='base1'&&JSON.parse(localStorage.getItem(bindingKey('/vault'))).base==='base2');
+await click(button('Pause'));check('pause persists only on this device and cancels background scans',JSON.parse(localStorage.getItem(bindingKey('/vault'))).enabled===false&&button('Resume')&&![...timeouts.values()].some(t=>t.ms===30000));
+await click(button('Resume'));check('resume persists and schedules a near-term scan',JSON.parse(localStorage.getItem(bindingKey('/vault'))).enabled===true&&[...timeouts.values()].some(t=>t.ms===250));
+await click(button('Open on this device'));check('another device imports into a new folder and records its own automatic baseline',imported==='/imported'&&JSON.parse(localStorage.getItem(bindingKey('/imported'))).base==='base1');
+check('legacy sync is disabled when the same local workspace is linked to automatic sync',button('Start syncing this workspace')?.disabled);
+await act(async()=>root.unmount());window.setTimeout=realSet;window.clearTimeout=realClear;dom.window.close();delete globalThis.IS_REACT_ACT_ENVIRONMENT;delete globalThis.localStorage;
+globalThis.__cometFailures=(globalThis.__cometFailures??0)+failures;

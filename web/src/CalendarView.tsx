@@ -1,3 +1,4 @@
+import { AppSelect } from "./AppSelect";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { CalendarDays, ChevronLeft, ChevronRight, Clock3, Cloud, Download, Pencil, Plus, RefreshCw, Trash2, X } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
@@ -130,7 +131,7 @@ export function CalendarView({ vault, name, desktop = false, onConnect }: { vaul
         {error && <div className="dialog-error" role="alert">{error}</div>}
         {draft ? <form className="calendar-form" onSubmit={(event) => void save(event)}>
           <div className="calendar-form-heading"><strong>{editing ? "Edit event" : "New event"}</strong><button type="button" aria-label="Cancel event" onClick={() => { setDraft(null); setError(""); }}><X size={16} /></button></div>
-          {!editing && connected && <label>Save to<select aria-label="Event calendar" value={target} onChange={(event) => setTarget(event.target.value as "local" | "google")}><option value="google">Google Calendar</option><option value="local">This workspace only</option></select></label>}
+          {!editing && connected && <label>Save to<AppSelect label="Event calendar" value={target} onChange={(value) => setTarget(value as "local" | "google")}><option value="google">Google Calendar</option><option value="local">This workspace only</option></AppSelect></label>}
           {target === "google" && <small className="calendar-google-hint">New timed events last one hour. Existing event durations are preserved when possible.{editingGoogle?.recurring ? " This edits only this occurrence." : ""}</small>}
           <label>Title<input autoFocus required maxLength={200} aria-label="Event title" placeholder="What's happening?" value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} /></label>
           <div className="calendar-form-grid"><label>Date<input required type="date" min="0001-01-01" max="9999-12-31" aria-label="Event date" value={draft.date} onChange={(event) => setDraft({ ...draft, date: event.target.value })} /></label><label>Time <small>optional</small><input type="time" aria-label="Event time" value={draft.time} onChange={(event) => setDraft({ ...draft, time: event.target.value })} /></label></div>

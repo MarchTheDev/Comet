@@ -1,3 +1,4 @@
+import { AppSelect } from "./AppSelect";
 import { useEffect, useRef, useState } from "react";
 import ePub, { type Book, type Rendition, type Location, type NavItem } from "epubjs";
 import { BookOpen, ChevronLeft, ChevronRight, ExternalLink, Minus, Plus, Settings2 } from "lucide-react";
@@ -29,7 +30,7 @@ function bookSections(items: NavItem[], resolve: (href: string) => string | null
 }
 function isEditing(target: EventTarget | null): boolean {
   const node = target as HTMLElement | null;
-  return !!node && (/^(INPUT|TEXTAREA|SELECT)$/.test(node.tagName) || node.isContentEditable);
+  return !!node && (/^(INPUT|TEXTAREA|SELECT)$/.test(node.tagName) || node.getAttribute("role") === "combobox" || node.isContentEditable);
 }
 
 /** A local, script-disabled EPUB reader. Remote book resources are blocked. */
@@ -54,7 +55,7 @@ export function EpubView({ url, path, sample, onOpenExternal }: { url: string; p
     return () => window.removeEventListener("keydown", key);
   }, []);
   useEffect(() => {
-    const controller = new AbortController(); let active = true, book: Book | null = null;
+    const controller = new AbortController(); let active = true, book: Book | null = null, selectionObserver: MutationObserver | null = null;
     setError(""); setNotice(""); setReady(false); setPage(null); setSections([]); setSectionHref("");
     void (async () => {
       const response = await fetch(url, { signal: controller.signal });
@@ -77,7 +78,15 @@ export function EpubView({ url, path, sample, onOpenExternal }: { url: string; p
       void openedBook.loaded.navigation.then((navigation) => { if (active) setSections(bookSections(navigation.toc, (href) => resolveEpubSection(href, navigationPath, packagePath, spine))); }).catch(() => { /* Books may omit a table of contents. */ });
       const reader = book.renderTo(host.current, { width: "100%", height: "100%", flow: "paginated", spread: "none", allowScriptedContent: false });
       rendition.current = reader;
-      reader.themes.default({ body: { color: "#263342", background: "#fff", "line-height": "1.65" } });
+      const applySelection = () => {
+        // EPUB content lives in its own sandboxed document and cannot inherit
+        // Comet's selection colors from the outer page.
+        const selected = getComputedStyle(document.body, "::selection");
+        reader.themes.default({ body: { color: "#263342", background: "#fff", "line-height": "1.65" }, "html ::selection": { color: `${selected.color} !important`, background: `${selected.backgroundColor} !important` } });
+      };
+      applySelection();
+      selectionObserver = new MutationObserver(applySelection);
+      selectionObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme", "data-palette"] });
       reader.on("keydown", (event: KeyboardEvent) => {
         if (!active || event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || isEditing(event.target)) return;
         if (event.key === "ArrowLeft" || event.key === "ArrowRight") { event.preventDefault(); turnRef.current(event.key === "ArrowRight" ? "next" : "prev"); }
@@ -93,7 +102,7 @@ export function EpubView({ url, path, sample, onOpenExternal }: { url: string; p
       try { await reader.display(saved && /^epubcfi\(/.test(saved) ? saved : undefined); } catch { await reader.display(); }
       if (active) setReady(true);
     })().catch((reason: unknown) => { if (active && !controller.signal.aborted) setError(reason instanceof Error ? reason.message : "This EPUB could not be opened."); });
-    return () => { active = false; controller.abort(); rendition.current = null; turning.current = false; book?.destroy(); };
+    return () => { active = false; controller.abort(); selectionObserver?.disconnect(); rendition.current = null; turning.current = false; book?.destroy(); };
   }, [url, path]);
   useEffect(() => {
     try { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)); } catch {}
@@ -106,11 +115,11 @@ export function EpubView({ url, path, sample, onOpenExternal }: { url: string; p
   const updatePrefs = (patch: Partial<ReaderPreferences>) => setPrefs((old) => ({ ...old, ...patch }));
   return <div className={`comet-epub-view epub-paper-${prefs.paper}`}>
     <div className="epub-toolbar"><BookOpen size={17} /><strong>EPUB reader</strong><span className="pdf-spacer" />
-      {sections.length > 0 && <select aria-label="Book section" className="epub-section-select" value={sections.find((item) => item.href === sectionHref)?.href ?? sections.find((item) => item.href.split("#")[0] === sectionHref.split("#")[0])?.href ?? ""} disabled={!ready} onChange={(event) => { const href = event.target.value; if (sections.some((item) => item.href === href)) { setSectionHref(href); void rendition.current?.display(href).catch(() => setNotice("Couldn't open that section.")); } }}><option value="" disabled hidden>Choose a section</option>{sections.map((item, index) => <option key={`${item.href}:${index}`} value={item.href}>{item.label}</option>)}</select>}
+      {sections.length > 0 && <AppSelect label="Book section" className="epub-section-select" value={sections.find((item) => item.href === sectionHref)?.href ?? sections.find((item) => item.href.split("#")[0] === sectionHref.split("#")[0])?.href ?? ""} disabled={!ready} onChange={(href) => { if (sections.some((item) => item.href === href)) { setSectionHref(href); void rendition.current?.display(href).catch(() => setNotice("Couldn't open that section.")); } }}><option value="" disabled hidden>Choose a section</option>{sections.map((item, index) => <option key={`${item.href}:${index}`} value={item.href}>{item.label}</option>)}</AppSelect>}
       <button type="button" aria-label="Smaller book text" disabled={!ready || prefs.font <= 70} onClick={() => updatePrefs({ font: Math.max(70, prefs.font - 10) })}><Minus size={16} /></button><span>{prefs.font}%</span><button type="button" aria-label="Larger book text" disabled={!ready || prefs.font >= 180} onClick={() => updatePrefs({ font: Math.min(180, prefs.font + 10) })}><Plus size={16} /></button>
       <button type="button" title="Reading options" aria-label="Reading options" aria-expanded={options} onClick={() => setOptions(!options)}><Settings2 size={17} /></button>{!sample && <button type="button" aria-label="Open ebook in system app" onClick={onOpenExternal}><ExternalLink size={16} /></button>}
     </div>
-    {options && <div className="epub-options"><label>Font <select value={prefs.family} onChange={(event) => updatePrefs({ family: event.target.value as ReaderPreferences["family"] })}><option value="book">Book default</option><option value="serif">Serif</option><option value="sans">Sans serif</option></select></label><label>Line spacing <select value={prefs.lineHeight} onChange={(event) => updatePrefs({ lineHeight: Number(event.target.value) })}><option value="1.3">Compact</option><option value="1.65">Comfortable</option><option value="2">Relaxed</option></select></label><label>Page color <select value={prefs.paper} onChange={(event) => updatePrefs({ paper: event.target.value as ReaderPreferences["paper"] })}><option value="light">Light</option><option value="sepia">Sepia</option><option value="dark">Dark</option></select></label></div>}
+    {options && <div className="epub-options"><label>Font <AppSelect label="Book font" value={prefs.family} onChange={(value) => updatePrefs({ family: value as ReaderPreferences["family"] })}><option value="book">Book default</option><option value="serif">Serif</option><option value="sans">Sans serif</option></AppSelect></label><label>Line spacing <AppSelect label="Book line spacing" value={prefs.lineHeight} onChange={(value) => updatePrefs({ lineHeight: Number(value) })}><option value="1.3">Compact</option><option value="1.65">Comfortable</option><option value="2">Relaxed</option></AppSelect></label><label>Page color <AppSelect label="Book page color" value={prefs.paper} onChange={(value) => updatePrefs({ paper: value as ReaderPreferences["paper"] })}><option value="light">Light</option><option value="sepia">Sepia</option><option value="dark">Dark</option></AppSelect></label></div>}
     {notice && <p className="epub-status" role="status">{notice} <button type="button" onClick={() => setNotice("")}>Dismiss</button></p>}
     {error ? <div className="pdf-message" role="alert"><strong>Couldn't open this EPUB.</strong><p>{error} DRM-protected books are not supported.</p>{!sample && <button className="secondary-button" type="button" onClick={onOpenExternal}>Open with system app</button>}</div> : <><div className="epub-page" ref={host} aria-busy={!ready} />{!ready && <p className="epub-status">Opening book…</p>}<div className="epub-navigation"><button type="button" className="secondary-button" disabled={!ready || page?.atStart} onClick={() => turn("prev")}><ChevronLeft size={16} /> Previous page</button><span aria-live="polite">{page ? `Page ${page.current} of ${page.total} in this section` : "Pages reflow with the window"} · ← / → to turn</span><button type="button" className="secondary-button" disabled={!ready || page?.atEnd} onClick={() => turn("next")}>Next page <ChevronRight size={16} /></button></div></>}
   </div>;

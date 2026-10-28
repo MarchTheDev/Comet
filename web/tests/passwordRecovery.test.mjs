@@ -77,7 +77,7 @@ check('master-password change refuses a concurrently changed vault',localStorage
 localStorage.setItem(PASSWORD_STORAGE_KEY,beforeChange);await click(button('Confirm master password change'));const changed=localStorage.getItem(PASSWORD_STORAGE_KEY);
 check('changing with the previous master keeps entries and activates the new recovery code',changed!==beforeChange&&(await unlockPasswordData(readPasswordStorage(changed).envelope,master)).data.entries[0].password==='sensitive'&&(await unlockPasswordRecovery(changed,replacementCode)).data.entries.length===1);
 await click(button('Change master password'));
-const method=document.querySelector('[aria-label="Verify with"]');await act(async()=>{method.value='recovery';method.dispatchEvent(new dom.window.Event('change',{bubbles:true}));});
+await click(document.querySelector('[role="combobox"][aria-label="Verify with"]'));await click([...document.querySelectorAll('[role="option"]')].find(option=>option.textContent.trim()==='Recovery code'));
 await fill(document.querySelector('[aria-label="Recovery code"]'),otherCode);changeInputs=document.querySelectorAll('.password-recovery-panel input[type=password]');await fill(changeInputs[0],newMaster);await fill(changeInputs[1],newMaster);await submitSettings();await wait(()=>!!document.querySelector('[role=alert]'));
 check('a wrong recovery code cannot change the master',localStorage.getItem(PASSWORD_STORAGE_KEY)===changed&&!!document.querySelector('[role=alert]'));
 await fill(document.querySelector('[aria-label="Recovery code"]'),replacementCode);await submitSettings();await wait(()=>!!document.querySelector('.password-recovery-panel code'));

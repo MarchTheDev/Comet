@@ -19,6 +19,7 @@ const checks = [
   'tests/pathNavigation.test.mjs',
   'tests/settings.test.mjs',
   'tests/settingsInteractions.test.mjs',
+  'tests/appSelect.test.mjs',
   'tests/calendar.test.mjs',
   'tests/session.test.mjs',
   'tests/editor.test.mjs',
@@ -31,6 +32,7 @@ const checks = [
   'tests/coverCache.test.mjs',
   'tests/latestFeatures.test.mjs',
   'tests/passwordRecovery.test.mjs',
+  'tests/passwordBackup.test.mjs',
   'tests/googleInteractions.test.mjs',
   'tests/whiteboardInteractions.test.mjs',
   'tests/uploadInteractions.test.mjs',
@@ -47,7 +49,7 @@ try {
       platform: 'node',
       outfile: out,
       // Left to Node, so the bundle finds the copies installed here.
-      external: ['jsdom', 'react', 'react-dom', 'react-dom/server', 'lucide-react', 'music-metadata'],
+      external: ['jsdom', 'react', 'react-dom', 'react-dom/server', 'lucide-react', 'music-metadata', 'fake-indexeddb'],
       jsx: 'automatic',
       logLevel: 'silent',
     });

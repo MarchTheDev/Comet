@@ -1,3 +1,4 @@
+import { AppSelect } from "./AppSelect";
 import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import { CheckCircle2, ChevronDown, Circle, Diamond, GripVertical, ImagePlus, ListChecks, LoaderCircle, Minus, PaintBucket, Pencil, Plus, RotateCcw, Square, Trash2, Triangle, Type, X } from "lucide-react";
 import { ColorMenu } from "./ColorMenu";
@@ -16,7 +17,24 @@ const SHAPES: { value: WhiteboardShape; label: string; icon: typeof Square }[] =
   { value: "rectangle", label: "Rectangle", icon: Square }, { value: "ellipse", label: "Ellipse", icon: Circle },
   { value: "diamond", label: "Diamond", icon: Diamond }, { value: "triangle", label: "Triangle", icon: Triangle },
 ];
-export function Whiteboard({ board, name, saveState, onChange, onRename, onRetry }: { board: WhiteboardDocument; name: string; saveState: SaveState; onChange: (board: WhiteboardDocument) => boolean; onRename: () => void; onRetry: () => void }) {
+const layerKey = (path: string) => `comet:whiteboard-layers:v1:${encodeURIComponent(path)}`;
+function readLayers(path: string): string[] {
+  if (!path) return [];
+  try {
+    const value: unknown = JSON.parse(localStorage.getItem(layerKey(path)) || "[]");
+    return Array.isArray(value) ? [...new Set(value.filter((id): id is string => typeof id === "string" && id.length <= 100))].slice(-1000) : [];
+  } catch { return []; }
+}
+export function Whiteboard({ board, name, path = "", saveState, onChange, onRename, onRetry }: { board: WhiteboardDocument; name: string; path?: string; saveState: SaveState; onChange: (board: WhiteboardDocument) => boolean; onRename: () => void; onRetry: () => void }) {
+  // Layer order is local display metadata, not a board edit. Opening or focusing
+  // an old board must not rewrite it or upgrade its on-disk format.
+  const [layers, setLayers] = useState<string[]>(() => readLayers(path));
+  useEffect(() => { if (path) try { localStorage.setItem(layerKey(path), JSON.stringify(layers)); } catch { /* arrangement still works for this session */ } }, [path, layers]);
+  const bringToFront = (id: string) => setLayers((previous) => {
+    if (previous.at(-1) === id) return previous;
+    const existing = new Set(latest.current.items.map((item) => item.id));
+    return [...previous.filter((item) => item !== id && existing.has(item)), id].slice(-1000);
+  });
   const stage = useRef<HTMLDivElement>(null), file = useRef<HTMLInputElement>(null), latest = useRef(board), cleanupDrag = useRef<(() => void) | null>(null);
   latest.current = board;
   const [zoom, setZoom] = useState(1), [positions, setPositions] = useState<Record<string, Point>>({}), [sizes, setSizes] = useState<Record<string, { width: number; height: number }>>({});
@@ -113,7 +131,7 @@ export function Whiteboard({ board, name, saveState, onChange, onRename, onRetry
       <button type="button" onClick={() => file.current?.click()}><ImagePlus size={16} /> Image</button><input ref={file} type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden onChange={(event) => { upload(event.currentTarget.files?.[0]); event.currentTarget.value = ""; }} />
       <button type="button" className={pen ? "active" : ""} aria-pressed={pen} title="Draw on the canvas" onClick={() => { setPen((value) => !value); setShapeOpen(false); setShapeTool(null); }}><Pencil size={16} /> Pen</button>
       {shapeTool && <span className="whiteboard-shape-hint" role="status">Drag on a blank area to draw <button type="button" onClick={() => setShapeTool(null)}>Cancel</button></span>}
-      {pen && <><ColorMenu color={penColor} label="Pen color" onChange={setPenColor} /><label className="whiteboard-pen-width">Pen size <select value={penWidth} onChange={(event) => setPenWidth(Number(event.target.value))}><option value="2">Fine</option><option value="4">Medium</option><option value="8">Thick</option></select></label></>}
+      {pen && <><ColorMenu color={penColor} label="Pen color" onChange={setPenColor} /><label className="whiteboard-pen-width">Pen size <AppSelect label="Pen size" value={penWidth} onChange={(value) => setPenWidth(Number(value))}><option value="2">Fine</option><option value="4">Medium</option><option value="8">Thick</option></AppSelect></label></>}
       <button type="button" aria-label="Remove last pen stroke" title="Remove last pen stroke" disabled={!board.strokes.length} onClick={() => commit({ ...latest.current, strokes: latest.current.strokes.slice(0, -1) })}><RotateCcw size={15} /></button>
       <span className="todo-header-spacer" /><button type="button" aria-label="Zoom whiteboard out" onClick={() => setZoom((z) => Math.max(.4, z - .1))}><Minus size={15} /></button><span>{Math.round(zoom * 100)}%</span><button type="button" aria-label="Zoom whiteboard in" onClick={() => setZoom((z) => Math.min(2, z + .1))}><Plus size={15} /></button>
     </div>
@@ -141,7 +159,7 @@ export function Whiteboard({ board, name, saveState, onChange, onRename, onRetry
         </svg>
         {board.connections.map((edge) => { const from = byId.get(edge.from), to = byId.get(edge.to), key = JSON.stringify([edge.from, edge.to]); if (!from || !to || key !== selected) return null; const { from: a, to: b } = connectionGeometry(rect(from), rect(to)); return <div className="todo-link-controls" key={key} style={{ left: (a.x + b.x) / 2, top: (a.y + b.y) / 2 }}><ColorMenu color={edge.color} label="Connection color" onChange={(color) => commit({ ...latest.current, connections: latest.current.connections.map((item) => item.from === edge.from && item.to === edge.to ? { ...item, color } : item) })} /><button type="button" className="todo-link-remove" aria-label="Remove whiteboard connection" onClick={() => { commit({ ...latest.current, connections: latest.current.connections.filter((item) => item.from !== edge.from || item.to !== edge.to) }); setSelected(""); }}><X size={14} /></button></div>; })}
         {draftShape && (() => { const bounds = shapeBounds(draftShape.start, draftShape.end); return <svg className="whiteboard-shape-preview" style={{ left: bounds.x, top: bounds.y, width: bounds.width, height: bounds.height }} viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><ShapeOutline shape={draftShape.shape} /></svg>; })()}
-        {board.items.map((item) => { const p = point(item), dimensions = size(item); return <article className={`whiteboard-item whiteboard-${item.type}${item.type === "shape" && item.filled ? " is-filled" : ""}`} data-whiteboard-id={item.id} key={item.id} style={{ left: p.x, top: p.y, width: dimensions.width, height: dimensions.height, "--item-color": item.color } as CSSProperties}>
+        {board.items.map((item) => { const p = point(item), dimensions = size(item), layer = layers.indexOf(item.id); return <article className={`whiteboard-item whiteboard-${item.type}${item.type === "shape" && item.filled ? " is-filled" : ""}`} data-whiteboard-id={item.id} key={item.id} onPointerDownCapture={(event) => { if (event.button === 0) bringToFront(item.id); }} onFocusCapture={() => bringToFront(item.id)} style={{ left: p.x, top: p.y, width: dimensions.width, height: dimensions.height, zIndex: layer < 0 ? item.type === "shape" ? 1 : 2 : layer + 3, "--item-color": item.color } as CSSProperties}>
           <div className="whiteboard-item-header" title="Drag to move" onPointerDown={(event) => { if (!(event.target as Element).closest("button,input,select")) move(event, item); }}><button type="button" title="Drag to move" aria-label={`Drag ${item.type}`} onPointerDown={(event) => move(event, item)}><GripVertical size={15} /></button><span>{item.type === "shape" ? item.shape.toUpperCase() : item.type.toUpperCase()}</span><ColorMenu color={item.color} label={`Color ${item.type}`} onChange={(color) => update(item.id, { color })} />{item.type === "shape" && <button type="button" aria-label={item.filled ? "Remove shape fill" : "Fill shape"} title={item.filled ? "Remove fill" : "Fill shape"} aria-pressed={!!item.filled} onClick={() => update(item.id, { filled: !item.filled })}><PaintBucket size={15} /></button>}{deleting === item.id ? <><button type="button" onClick={() => { commit({ ...latest.current, items: latest.current.items.filter((other) => other.id !== item.id), connections: latest.current.connections.filter((edge) => edge.from !== item.id && edge.to !== item.id) }); setDeleting(""); }}>Delete</button><button type="button" aria-label="Cancel deleting item" onClick={() => setDeleting("")}><X size={14} /></button></> : <button type="button" aria-label={`Delete ${item.type}`} onClick={() => setDeleting(item.id)}><Trash2 size={14} /></button>}</div>
           {item.type === "image" ? <img src={item.image} alt={item.text || "Whiteboard image"} /> : <div className={`whiteboard-item-content${item.type === "shape" ? " shape-content" : ""}`}>
             {item.type === "shape" && <svg className="whiteboard-shape-visual" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><ShapeOutline shape={item.shape} /></svg>}

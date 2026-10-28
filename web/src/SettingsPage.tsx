@@ -1,3 +1,4 @@
+import { AppSelect } from "./AppSelect";
 import { useEffect, useRef, useState } from "react";
 import { disable as disableAutostart, enable as enableAutostart, isEnabled as isAutostartEnabled } from "@tauri-apps/plugin-autostart";
 import { ArrowLeft, Check, FolderOpen, Gem, Keyboard, Monitor, Moon, RotateCcw, Sun } from "lucide-react";
@@ -88,9 +89,9 @@ export function SettingsPage({ settings, persisted, isSample, vault = "", onImpo
           <div className="settings-card-heading"><div><h2 id="editor-settings-title">Editor</h2><p>Make a little more room to think.</p></div></div>
           <label className="setting-row">
             <span className="setting-copy"><strong>Text size</strong><small>Adjust the size of your note text.</small></span>
-            <select aria-label="Editor text size" value={settings.editorFontSize} onChange={(event) => onChange({ editorFontSize: Number(event.target.value) as Settings["editorFontSize"] })}>
+            <AppSelect label="Editor text size" value={settings.editorFontSize} onChange={(value) => onChange({ editorFontSize: Number(value) as Settings["editorFontSize"] })}>
               <option value={14}>Small</option><option value={16}>Medium</option><option value={18}>Large</option>
-            </select>
+            </AppSelect>
           </label>
           <label className="setting-row">
             <span className="setting-copy"><strong>Spell check</strong><small>Highlight spelling mistakes while you write.</small></span>

@@ -8,9 +8,10 @@
       // Apply the remembered appearance before React paints; dark is the default.
       try {
         const theme = JSON.parse(localStorage.getItem("comet:settings:v1") || "{}").theme;
-        const resolved = theme === "light" || (theme === "system" && !matchMedia("(prefers-color-scheme: dark)").matches) ? "light" : "dark";
+        const preference = theme || "system";
+        const resolved = ["light", "0807-light", "sakura", "matcha"].includes(preference) || (preference === "system" && !matchMedia("(prefers-color-scheme: dark)").matches) ? "light" : "dark";
         document.documentElement.dataset.theme = resolved;
-        document.documentElement.dataset.palette = ["emerald", "rubellite", "navy"].includes(theme) ? theme : "";
+        document.documentElement.dataset.palette = ["emerald", "rubellite", "navy", "0807-light", "0807-dark", "sakura", "matcha", "ember", "gothic", "frog", "nightjar", "onyx"].includes(preference) ? preference : "";
         document.documentElement.style.colorScheme = resolved;
       } catch {}
     </script>

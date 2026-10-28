@@ -13,6 +13,7 @@ mod google;
 mod workspace_archive;
 mod artwork;
 mod upload;
+mod password_backup;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -465,6 +466,7 @@ fn create_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
 pub fn run() {
     tauri::Builder::default()
         .manage(upload::DroppedUploads::default())
+        .manage(password_backup::PasswordBackups::default())
         // Re-launching a tray-resident Comet restores the existing window.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main_window(app)))
         .plugin(tauri_plugin_opener::init())
@@ -482,6 +484,10 @@ pub fn run() {
             tray_available,
             update::install_update,
             artwork::lookup_music_cover,
+            artwork::read_cached_music_cover,
+            password_backup::choose_password_backup,
+            password_backup::write_password_backup,
+            password_backup::cancel_password_backup,
             google::google_status,
             google::google_connect,
             google::google_disconnect,

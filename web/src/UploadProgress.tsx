@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { CheckCircle2, FileUp, LoaderCircle, X } from "lucide-react";
 
 export interface UploadInfo {
@@ -11,7 +12,15 @@ export interface UploadInfo {
   errors?: string[];
 }
 
+export const UPLOAD_FEEDBACK_MS = 8_000;
 export function UploadProgress({ uploads, onDismiss }: { uploads: UploadInfo[]; onDismiss: (id: string) => void }) {
+  const timers = useRef(new Map<string, number>()), dismiss = useRef(onDismiss); dismiss.current = onDismiss;
+  useEffect(() => {
+    const finished = new Set(uploads.filter((upload) => upload.phase === "done" || upload.phase === "failed").map((upload) => upload.id));
+    for (const [id, timer] of timers.current) if (!finished.has(id)) { window.clearTimeout(timer); timers.current.delete(id); }
+    for (const id of finished) if (!timers.current.has(id)) timers.current.set(id, window.setTimeout(() => { timers.current.delete(id); dismiss.current(id); }, UPLOAD_FEEDBACK_MS));
+  }, [uploads]);
+  useEffect(() => () => { for (const timer of timers.current.values()) window.clearTimeout(timer); timers.current.clear(); }, []);
   if (!uploads.length) return null;
   return <aside className="upload-stack" aria-label="File uploads">{uploads.map((upload) => {
     const running = upload.phase !== "done" && upload.phase !== "failed";

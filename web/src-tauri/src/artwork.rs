@@ -1,16 +1,81 @@
 //! Artwork searches use Apple's public music catalog. Desktop requests run in
 //! Rust because many webviews reject cross-origin catalog requests.
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use tauri::Manager;
 use serde_json::Value;
 use std::time::Duration;
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Artwork { url: String, mime: String, data: String }
 fn trusted_image(value: &str) -> bool {
     let Ok(url) = url::Url::parse(value) else { return false; };
     let Some(host) = url.host_str() else { return false; };
     url.scheme() == "https" && url.username().is_empty() && url.password().is_none() && (host == "mzstatic.com" || host.ends_with(".mzstatic.com"))
+}
+const MAX_CACHE_FILE: u64 = 5_700_000;
+const MAX_CACHED_COVERS: usize = 100;
+fn valid_query(query: &str) -> bool { !query.is_empty() && query.chars().count() <= 400 && !query.chars().any(char::is_control) }
+fn cache_key(query: &str) -> String { format!("{:x}", Sha256::digest(query.trim().to_lowercase().as_bytes())) }
+fn cache_directory(app: &tauri::AppHandle) -> Option<PathBuf> {
+    let dir = app.path().app_cache_dir().ok()?.join("music-artwork");
+    fs::create_dir_all(&dir).ok()?;
+    if fs::symlink_metadata(&dir).ok()?.file_type().is_symlink() { return None; }
+    Some(dir)
+}
+fn valid_image(mime: &str, bytes: &[u8]) -> bool {
+    if bytes.len() > 4 * 1024 * 1024 { return false; }
+    match mime {
+        "image/jpeg" => bytes.starts_with(&[0xff, 0xd8, 0xff]),
+        "image/png" => bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
+        "image/gif" => bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a"),
+        "image/webp" => bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP",
+        _ => false,
+    }
+}
+fn valid_artwork(art: &Artwork) -> bool {
+    trusted_image(&art.url) && art.data.len() <= 5_600_000 && STANDARD.decode(&art.data).ok().is_some_and(|bytes| valid_image(&art.mime, &bytes))
+}
+fn cache_file(dir: &Path, query: &str) -> PathBuf { dir.join(format!("{}.json", cache_key(query))) }
+fn read_cache(dir: &Path, query: &str) -> Option<Artwork> {
+    let path = cache_file(dir, query); let metadata = fs::symlink_metadata(&path).ok()?;
+    if !metadata.is_file() || metadata.len() > MAX_CACHE_FILE { return None; }
+    let result: Artwork = serde_json::from_slice(&fs::read(path).ok()?).ok()?;
+    valid_artwork(&result).then_some(result)
+}
+fn write_cache(dir: &Path, query: &str, artwork: &Artwork) {
+    if !valid_artwork(artwork) { return; }
+    let target = cache_file(dir, query);
+    if read_cache(dir, query).is_some() { return; }
+    // Only remove a malformed regular file belonging to this cache, never a link.
+    if fs::symlink_metadata(&target).ok().is_some_and(|m| m.is_file()) { let _ = fs::remove_file(&target); }
+    let mut nonce = [0u8; 16]; if getrandom::fill(&mut nonce).is_err() { return; }
+    let temporary = dir.join(format!(".artwork-{:x}.tmp", u128::from_le_bytes(nonce)));
+    let Ok(data) = serde_json::to_vec(artwork) else { return; };
+    let Ok(mut file) = OpenOptions::new().write(true).create_new(true).open(&temporary) else { return; };
+    let ready = file.write_all(&data).and_then(|_| file.sync_all()).is_ok(); drop(file);
+    if ready { let _ = crate::rename_without_replace(&temporary, &target); }
+    let _ = fs::remove_file(&temporary);
+    let Ok(entries) = fs::read_dir(dir) else { return; };
+    let mut files: Vec<_> = entries.filter_map(Result::ok).filter_map(|entry| {
+        let name = entry.file_name().into_string().ok()?;
+        let hash = name.strip_suffix(".json")?;
+        if hash.len() != 64 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) { return None; }
+        let metadata = entry.metadata().ok()?; if !entry.file_type().ok()?.is_file() { return None; }
+        Some((metadata.modified().ok()?, entry.path()))
+    }).collect();
+    files.sort_by_key(|(modified, _)| *modified);
+    let remove = files.len().saturating_sub(MAX_CACHED_COVERS);
+    for (_, path) in files.into_iter().take(remove) { let _ = fs::remove_file(path); }
+}
+#[tauri::command]
+pub async fn read_cached_music_cover(app: tauri::AppHandle, query: String) -> Option<Artwork> {
+    let query = query.trim().to_string(); if !valid_query(&query) { return None; }
+    tauri::async_runtime::spawn_blocking(move || cache_directory(&app).and_then(|dir| read_cache(&dir, &query))).await.ok().flatten()
 }
 async fn limited(mut response: reqwest::Response, max: usize) -> Result<Vec<u8>, String> {
     if !response.status().is_success() || response.content_length().is_some_and(|size| size > max as u64) { return Err("Artwork is unavailable or too large.".into()); }
@@ -22,9 +87,11 @@ async fn limited(mut response: reqwest::Response, max: usize) -> Result<Vec<u8>,
     Ok(bytes)
 }
 #[tauri::command]
-pub async fn lookup_music_cover(query: String) -> Result<Option<Artwork>, String> {
+pub async fn lookup_music_cover(app: tauri::AppHandle, query: String) -> Result<Option<Artwork>, String> {
     let query = query.trim();
-    if query.is_empty() || query.chars().count() > 400 || query.chars().any(char::is_control) { return Err("Invalid artwork search.".into()); }
+    if !valid_query(query) { return Err("Invalid artwork search.".into()); }
+    let cache = cache_directory(&app);
+    if let Some(found) = cache.as_ref().and_then(|dir| read_cache(dir, query)) { return Ok(Some(found)); }
     let client = reqwest::Client::builder().user_agent(concat!("Comet/", env!("CARGO_PKG_VERSION"))).redirect(reqwest::redirect::Policy::none()).timeout(Duration::from_secs(20)).build().map_err(|_| "Couldn't start artwork lookup.")?;
     let search = client.get("https://itunes.apple.com/search").query(&[("media", "music"), ("entity", "song"), ("limit", "10"), ("term", query)]).send().await.map_err(|_| "Couldn't reach the music catalog.")?;
     let json: Value = serde_json::from_slice(&limited(search, 1024 * 1024).await?).map_err(|_| "Invalid music catalog response.")?;
@@ -35,7 +102,10 @@ pub async fn lookup_music_cover(query: String) -> Result<Option<Artwork>, String
     let mime = response.headers().get(reqwest::header::CONTENT_TYPE).and_then(|h| h.to_str().ok()).unwrap_or("").split(';').next().unwrap_or("").to_ascii_lowercase();
     if !matches!(mime.as_str(), "image/jpeg" | "image/png" | "image/gif" | "image/webp") { return Err("The catalog returned an unsupported image.".into()); }
     let bytes = limited(response, 4 * 1024 * 1024).await?;
-    Ok(Some(Artwork { url, mime, data: STANDARD.encode(bytes) }))
+    if !valid_image(&mime, &bytes) { return Err("The catalog returned a damaged image.".into()); }
+    let artwork = Artwork { url, mime, data: STANDARD.encode(bytes) };
+    if let Some(dir) = cache { let copy = artwork.clone(); let query = query.to_owned(); let _ = tauri::async_runtime::spawn_blocking(move || write_cache(&dir, &query, &copy)).await; }
+    Ok(Some(artwork))
 }
 #[cfg(test)]
 mod tests {
@@ -47,4 +117,21 @@ mod tests {
         assert!(!trusted_image("https://user@mzstatic.com/a.jpg"));
         assert!(!trusted_image("http://mzstatic.com/a.jpg"));
     }
+    #[test]
+    fn artwork_bytes_survive_restart_and_bad_entries_are_ignored() {
+        let mut random = [0u8; 8]; getrandom::fill(&mut random).unwrap();
+        let root = std::env::temp_dir().join(format!("comet-art-cache-{:x}", u64::from_le_bytes(random)));
+        fs::create_dir(&root).unwrap();
+        let art = Artwork { url: "https://is1-ssl.mzstatic.com/image/a.png".into(), mime: "image/png".into(), data: STANDARD.encode(b"\x89PNG\r\n\x1a\nexample") };
+        write_cache(&root, "artist track", &art);
+        let restored = read_cache(&root, "artist track").unwrap();
+        assert_eq!(restored.data, art.data); assert!(read_cache(&root, "different song").is_none());
+        fs::write(cache_file(&root, "artist track"), b"bad data").unwrap();
+        assert!(read_cache(&root, "artist track").is_none());
+        write_cache(&root, "artist track", &art); assert!(read_cache(&root, "artist track").is_some());
+        let untrusted = Artwork { url: "https://evil.test/a.png".into(), ..art };
+        write_cache(&root, "other", &untrusted); assert!(read_cache(&root, "other").is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+
 }

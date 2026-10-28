@@ -1,7 +1,6 @@
 // Artwork is optional and never touches the workspace. A small device-local
 // cache keeps successful lookups across views and app restarts.
 export interface CachedCover { url: string; blob?: Blob }
-const memory = new Map<string, CachedCover>();
 const INDEX_KEY = "comet:cover-art:v1";
 const MAX_ENTRIES = 100;
 const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
@@ -27,20 +26,25 @@ function readIndex(): Record<string, string> {
     return Object.fromEntries(Object.entries(parsed).filter(([key, value]) => key.length <= 1000 && typeof value === "string" && validCoverUrl(value)).slice(-MAX_ENTRIES)) as Record<string, string>;
   } catch { return {}; }
 }
-export async function readCover(key: string): Promise<CachedCover | null> {
+export function createCoverCache() {
+const memory = new Map<string, CachedCover>();
+async function readCover(key: string): Promise<CachedCover | null> {
   const cached = memory.get(key); if (cached) return cached;
   const url = readIndex()[key]; if (!url) return null;
   const db = await openDatabase();
   if (db) {
     try {
       const value = await new Promise<unknown>((resolve) => { const transaction = db.transaction("covers", "readonly"); const request = transaction.objectStore("covers").get(key); request.onsuccess = () => resolve(request.result); request.onerror = () => resolve(null); });
-      if (value instanceof Blob && value.size <= MAX_IMAGE_BYTES && /^image\/(?:jpeg|png|gif|webp)$/i.test(value.type)) { const result = { url, blob: value }; memory.set(key, result); db.close(); return result; }
+      // Version 1 originally stored only a Blob. New entries bind image bytes
+      // to their URL so an interrupted replacement cannot resurrect old art.
+      const blob = value instanceof Blob ? value : value && typeof value === "object" && "url" in value && value.url === url && "blob" in value ? value.blob : undefined;
+      if (blob instanceof Blob && blob.size <= MAX_IMAGE_BYTES && /^image\/(?:jpeg|png|gif|webp)$/i.test(blob.type)) { const result = { url, blob }; memory.set(key, result); db.close(); return result; }
     } catch { /* A URL remains useful if device storage is unavailable. */ }
     db.close();
   }
   const result = { url }; memory.set(key, result); return result;
 }
-export async function saveCover(key: string, url: string, blob?: Blob): Promise<void> {
+async function saveCover(key: string, url: string, blob?: Blob): Promise<void> {
   if (!validCoverUrl(url) || key.length > 1000) return;
   const safeBlob = blob && blob.size <= MAX_IMAGE_BYTES && /^image\/(?:jpeg|png|gif|webp)$/i.test(blob.type) ? blob : undefined;
   memory.delete(key); memory.set(key, { url, blob: safeBlob });
@@ -58,12 +62,16 @@ export async function saveCover(key: string, url: string, blob?: Blob): Promise<
     await new Promise<void>((resolve) => {
       const transaction = db.transaction("covers", "readwrite");
       const store = transaction.objectStore("covers"); evicted.forEach((old) => store.delete(old));
-      if (safeBlob) store.put(safeBlob, key);
+      if (safeBlob) store.put({ url, blob: safeBlob }, key); else store.delete(key);
       transaction.oncomplete = () => resolve(); transaction.onerror = () => resolve(); transaction.onabort = () => resolve();
     });
   } catch { /* Caching must never interrupt playback. */ }
   db.close();
 }
+return { readCover, saveCover };
+}
+export const { readCover, saveCover } = createCoverCache();
+
 /** Bound downloaded artwork even if a server does not send Content-Length. */
 export async function downloadCover(url: string, signal: AbortSignal): Promise<Blob | undefined> {
   const response = await fetch(url, { signal });

@@ -1499,7 +1499,7 @@ button.tree-disclosure:hover { color: var(--accent-ink); background: var(--accen
 .upload-stack { position:fixed; z-index:35; right:20px; bottom:75px; display:grid; gap:8px; width:min(340px,calc(100vw - 32px)); max-height:min(70vh,560px); overflow:auto; }
 .upload-card { padding:14px; color:var(--text-secondary); border:1px solid var(--border-strong); border-radius:12px; background:var(--panel-raised); box-shadow:0 14px 35px #0003; font-size:calc(11px * var(--interface-text-scale,1)); }
 .upload-card-heading { display:flex; align-items:center; gap:10px; }.upload-card-heading > div { display:grid; flex:1; gap:3px; min-width:0; }.upload-card-heading strong { color:var(--text); }.upload-card-heading small { color:var(--text-muted); }
-.upload-current { display:block; overflow:hidden; margin:11px 0 7px; text-overflow:ellipsis; white-space:nowrap; }.upload-card progress { display:block; width:100%; height:6px; accent-color:var(--accent); }.upload-errors { max-height:100px; overflow:auto; margin:10px 0 0; padding-left:18px; color:var(--text-secondary); line-height:1.5; overflow-wrap:anywhere; }
+.upload-current { display:block; overflow:hidden; margin:11px 0 7px; text-overflow:ellipsis; white-space:nowrap; }.upload-card progress:not(.sr-only) { display:block; width:100%; height:6px; accent-color:var(--accent); }.upload-errors { max-height:100px; overflow:auto; margin:10px 0 0; padding-left:18px; color:var(--text-secondary); line-height:1.5; overflow-wrap:anywhere; }
 @media (max-width:600px) { .upload-stack { right:12px; bottom:70px; } }
 .capture-modal input[hidden] { display:none; }
 .whiteboard-shape-hint { display:inline-flex; align-items:center; gap:6px; color:var(--text-muted); font-size:calc(10px * var(--interface-text-scale,1)); }
@@ -1572,3 +1572,42 @@ button.tree-disclosure:hover { color: var(--accent-ink); background: var(--accen
 .password-settings-actions .password-reset-link:hover { background:color-mix(in srgb,#c76b61 12%,transparent); }
 .password-settings .password-recovery-panel input:not([type="checkbox"]) { width:100%; min-width:0; padding:8px 10px; color:var(--text); border:1px solid var(--border-strong); border-radius:7px; background:var(--panel-raised); }
 .setting-toggle:checked { background:var(--accent); }
+
+/* Selection and every scrollable surface inherit the active palette. */
+:root { --scroll-thumb:color-mix(in srgb,var(--accent) 45%,var(--border-strong)); scrollbar-color:var(--scroll-thumb) transparent; }
+:root[data-theme] ::selection { color:var(--text); background:color-mix(in srgb,var(--accent) 30%,var(--panel-raised)); }
+:root[data-theme] .tree-scroll, :root[data-theme] .workspace-scroll { scrollbar-color:var(--scroll-thumb) transparent; }
+:root ::-webkit-scrollbar { width:8px; height:8px; }
+:root ::-webkit-scrollbar-track { background:transparent; }
+:root ::-webkit-scrollbar-thumb { border:2px solid transparent; border-radius:99px; background:var(--scroll-thumb); background-clip:padding-box; }
+:root ::-webkit-scrollbar-thumb:hover { background:var(--accent); background-clip:padding-box; }
+:root button:focus-visible, :root input:focus-visible, :root textarea:focus-visible, :root .ProseMirror:focus-visible { outline-color:var(--accent); }
+
+/* In-app select menus use the same surfaces in every palette, including the
+   open list (which platform-native select popups cannot reliably style). */
+.app-select-root { display:inline-flex; flex:none; min-width:0; max-width:100%; }
+.comet-root .app-select-trigger { display:flex; align-items:center; justify-content:space-between; gap:10px; width:auto; min-width:100px; max-width:100%; height:auto; min-height:32px; padding:6px 9px; color:var(--text); border:1px solid var(--border-strong); border-radius:8px; background:var(--panel-raised); font:inherit; font-weight:650; line-height:1.3; text-align:left; }
+.comet-root .app-select-trigger > span { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.comet-root .app-select-trigger svg { flex:none; color:var(--text-muted); }
+.comet-root .app-select-trigger:hover:not(:disabled), .comet-root .app-select-trigger[aria-expanded="true"] { color:var(--text); border-color:var(--accent); background:var(--panel-soft); }
+.comet-root .app-select-trigger:disabled { opacity:.5; cursor:default; }
+.app-select-panel { position:fixed; z-index:2000; overflow:auto; overscroll-behavior:contain; padding:5px; color:var(--text); border:1px solid var(--border-strong); border-radius:10px; background:var(--panel-raised); box-shadow:0 14px 36px #0005; font-size:calc(11px * var(--interface-text-scale,1)); scrollbar-color:var(--scroll-thumb) transparent; }
+.app-select-option { display:flex; align-items:center; justify-content:space-between; gap:10px; min-height:32px; padding:7px 9px; border-radius:6px; cursor:pointer; }
+.app-select-option span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:pre; }
+.app-select-option.is-active, .app-select-option:hover:not([aria-disabled="true"]) { color:var(--accent-ink); background:var(--accent-soft); }
+.app-select-option[aria-selected="true"] { font-weight:800; }
+.app-select-option[aria-disabled="true"] { opacity:.5; cursor:default; }
+.app-select-option svg { flex:none; color:var(--accent); }
+.epub-toolbar .app-select-trigger, .pdf-toolbar .app-select-trigger { min-height:30px; width:auto; height:30px; flex:auto; }
+.epub-toolbar .epub-section-select { width:min(220px,30vw); }
+.epub-options .app-select-root { min-width:125px; }
+.epub-options .app-select-trigger, .calendar-form .app-select-trigger, .password-settings .app-select-trigger { width:100%; }
+.password-settings .app-select-root { display:flex; }
+.toolbar-select .app-select-trigger { min-width:0; height:31px; padding:4px 7px; border-color:transparent; background:transparent; font-size:calc(11px * var(--interface-text-scale,1)); }
+.toolbar-select .app-select-root { max-width:120px; } .size-select .app-select-root { max-width:80px; }
+.video-control-row .app-select-trigger { min-width:65px; min-height:27px; padding:3px 7px; color:#fff; border-color:#ffffff36; background:#172a33; font-size:calc(10px * var(--interface-text-scale,1)); }
+.video-control-row .app-select-trigger:hover:not(:disabled), .video-control-row .app-select-trigger[aria-expanded="true"] { color:#fff; background:#273d47; }
+.upload-stack { overflow-x:hidden; overflow-y:auto; }
+
+/* Connection controls remain usable above the local focus-ordered layers. */
+.whiteboard .todo-link-controls { z-index:1100; }

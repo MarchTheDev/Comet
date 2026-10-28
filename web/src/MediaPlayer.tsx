@@ -1,3 +1,4 @@
+import { AppSelect } from "./AppSelect";
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { Maximize, Minimize, Music2, Pause, Play, RotateCcw, RotateCw, Volume2, VolumeX } from "lucide-react";
 import { parseWebStream, selectCover } from "music-metadata";
@@ -83,9 +84,34 @@ function useOnlineCover(info: AudioInfo, name: string, automatic: boolean) {
       try {
         const cached = await readCover(key);
         if (!active) return;
+        if (cached?.blob) { objectUrl = URL.createObjectURL(cached.blob); setCover(objectUrl); return; }
+        if (desktopAvailable) {
+          const restore = await invoke<{ url: string; mime: string; data: string } | null>("read_cached_music_cover", { query });
+          if (!active) return;
+          if (restore && validCoverUrl(restore.url) && /^image\/(?:jpeg|png|gif|webp)$/.test(restore.mime) && restore.data.length <= 5_600_000) {
+            const blob = new Blob([Uint8Array.from(atob(restore.data), (char) => char.charCodeAt(0))], { type: restore.mime });
+            await saveCover(key, restore.url, blob); if (active) { objectUrl = URL.createObjectURL(blob); setCover(objectUrl); } return;
+          }
+        }
         if (cached) {
-          if (cached.blob) objectUrl = URL.createObjectURL(cached.blob);
-          setCover(objectUrl || cached.url); return;
+          setCover(cached.url);
+          // Older cache entries may contain only the catalog URL. Upgrade them
+          // to local bytes when possible rather than depending on the network.
+          if (desktopAvailable && (automatic || retry)) {
+            try {
+              const result = await invoke<{ url: string; mime: string; data: string } | null>("lookup_music_cover", { query });
+              if (result && validCoverUrl(result.url) && /^image\/(?:jpeg|png|gif|webp)$/.test(result.mime) && result.data.length <= 5_600_000) {
+                const blob = new Blob([Uint8Array.from(atob(result.data), (char) => char.charCodeAt(0))], { type: result.mime });
+                await saveCover(key, result.url, blob); if (active) { objectUrl = URL.createObjectURL(blob); setCover(objectUrl); }
+              }
+            } catch { /* The existing URL is still usable. */ }
+          } else if (!desktopAvailable) {
+            const imageRequest = new AbortController(); const imageTimeout = window.setTimeout(() => imageRequest.abort(), 15_000);
+            try { const blob = await downloadCover(cached.url, imageRequest.signal); if (blob) { await saveCover(key, cached.url, blob); if (active) { objectUrl = URL.createObjectURL(blob); setCover(objectUrl); } } }
+            catch { /* Some catalog images cannot be fetched across origins. */ }
+            finally { window.clearTimeout(imageTimeout); }
+          }
+          return;
         }
         if (!automatic && !retry) return;
         setSearching(true);
@@ -103,13 +129,16 @@ function useOnlineCover(info: AudioInfo, name: string, automatic: boolean) {
         const candidate = first && typeof first.artworkUrl100 === "string" ? first.artworkUrl100.replace(/100x100[^/]*\./, "600x600bb.") : "";
         if (!validCoverUrl(candidate)) throw new Error("No cover found");
         if (!active) return;
-        setCover(candidate); void saveCover(key, candidate);
-        // Store the actual image when CORS permits; URL caching remains a
-        // graceful fallback if a catalog or browser blocks the image fetch.
+        setCover(candidate); await saveCover(key, candidate);
+        // Once a cover is found, let its bounded download finish even if the
+        // player unmounts while switching files. It can then be reused offline.
+        const imageRequest = new AbortController();
+        const imageTimeout = window.setTimeout(() => imageRequest.abort(), 15_000);
         try {
-          const blob = await downloadCover(candidate, controller.signal);
+          const blob = await downloadCover(candidate, imageRequest.signal);
           if (blob) { await saveCover(key, candidate, blob); if (active) { objectUrl = URL.createObjectURL(blob); setCover(objectUrl); } }
-        } catch { /* A remote image URL is still usable. */ }
+        } catch { /* A remote image URL is still usable if CORS blocks caching. */ }
+        finally { window.clearTimeout(imageTimeout); }
       } catch { if (active && retry) setMessage("No cover found. You can still play this track."); }
       finally { window.clearTimeout(timeout); if (active) setSearching(false); }
     })();
@@ -210,7 +239,7 @@ export function VideoPlayer({ url, name }: { url: string; name: string }) {
   return <div className="video-stage comet-video" ref={player} onPointerDown={(event) => { if (!(event.target as Element).closest("button,input,select,a")) event.currentTarget.focus({ preventScroll: true }); }} tabIndex={-1} role="group" aria-label={`Video player: ${name}`}>
     <video ref={video} playsInline preload="metadata" src={url} onClick={toggle} onLoadedMetadata={(event) => setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)} onDurationChange={(event) => setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)} onTimeUpdate={(event) => setCurrent(event.currentTarget.currentTime)} onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onEnded={() => setPlaying(false)} onError={() => setFailed(true)}>Your browser cannot play this video format.</video>
     {!playing && !failed && <button type="button" className="video-center-play" aria-label="Play video" onClick={toggle}><Play size={26} fill="currentColor" /></button>}
-    <div className="video-controls"><input className="video-progress" aria-label="Video position" type="range" min="0" max={duration || 0} step="0.1" value={Math.min(current, duration || 0)} disabled={!duration} onChange={(event) => seek(Number(event.target.value))} /><div className="video-control-row"><button type="button" aria-label={playing ? "Pause video" : "Play video controls"} onClick={toggle}>{playing ? <Pause size={19} fill="currentColor" /> : <Play size={19} fill="currentColor" />}</button><button type="button" aria-label="Video back 10 seconds" onClick={() => seek(current - 10)}><RotateCcw size={16} /></button><span className="video-time">{time(current)} / {time(duration)}</span><span className="video-controls-spacer" /><div className="video-volume" ref={volumeArea} title="Scroll to change volume"><button type="button" aria-label={volume ? "Mute video" : "Unmute video"} onClick={() => changeVolume(volume ? 0 : 1)}>{volume ? <Volume2 size={17} /> : <VolumeX size={17} />}</button><input type="range" aria-label="Video volume" min="0" max="1" step="0.05" value={volume} onChange={(event) => changeVolume(Number(event.target.value))} /></div><select aria-label="Video playback speed" value={rate} onChange={(event) => { const next = Number(event.target.value); setRate(next); if (video.current) video.current.playbackRate = next; }}><option value="0.5">0.5×</option><option value="0.75">0.75×</option><option value="1">1×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option><option value="2">2×</option></select><button type="button" aria-label="Toggle video fullscreen" onClick={fullscreen}><Maximize size={17} /></button></div></div>
+    <div className="video-controls"><input className="video-progress" aria-label="Video position" type="range" min="0" max={duration || 0} step="0.1" value={Math.min(current, duration || 0)} disabled={!duration} onChange={(event) => seek(Number(event.target.value))} /><div className="video-control-row"><button type="button" aria-label={playing ? "Pause video" : "Play video controls"} onClick={toggle}>{playing ? <Pause size={19} fill="currentColor" /> : <Play size={19} fill="currentColor" />}</button><button type="button" aria-label="Video back 10 seconds" onClick={() => seek(current - 10)}><RotateCcw size={16} /></button><span className="video-time">{time(current)} / {time(duration)}</span><span className="video-controls-spacer" /><div className="video-volume" ref={volumeArea} title="Scroll to change volume"><button type="button" aria-label={volume ? "Mute video" : "Unmute video"} onClick={() => changeVolume(volume ? 0 : 1)}>{volume ? <Volume2 size={17} /> : <VolumeX size={17} />}</button><input type="range" aria-label="Video volume" min="0" max="1" step="0.05" value={volume} onChange={(event) => changeVolume(Number(event.target.value))} /></div><AppSelect label="Video playback speed" value={rate} onChange={(value) => { const next = Number(value); setRate(next); if (video.current) video.current.playbackRate = next; }}><option value="0.5">0.5×</option><option value="0.75">0.75×</option><option value="1">1×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option><option value="2">2×</option></AppSelect><button type="button" aria-label="Toggle video fullscreen" onClick={fullscreen}><Maximize size={17} /></button></div></div>
     {failed && <p className="media-error video-error" role="alert">This video format couldn't be loaded on this device.</p>}
   </div>;
 }

@@ -1,7 +1,9 @@
-import { downloadCover, readCover, saveCover, validCoverUrl } from '../src/utils/coverCache.ts';
+import { indexedDB } from 'fake-indexeddb';
+import { createCoverCache, downloadCover, readCover, saveCover, validCoverUrl } from '../src/utils/coverCache.ts';
 let failures = 0;
 function check(name, ok) { if (ok) console.log(`  ok   ${name}`); else { failures++; console.log(`  FAIL ${name}`); } }
 console.log('\ncover artwork cache');
+globalThis.indexedDB = indexedDB;
 const data = new Map();
 globalThis.localStorage = { getItem: key => data.get(key) ?? null, setItem: (key, value) => data.set(key, value) };
 const url = 'https://is1-ssl.mzstatic.com/image/thumb/album/600x600bb.jpg';
@@ -10,6 +12,17 @@ const blob = new Blob([new Uint8Array([1, 2, 3])], { type: 'image/png' });
 await saveCover('track by artist', url, blob);
 const cached = await readCover('track by artist');
 check('keeps artwork and a persistent validated lookup without the workspace', cached?.url === url && cached?.blob?.size === 3 && [...data.values()].some(value => value.includes(url)));
+// A fresh instance models a new process: only localStorage and IndexedDB survive.
+const restart = createCoverCache();
+const restored = await restart.readCover('track by artist');
+check('image bytes survive a new cache instance and work without another network lookup', restored?.url === url && restored?.blob?.size === 3);
+const replacement = 'https://is1-ssl.mzstatic.com/image/thumb/other/600x600bb.jpg';
+await restart.saveCover('track by artist', replacement);
+const afterReplacement = await createCoverCache().readCover('track by artist');
+check('a changed URL cannot pick up stale image bytes from an older cached cover', afterReplacement?.url === replacement && !afterReplacement?.blob);
+await restart.saveCover('track by artist', replacement, new Blob(['new'], { type:'image/png' }));
+const afterSecondRestart = await createCoverCache().readCover('track by artist');
+check('the newly downloaded image is durable across a second restart', await afterSecondRestart?.blob?.text() === 'new');
 await saveCover('invalid', 'https://evil.example/a.jpg', blob);
 check('never caches an untrusted artwork URL', await readCover('invalid') === null);
 const originalFetch = globalThis.fetch;
@@ -20,5 +33,5 @@ check('ignores non-image responses', await downloadCover(url, new AbortControlle
 globalThis.fetch = async () => new Response('large', { status: 200, headers: { 'Content-Type': 'image/png', 'Content-Length': String(5 * 1024 * 1024) } });
 check('refuses oversized artwork', await downloadCover(url, new AbortController().signal) === undefined);
 globalThis.fetch = originalFetch;
-delete globalThis.localStorage;
+delete globalThis.localStorage; delete globalThis.indexedDB;
 globalThis.__cometFailures = (globalThis.__cometFailures ?? 0) + failures;

@@ -1,0 +1,24 @@
+import { JSDOM } from 'jsdom';
+import React, { act, useState } from 'react';
+import { createRoot } from 'react-dom/client';
+import { AppSelect } from '../src/AppSelect.tsx';
+let failures=0;const check=(name,ok)=>{if(ok)console.log(`  ok   ${name}`);else{failures++;console.log(`  FAIL ${name}`);}};
+console.log('\nthemed select interactions');
+const dom=new JSDOM('<!doctype html><html><body><div id="root"></div><button id="outside">Outside</button></body></html>',{pretendToBeVisual:true,url:'https://comet-select.test/'});
+globalThis.window=dom.window;globalThis.document=dom.window.document;globalThis.Node=dom.window.Node;globalThis.HTMLElement=dom.window.HTMLElement;globalThis.IS_REACT_ACT_ENVIRONMENT=true;
+function Example(){const [value,setValue]=useState('one');return React.createElement('div',{role:'dialog'},React.createElement(AppSelect,{label:'Example',value,onChange:setValue},React.createElement('option',{value:'one'},'One'),React.createElement('option',{value:'skip',disabled:true},'Disabled'),React.createElement('option',{value:'two'},'Two'),React.createElement('option',{value:'hidden',hidden:true},'Hidden')));}
+const root=createRoot(document.getElementById('root'));await act(async()=>root.render(React.createElement(Example)));
+const control=()=>document.querySelector('[role="combobox"]');
+const key=async value=>act(async()=>control().dispatchEvent(new dom.window.KeyboardEvent('keydown',{key:value,bubbles:true,cancelable:true})));
+const click=async el=>act(async()=>el.dispatchEvent(new dom.window.MouseEvent('click',{bubbles:true,cancelable:true})));
+await key('ArrowDown');
+check('keyboard opens a labelled listbox inside its dialog and hides placeholder options',control().getAttribute('aria-expanded')==='true'&&!!document.querySelector('[role="dialog"] [role="listbox"]')&&document.querySelectorAll('[role="option"]').length===3);
+await key('ArrowDown');const active=document.getElementById(control().getAttribute('aria-activedescendant'));
+check('arrow navigation skips disabled options and retains focus on the trigger',active?.textContent==='Two'&&active.getAttribute('aria-disabled')!== 'true');
+await key('Enter');check('Enter selects the active option and closes the list',control().textContent.includes('Two')&&control().getAttribute('aria-expanded')==='false');
+await key('Home');await key('Escape');check('Escape cancels without changing the selection',control().textContent.includes('Two')&&!document.querySelector('[role="listbox"]'));
+await key('o');await key('Enter');check('typeahead selects a matching option',control().textContent.includes('One'));
+await click(control());await act(async()=>document.getElementById('outside').dispatchEvent(new dom.window.Event('pointerdown',{bubbles:true})));
+check('clicking outside dismisses the menu',!document.querySelector('[role="listbox"]'));
+await act(async()=>root.unmount());dom.window.close();delete globalThis.IS_REACT_ACT_ENVIRONMENT;
+globalThis.__cometFailures=(globalThis.__cometFailures??0)+failures;

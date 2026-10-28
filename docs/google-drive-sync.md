@@ -6,6 +6,16 @@ Use automatic, file-level incremental sync while Comet is running, with an offli
 
 **This document is the agreed direction, not a description of a completed implementation.** Current Comet sync is explicitly initiated from Settings and uses unencrypted, immutable whole-workspace revisions, with a 128 MB / 20,000-item snapshot limit. It does not run automatically. Existing manual sync, imports, and backups must remain usable until the new protocol is implemented and migration is verified.
 
+## Preparing a one-click desktop release
+
+Google requires Comet's publisher to create an OAuth application once; there is no legitimate zero-registration direct Google API client. End users do **not** need a Google developer project or client ID. Until the publisher completes these steps, the Connect button cannot work out of the box in an unconfigured build.
+
+1. In a project owned by Comet's publisher, enable the Google Drive API and Google Calendar API. Configure the OAuth consent screen for the intended audience; while the app is in testing, add the Google accounts that may sign in. Complete any verification Google requires for public distribution and the requested `calendar.events` and `drive.file` scopes.
+2. Create a **Desktop app** OAuth client. In the GitHub repository's **Settings → Secrets and variables → Actions → Variables**, set `COMET_GOOGLE_CLIENT_ID` to the client ID and, only if Google requires it, `COMET_GOOGLE_CLIENT_SECRET` to the desktop client secret. Rebuild the installer through the Release workflow. For a local build use `VITE_GOOGLE_CLIENT_ID` and, if needed, `VITE_GOOGLE_CLIENT_SECRET`.
+3. Install that build, click **Connect Google**, and sign in on Google's browser page. Verify Calendar and manual Drive revisions with two real devices, including offline failures and conflicts, before publishing. Credentials belong in the system credential store; never put a user's Google password or refresh token in GitHub variables.
+
+The desktop client identifier and any bundled desktop client secret are public application configuration, not a private credential. No client has been registered or verified by this repository change, and the release workflow cannot create a Google project on the publisher's behalf. An iPhone port requires its own mobile OAuth design and should not reuse the desktop loopback flow.
+
 ## Proposed behavior
 
 - With explicit consent, a workspace is linked to a Drive sync identity. A second device chooses a new local destination; nothing is imported over an existing workspace.

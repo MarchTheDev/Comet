@@ -3,12 +3,12 @@
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use tauri::Manager;
 use serde_json::Value;
-use std::time::Duration;
+use std::time::{Duration, UNIX_EPOCH};
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Artwork { url: String, mime: String, data: String }
@@ -27,8 +27,7 @@ fn cache_directory(app: &tauri::AppHandle) -> Option<PathBuf> {
     if fs::symlink_metadata(&dir).ok()?.file_type().is_symlink() { return None; }
     Some(dir)
 }
-fn valid_image(mime: &str, bytes: &[u8]) -> bool {
-    if bytes.len() > 4 * 1024 * 1024 { return false; }
+fn image_signature(mime: &str, bytes: &[u8]) -> bool {
     match mime {
         "image/jpeg" => bytes.starts_with(&[0xff, 0xd8, 0xff]),
         "image/png" => bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
@@ -37,6 +36,7 @@ fn valid_image(mime: &str, bytes: &[u8]) -> bool {
         _ => false,
     }
 }
+fn valid_image(mime: &str, bytes: &[u8]) -> bool { bytes.len() <= 4 * 1024 * 1024 && image_signature(mime, bytes) }
 fn valid_artwork(art: &Artwork) -> bool {
     trusted_image(&art.url) && art.data.len() <= 5_600_000 && STANDARD.decode(&art.data).ok().is_some_and(|bytes| valid_image(&art.mime, &bytes))
 }
@@ -72,6 +72,148 @@ fn write_cache(dir: &Path, query: &str, artwork: &Artwork) {
     let remove = files.len().saturating_sub(MAX_CACHED_COVERS);
     for (_, path) in files.into_iter().take(remove) { let _ = fs::remove_file(path); }
 }
+// Hash a bounded amount of file data as well as its path and metadata. This
+// restores art before the much slower audio-tag scan but invalidates the alias
+// when a file is replaced or its beginning/end metadata changes.
+fn file_fingerprint(path: &Path) -> Result<String, String> {
+    const SAMPLE: u64 = 64 * 1024;
+    let canonical = fs::canonicalize(path).map_err(|_| "Couldn't identify the audio file.")?;
+    let mut file = File::open(&canonical).map_err(|_| "Couldn't identify the audio file.")?;
+    let before = file.metadata().map_err(|_| "Couldn't identify the audio file.")?;
+    if !before.is_file() { return Err("The audio file is not a regular file.".into()); }
+    let modified = before.modified().ok();
+    let nanos = modified.and_then(|time| time.duration_since(UNIX_EPOCH).ok()).map(|time| time.as_nanos()).unwrap_or(0);
+    let mut digest = Sha256::new();
+    digest.update(b"comet-audio-file-v1\0");
+    digest.update(canonical.to_string_lossy().as_bytes());
+    digest.update([0u8]); digest.update(before.len().to_le_bytes()); digest.update(nanos.to_le_bytes());
+    let mut bytes = Vec::with_capacity(SAMPLE as usize);
+    (&mut file).take(SAMPLE).read_to_end(&mut bytes).map_err(|_| "Couldn't inspect the audio file.")?;
+    digest.update(&bytes);
+    if before.len() > SAMPLE {
+        file.seek(SeekFrom::End(-(SAMPLE as i64))).map_err(|_| "Couldn't inspect the audio file.")?;
+        bytes.clear(); (&mut file).take(SAMPLE).read_to_end(&mut bytes).map_err(|_| "Couldn't inspect the audio file.")?;
+        digest.update(&bytes);
+    }
+    let after = file.metadata().map_err(|_| "Couldn't identify the audio file.")?;
+    if before.len() != after.len() || modified != after.modified().ok() { return Err("The audio file changed while checking its cover.".into()); }
+    Ok(format!("{:x}", digest.finalize()))
+}
+fn valid_fingerprint(value: &str) -> bool { value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)) }
+fn alias_file(dir: &Path, fingerprint: &str) -> PathBuf { dir.join(format!("{fingerprint}.alias")) }
+fn read_alias(dir: &Path, fingerprint: &str) -> Option<String> {
+    if !valid_fingerprint(fingerprint) { return None; }
+    let path = alias_file(dir, fingerprint); let metadata = fs::symlink_metadata(&path).ok()?;
+    if !metadata.is_file() || metadata.len() > 1600 { return None; }
+    let query = fs::read_to_string(path).ok()?;
+    valid_query(&query).then_some(query)
+}
+fn write_alias(dir: &Path, fingerprint: &str, query: &str) {
+    if !valid_fingerprint(fingerprint) || !valid_query(query) || read_cache(dir, query).is_none() { return; }
+    let target = alias_file(dir, fingerprint);
+    if read_alias(dir, fingerprint).and_then(|old| read_cache(dir, &old)).is_some() { return; }
+    // Replace malformed/stale regular alias files, never links or other paths.
+    if fs::symlink_metadata(&target).ok().is_some_and(|metadata| metadata.is_file()) { let _ = fs::remove_file(&target); }
+    let mut nonce = [0u8; 16]; if getrandom::fill(&mut nonce).is_err() { return; }
+    let temporary = dir.join(format!(".alias-{:x}.tmp", u128::from_le_bytes(nonce)));
+    let Ok(mut file) = OpenOptions::new().write(true).create_new(true).open(&temporary) else { return; };
+    let ready = file.write_all(query.as_bytes()).and_then(|_| file.sync_all()).is_ok(); drop(file);
+    if ready { let _ = crate::rename_without_replace(&temporary, &target); }
+    let _ = fs::remove_file(&temporary);
+    let Ok(entries) = fs::read_dir(dir) else { return; };
+    let mut files: Vec<_> = entries.filter_map(Result::ok).filter_map(|entry| {
+        let name = entry.file_name().into_string().ok()?;
+        if !valid_fingerprint(name.strip_suffix(".alias")?) || !entry.file_type().ok()?.is_file() { return None; }
+        Some((entry.metadata().ok()?.modified().ok()?, entry.path()))
+    }).collect();
+    files.sort_by_key(|(modified, _)| *modified);
+    let remove = files.len().saturating_sub(300);
+    for (_, path) in files.into_iter().take(remove) { let _ = fs::remove_file(path); }
+}
+#[derive(Serialize, Deserialize, Clone)]
+pub struct AudioMetadata { title: String, artist: String, mime: Option<String>, data: Option<String> }
+fn valid_metadata(info: &AudioMetadata) -> bool {
+    if info.title.len() > 4000 || info.artist.len() > 4000 || info.title.chars().count() > 1000 || info.artist.chars().count() > 1000 { return false; }
+    match (&info.mime, &info.data) {
+        (None, None) => true,
+        (Some(mime), Some(data)) if data.len() <= 11_185_000 => STANDARD.decode(data).ok().is_some_and(|bytes| !bytes.is_empty() && bytes.len() <= 8 * 1024 * 1024 && image_signature(mime, &bytes)),
+        _ => false,
+    }
+}
+fn metadata_directory(app: &tauri::AppHandle) -> Option<PathBuf> {
+    let dir = app.path().app_cache_dir().ok()?.join("audio-metadata");
+    fs::create_dir_all(&dir).ok()?;
+    if fs::symlink_metadata(&dir).ok()?.file_type().is_symlink() { return None; }
+    Some(dir)
+}
+fn metadata_file(dir: &Path, fingerprint: &str) -> PathBuf { dir.join(format!("{fingerprint}.audio")) }
+fn read_metadata(dir: &Path, fingerprint: &str) -> Option<AudioMetadata> {
+    if !valid_fingerprint(fingerprint) { return None; }
+    let path = metadata_file(dir, fingerprint); let file = fs::symlink_metadata(&path).ok()?;
+    if !file.is_file() || file.len() > 11_300_000 { return None; }
+    let info: AudioMetadata = serde_json::from_slice(&fs::read(path).ok()?).ok()?;
+    valid_metadata(&info).then_some(info)
+}
+fn write_metadata(dir: &Path, fingerprint: &str, info: &AudioMetadata) {
+    if !valid_fingerprint(fingerprint) || !valid_metadata(info) || read_metadata(dir, fingerprint).is_some() { return; }
+    let target = metadata_file(dir, fingerprint);
+    if fs::symlink_metadata(&target).ok().is_some_and(|metadata| metadata.is_file()) { let _ = fs::remove_file(&target); }
+    let mut nonce = [0u8; 16]; if getrandom::fill(&mut nonce).is_err() { return; }
+    let temporary = dir.join(format!(".audio-{:x}.tmp", u128::from_le_bytes(nonce)));
+    let Ok(data) = serde_json::to_vec(info) else { return; };
+    let Ok(mut file) = OpenOptions::new().write(true).create_new(true).open(&temporary) else { return; };
+    let ready = file.write_all(&data).and_then(|_| file.sync_all()).is_ok(); drop(file);
+    if ready { let _ = crate::rename_without_replace(&temporary, &target); }
+    let _ = fs::remove_file(&temporary);
+    let Ok(entries) = fs::read_dir(dir) else { return; };
+    let mut files: Vec<_> = entries.filter_map(Result::ok).filter_map(|entry| {
+        let name = entry.file_name().into_string().ok()?;
+        if !valid_fingerprint(name.strip_suffix(".audio")?) || !entry.file_type().ok()?.is_file() { return None; }
+        let metadata = entry.metadata().ok()?;
+        Some((metadata.modified().ok()?, metadata.len(), entry.path()))
+    }).collect();
+    files.sort_by_key(|(modified, _, _)| *modified);
+    let mut bytes: u64 = files.iter().map(|(_, size, _)| *size).sum();
+    let mut remaining = files.len();
+    for (_, size, path) in files {
+        if remaining <= 80 && bytes <= 160 * 1024 * 1024 { break; }
+        if fs::remove_file(path).is_ok() { remaining -= 1; bytes = bytes.saturating_sub(size); }
+    }
+}
+#[tauri::command]
+pub async fn read_audio_metadata(app: tauri::AppHandle, fingerprint: String) -> Option<AudioMetadata> {
+    tauri::async_runtime::spawn_blocking(move || metadata_directory(&app).and_then(|dir| read_metadata(&dir, &fingerprint))).await.ok().flatten()
+}
+#[tauri::command]
+pub async fn remember_audio_metadata(app: tauri::AppHandle, fingerprint: String, metadata: AudioMetadata) {
+    let _ = tauri::async_runtime::spawn_blocking(move || {
+        if let Some(dir) = metadata_directory(&app) { write_metadata(&dir, &fingerprint, &metadata); }
+    }).await;
+}
+
+#[derive(Serialize)]
+pub struct FileArtwork { query: String, artwork: Artwork }
+#[tauri::command]
+pub async fn music_file_fingerprint(vault: String, path: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let checked = crate::checked_vault_entry(&vault, &path)?;
+        file_fingerprint(&checked)
+    }).await.map_err(|_| "Couldn't identify the audio file.".to_string())?
+}
+#[tauri::command]
+pub async fn read_music_cover_for_file(app: tauri::AppHandle, fingerprint: String) -> Option<FileArtwork> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = cache_directory(&app)?; let query = read_alias(&dir, &fingerprint)?;
+        let artwork = read_cache(&dir, &query)?; Some(FileArtwork { query, artwork })
+    }).await.ok().flatten()
+}
+#[tauri::command]
+pub async fn remember_music_cover_for_file(app: tauri::AppHandle, fingerprint: String, query: String) {
+    let _ = tauri::async_runtime::spawn_blocking(move || {
+        if let Some(dir) = cache_directory(&app) { write_alias(&dir, &fingerprint, query.trim()); }
+    }).await;
+}
+
 #[tauri::command]
 pub async fn read_cached_music_cover(app: tauri::AppHandle, query: String) -> Option<Artwork> {
     let query = query.trim().to_string(); if !valid_query(&query) { return None; }
@@ -116,6 +258,42 @@ mod tests {
         assert!(!trusted_image("https://mzstatic.com.evil.test/a.jpg"));
         assert!(!trusted_image("https://user@mzstatic.com/a.jpg"));
         assert!(!trusted_image("http://mzstatic.com/a.jpg"));
+    }
+    #[test]
+    fn file_identity_and_both_caches_survive_reopen_and_reject_stale_files() {
+        let mut random = [0u8; 8]; getrandom::fill(&mut random).unwrap();
+        let root = std::env::temp_dir().join(format!("comet-audio-identity-{:x}", u64::from_le_bytes(random)));
+        fs::create_dir(&root).unwrap();
+        let track = root.join("song.mp3");
+        fs::write(&track, b"original audio with tags").unwrap();
+        let first = file_fingerprint(&track).unwrap();
+        assert_eq!(first, file_fingerprint(&track).unwrap());
+        assert!(valid_fingerprint(&first));
+        let art = Artwork { url: "https://is1-ssl.mzstatic.com/image/a.png".into(), mime: "image/png".into(), data: STANDARD.encode(b"\x89PNG\r\n\x1a\nexample") };
+        write_cache(&root, "artist title", &art);
+        write_alias(&root, &first, "artist title");
+        let alias = read_alias(&root, &first).unwrap();
+        assert_eq!(read_cache(&root, &alias).unwrap().data, art.data);
+        let metadata = AudioMetadata { title: "Title".into(), artist: "Artist".into(), mime: Some("image/png".into()), data: Some(art.data.clone()) };
+        write_metadata(&root, &first, &metadata);
+        let restored = read_metadata(&root, &first).unwrap();
+        assert_eq!(restored.title, "Title"); assert_eq!(restored.data, metadata.data);
+        fs::write(&track, b"replaced audio with tags").unwrap();
+        let second = file_fingerprint(&track).unwrap();
+        assert_ne!(first, second);
+        assert!(read_alias(&root, &second).is_none()); assert!(read_metadata(&root, &second).is_none());
+        assert!(read_alias(&root, "../invalid").is_none()); assert!(read_metadata(&root, "../invalid").is_none());
+        let invalid = AudioMetadata { title: "Song".into(), artist: "Artist".into(), mime: Some("image/png".into()), data: Some(STANDARD.encode(b"not an image")) };
+        write_metadata(&root, &second, &invalid); assert!(read_metadata(&root, &second).is_none());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            let sentinel = root.join("sentinel"); fs::write(&sentinel, b"safe").unwrap();
+            symlink(&sentinel, alias_file(&root, &second)).unwrap();
+            write_alias(&root, &second, "artist title");
+            assert_eq!(fs::read(&sentinel).unwrap(), b"safe".to_vec()); assert!(read_alias(&root, &second).is_none());
+        }
+        fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn artwork_bytes_survive_restart_and_bad_entries_are_ignored() {

@@ -1,5 +1,5 @@
 import { indexedDB } from 'fake-indexeddb';
-import { createCoverCache, downloadCover, readCover, saveCover, validCoverUrl } from '../src/utils/coverCache.ts';
+import { createCoverCache, downloadCover, readCover, saveCover, validCoverUrl, readCoverAlias, saveCoverAlias, sampleCoverFingerprint, readAudioInfo, saveAudioInfo } from '../src/utils/coverCache.ts';
 let failures = 0;
 function check(name, ok) { if (ok) console.log(`  ok   ${name}`); else { failures++; console.log(`  FAIL ${name}`); } }
 console.log('\ncover artwork cache');
@@ -25,6 +25,21 @@ const afterSecondRestart = await createCoverCache().readCover('track by artist')
 check('the newly downloaded image is durable across a second restart', await afterSecondRestart?.blob?.text() === 'new');
 await saveCover('invalid', 'https://evil.example/a.jpg', blob);
 check('never caches an untrusted artwork URL', await readCover('invalid') === null);
+const id = await sampleCoverFingerprint('sample/song.mp3', 'data:audio/mpeg;base64,YWJj');
+const changedId = await sampleCoverFingerprint('sample/song.mp3', 'data:audio/mpeg;base64,YWJk');
+check('a sample file identity is stable and changes when its contents or path change', id?.length === 64 && id === await sampleCoverFingerprint('sample/song.mp3', 'data:audio/mpeg;base64,YWJj') && id !== changedId && id !== await sampleCoverFingerprint('sample/other.mp3', 'data:audio/mpeg;base64,YWJj'));
+saveCoverAlias(id, 'track by artist');
+check('file-to-query aliases survive a cache restart without tying them to a metadata scan', readCoverAlias(id) === 'track by artist' && await createCoverCache().readCover(readCoverAlias(id)) !== null && readCoverAlias(changedId) === null);
+saveCoverAlias('../unsafe', 'track by artist'); saveCoverAlias(id, 'bad\nquery');
+check('invalid identifiers or queries cannot replace a valid file alias', readCoverAlias('../unsafe') === null && readCoverAlias(id) === 'track by artist');
+await saveAudioInfo(id, { title: 'Title', artist: 'Artist', artwork: blob });
+const audio = await readAudioInfo(id);
+check('parsed tags and embedded cover bytes survive re-opening without another scan', audio?.title === 'Title' && audio?.artist === 'Artist' && audio?.artwork?.size === 3);
+check('a changed file never inherits stale parsed tags or embedded art', await readAudioInfo(changedId) === null);
+await saveAudioInfo(changedId, { title: 'Replacement', artist: '', artwork: new Blob(['bad'], { type: 'text/html' }) });
+check('unsupported embedded artwork is rejected', await readAudioInfo(changedId) === null);
+await saveAudioInfo(changedId, { title: 'Replacement', artist: '' });
+check('successful metadata without embedded artwork is cached too', (await readAudioInfo(changedId))?.title === 'Replacement');
 const originalFetch = globalThis.fetch;
 globalThis.fetch = async () => new Response(new Uint8Array([1, 2, 3]), { status: 200, headers: { 'Content-Type': 'image/png' } });
 check('downloads bounded valid image bytes', (await downloadCover(url, new AbortController().signal))?.size === 3);

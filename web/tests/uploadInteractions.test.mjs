@@ -2,7 +2,8 @@ import { JSDOM } from 'jsdom';
 import React, { act, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { FolderTreePicker, MovePicker } from '../src/MovePicker.tsx';
-import { UploadProgress, UPLOAD_FEEDBACK_MS } from '../src/UploadProgress.tsx';
+import { UploadProgress, UPLOAD_FEEDBACK_MS, UPLOAD_EXIT_MS } from '../src/UploadProgress.tsx';
+import { readFileSync } from 'node:fs';
 
 let failures = 0;
 function check(name, ok) { if (ok) console.log(`  ok   ${name}`); else { failures++; console.log(`  FAIL ${name}`); } }
@@ -41,9 +42,25 @@ check('failed feedback is scheduled for automatic dismissal within 5–10 second
 await click(document.querySelector('[aria-label="Dismiss upload"]'));
 check('completed or failed upload feedback can be dismissed', dismissed === 'batch');
 await act(async()=>root.render(React.createElement(UploadProgress,{uploads:[],onDismiss(){}})));
-check('manual dismissal clears its pending timer',scheduled.size===0);
+check('manual dismissal cancels feedback and retains an inert card for its exit',![...scheduled.values()].some(timer=>timer.ms===UPLOAD_FEEDBACK_MS)&&document.querySelector('.upload-card.is-leaving')?.hasAttribute('inert')&&document.querySelector('.upload-card.is-leaving')?.getAttribute('aria-hidden')==='true');
+check('leaving lasts just long enough for the exit animation',[...scheduled.values()].some(timer=>timer.ms===UPLOAD_EXIT_MS)&&UPLOAD_EXIT_MS>0&&UPLOAD_EXIT_MS<1000);
+// Reappearing with the same ID must cancel the pending removal.
 dismissed='';await act(async()=>root.render(React.createElement(UploadProgress,{uploads:[{...base,phase:'done'}],onDismiss:id=>{dismissed=id;}})));
-const timer=[...scheduled.values()][0];await act(async()=>timer.callback());
-check('successful feedback also dismisses automatically',dismissed==='batch'&&timer.ms===UPLOAD_FEEDBACK_MS);
-await act(async () => root.unmount());dom.window.setTimeout=realTimeout;dom.window.clearTimeout=realClear; dom.window.close(); delete globalThis.IS_REACT_ACT_ENVIRONMENT;
+check('re-adding a card cancels its exit without duplicating it',document.querySelectorAll('.upload-card').length===1&&!document.querySelector('.is-leaving')&&![...scheduled.values()].some(timer=>timer.ms===UPLOAD_EXIT_MS));
+const feedback=[...scheduled.entries()].find(([,timer])=>timer.ms===UPLOAD_FEEDBACK_MS);scheduled.delete(feedback[0]);await act(async()=>feedback[1].callback());
+check('successful feedback also dismisses automatically',dismissed==='batch'&&feedback[1].ms===UPLOAD_FEEDBACK_MS);
+await act(async()=>root.render(React.createElement(UploadProgress,{uploads:[{...base,id:'other',phase:'copying'}],onDismiss(){}})));
+check('one card can leave while another upload remains active',document.querySelectorAll('.upload-card').length===2&&document.querySelector('.upload-card.is-leaving')&&document.querySelector('.upload-card.copying:not(.is-leaving)'));
+const exit=[...scheduled.entries()].find(([,timer])=>timer.ms===UPLOAD_EXIT_MS);scheduled.delete(exit[0]);await act(async()=>exit[1].callback());
+check('the exited card is removed without interrupting the active upload',document.querySelectorAll('.upload-card').length===1&&document.querySelector('.upload-card.copying'));
+const css=readFileSync('src/index.css','utf8');
+check('upload cards define enter and exit animation with reduced-motion support',css.includes('upload-card-in')&&css.includes('upload-card-out')&&/prefers-reduced-motion:reduce[^}]*\.upload-card/.test(css));
+await act(async()=>root.render(React.createElement(UploadProgress,{uploads:[],onDismiss(){}})));
+await act(async () => root.unmount());check('unmount cleans up pending exit and feedback timers',scheduled.size===0);
+// Reduced motion removes immediately instead of retaining a non-animated card.
+dom.window.matchMedia=()=>({matches:true});
+const reducedRoot=createRoot(document.getElementById('root'));await act(async()=>reducedRoot.render(React.createElement(UploadProgress,{uploads:[base],onDismiss(){}})));
+await act(async()=>reducedRoot.render(React.createElement(UploadProgress,{uploads:[],onDismiss(){}})));
+check('reduced motion removes cards immediately without an exit timer',!document.querySelector('.upload-card')&&scheduled.size===0);
+await act(async()=>reducedRoot.unmount());dom.window.setTimeout=realTimeout;dom.window.clearTimeout=realClear; dom.window.close(); delete globalThis.IS_REACT_ACT_ENVIRONMENT;
 globalThis.__cometFailures = (globalThis.__cometFailures ?? 0) + failures;

@@ -3,6 +3,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type 
 import { createPortal } from "react-dom";
 import { AlertCircle, CheckCircle2, ChevronDown, ChevronRight, GripVertical, ListChecks, LoaderCircle, Minus, MoreHorizontal, Pencil, Plus, Trash2, X } from "lucide-react";
 import { ColorMenu } from "./ColorMenu";
+import { ClearBoardDialog } from "./ClearBoardDialog";
 import { todoId, TODO_CONNECTION_COLOR, TODO_MAX_COORD, type TodoDocument, type TodoTask } from "./utils/todo";
 import { connectionGeometry, type Point } from "./utils/todoGeometry";
 import type { SaveState } from "./utils/saveQueue";
@@ -21,6 +22,7 @@ export function TodoBoard({ board, name, onRename, saveState, arrowheads = false
   const activeDrag = useRef<(() => void) | null>(null);
   const zoomAnchor = useRef<{ x: number; y: number; worldX: number; worldY: number } | null>(null);
   const [zoom, setZoom] = useState(1);
+  const [clearOpen, setClearOpen] = useState(false);
   const [panning, setPanning] = useState(false);
   const [moving, setMoving] = useState(false);
   const [draft, setDraft] = useState("");
@@ -149,8 +151,15 @@ export function TodoBoard({ board, name, onRename, saveState, arrowheads = false
     <div className="todo-toolbar">
       <form className="todo-create" onSubmit={addTask}><input aria-label="New to-do" maxLength={500} value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="What needs doing?" /><button className="primary-button" type="submit" disabled={!draft.trim() || board.tasks.length >= 5000}><Plus size={15} /> Add to-do</button></form>
       <button type="button" className="secondary-button" aria-expanded={showCategories} onClick={() => setShowCategories((value) => !value)}>Categories {board.categories.length > 0 && <span className="todo-category-count">{board.categories.length}</span>}</button>
+      <button type="button" className="secondary-button board-clear-button" disabled={!board.tasks.length && !board.categories.length && !board.connections.length && !board.legacyListConnections.length} onClick={() => setClearOpen(true)} title="Clear to-do board contents"><Trash2 size={15} /> Clear board</button>
       <div className="todo-zoom" aria-label="Board zoom controls"><button type="button" aria-label="Zoom board out" disabled={zoom <= .35} onClick={() => changeZoom(zoomRef.current / 1.2)}><Minus size={15} /></button><button type="button" className="todo-zoom-reset" aria-label="Reset board zoom" onClick={() => changeZoom(1)}>{Math.round(zoom * 100)}%</button><button type="button" aria-label="Zoom board in" disabled={zoom >= 2} onClick={() => changeZoom(zoomRef.current * 1.2)}><Plus size={15} /></button></div>
     </div>
+    {clearOpen && <ClearBoardDialog kind="to-do board" onCancel={() => setClearOpen(false)} onConfirm={() => {
+      if (!onChange({ ...board, tasks: [], categories: [], connections: [], legacyListConnections: [] })) return false;
+      activeDrag.current?.(); setDraft(""); setSubDrafts({}); setAddingItem(""); setExpanded(new Set()); setPositions({}); setHeights({});
+      setLinkDraft(null); setSelectedLink(""); setDeleteTask(""); setDeleteCategory(""); setMenu(null); setShowCategories(false);
+      return true;
+    }} />}
     {showCategories && <div className="todo-category-panel"><div><strong>Categories</strong><small>Give tasks a little structure without fixing them in place.</small></div><div className="todo-category-list">{board.categories.map((category) => <div className="todo-category" key={category.id} style={{ "--list-color": category.color } as CSSProperties}><span className="todo-lane-dot" /><input aria-label="Category name" maxLength={120} value={category.title} onChange={(event) => onChange({ ...board, categories: board.categories.map((item) => item.id === category.id ? { ...item, title: event.target.value } : item) })} /><ColorMenu color={category.color} label={`Color for ${category.title || "category"}`} onChange={(color) => onChange({ ...board, categories: board.categories.map((item) => item.id === category.id ? { ...item, color } : item) })} />{deleteCategory === category.id ? <><button type="button" className="todo-delete-confirm" onClick={() => { if (onChange({ ...board, categories: board.categories.filter((item) => item.id !== category.id), tasks: board.tasks.map((task) => task.categoryId === category.id ? { ...task, categoryId: null } : task), legacyListConnections: board.legacyListConnections.filter((edge) => edge.from !== category.id && edge.to !== category.id) })) setDeleteCategory(""); }}>Remove</button><button type="button" aria-label="Cancel removing category" onClick={() => setDeleteCategory("")}><X size={13} /></button></> : <button type="button" aria-label={`Remove ${category.title || "category"}`} onClick={() => setDeleteCategory(category.id)}><Trash2 size={14} /></button>}</div>)}</div><button type="button" className="secondary-button" disabled={board.categories.length >= 100} onClick={() => onChange({ ...board, categories: [...board.categories, { id: todoId(), title: `Category ${board.categories.length + 1}`, color: "#9c9fe1" }] })}><Plus size={14} /> Add category</button></div>}
     <div ref={stage} className={`todo-canvas${panning ? " panning" : ""}${moving ? " moving" : ""}${linkDraft ? " connecting" : ""}`} aria-label="To-do canvas" onPointerDown={(event) => {
       if (event.button !== 0 || (event.target as Element).closest(".todo-card, .todo-link-controls, .todo-link-hit")) return;

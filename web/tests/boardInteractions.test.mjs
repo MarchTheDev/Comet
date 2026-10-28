@@ -28,10 +28,11 @@ initial.tasks = [
   { id: 'first', text: 'First', done: false, notes: '', x: 40, y: 50, categoryId: null, subtasks: [] },
   { id: 'second', text: 'Second', done: false, notes: '', x: 400, y: 130, categoryId: null, subtasks: [] },
 ];
-let current = initial;
+let current = initial, rejectChange = false, setTestBoard;
 function Harness() {
   const [board, setBoard] = useState(initial);
-  return React.createElement(TodoBoard, { board, name: 'Plan', saveState: 'saved', onRetry() {}, onChange(next) { current = next; setBoard(next); return true; } });
+  setTestBoard = setBoard;
+  return React.createElement(TodoBoard, { board, name: 'Plan', saveState: 'saved', onRetry() {}, onChange(next) { if (rejectChange) return false; current = next; setBoard(next); return true; } });
 }
 const root = createRoot(document.getElementById('root'));
 await act(async () => root.render(React.createElement(Harness)));
@@ -75,6 +76,21 @@ await fire(categories, new dom.window.MouseEvent('click', { bubbles: true }));
 const addCategory = [...document.querySelectorAll('button')].find((button) => button.textContent.trim() === 'Add category');
 await fire(addCategory, new dom.window.MouseEvent('click', { bubbles: true }));
 check('creates editable categories without creating workflow lines', current.categories.length === 1 && current.connections.length === 0);
+// Include both current task links and legacy list links in the clear-all fixture.
+const category = current.categories[0].id;
+const populated = { ...current, categories: [...current.categories, { id: 'legacy-category', title: 'Legacy', color: '#9c9fe1' }], connections: [{ from: 'first', to: 'second', color: '#9c9fe1' }], legacyListConnections: [{ from: category, to: 'legacy-category' }] };
+await act(async () => { current = populated; setTestBoard(populated); });
+check('clear-all fixture includes both current and legacy connections', current.connections.length === 1 && current.legacyListConnections.length === 1);
+const beforeClear = JSON.stringify(current);
+await fire([...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Clear board'), new dom.window.MouseEvent('click', { bubbles: true }));
+check('clear to-do board asks for confirmation and focuses Cancel', document.querySelector('[role="alertdialog"]')?.textContent.includes('categories and connections') && document.activeElement.textContent === 'Cancel');
+await fire(document.querySelector('[role="alertdialog"]'), new dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+check('Escape cancels clearing without changing the to-do board', !document.querySelector('[role="alertdialog"]') && JSON.stringify(current) === beforeClear);
+await fire([...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Clear board'), new dom.window.MouseEvent('click', { bubbles: true }));
+rejectChange = true; await fire([...document.querySelectorAll('[role="alertdialog"] button')].find(button => button.textContent === 'Clear board'), new dom.window.MouseEvent('click', { bubbles: true }));
+check('a rejected clear keeps to-dos and categories intact', !!document.querySelector('[role="alertdialog"] [role="alert"]') && JSON.stringify(current) === beforeClear);
+rejectChange = false; await fire([...document.querySelectorAll('[role="alertdialog"] button')].find(button => button.textContent === 'Clear board'), new dom.window.MouseEvent('click', { bubbles: true }));
+check('confirmed clear removes tasks, categories and both types of links, not the board', current.format === 'comet-todo' && !current.tasks.length && !current.categories.length && !current.connections.length && !current.legacyListConnections.length && [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Clear board').disabled);
 await act(async () => root.unmount());
 dom.window.close();
 delete globalThis.IS_REACT_ACT_ENVIRONMENT;

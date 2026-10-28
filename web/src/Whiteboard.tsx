@@ -2,6 +2,7 @@ import { AppSelect } from "./AppSelect";
 import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import { CheckCircle2, ChevronDown, Circle, Diamond, GripVertical, ImagePlus, ListChecks, LoaderCircle, Minus, PaintBucket, Pencil, Plus, RotateCcw, Square, Trash2, Triangle, Type, X } from "lucide-react";
 import { ColorMenu } from "./ColorMenu";
+import { ClearBoardDialog } from "./ClearBoardDialog";
 import { connectionGeometry, type Point } from "./utils/todoGeometry";
 import { TODO_MAX_COORD, todoId } from "./utils/todo";
 import { newWhiteboardItem, TODO_CONNECTION_COLOR, type WhiteboardDocument, type WhiteboardItem, type WhiteboardItemType, type WhiteboardShape, type WhiteboardStroke } from "./utils/whiteboard";
@@ -39,6 +40,7 @@ export function Whiteboard({ board, name, path = "", saveState, onChange, onRena
   latest.current = board;
   const [zoom, setZoom] = useState(1), [positions, setPositions] = useState<Record<string, Point>>({}), [sizes, setSizes] = useState<Record<string, { width: number; height: number }>>({});
   const [drawing, setDrawing] = useState<{ from: string; end: Point } | null>(null), [selected, setSelected] = useState(""), [deleting, setDeleting] = useState(""), [error, setError] = useState("");
+  const [clearOpen, setClearOpen] = useState(false);
   const [shapeOpen, setShapeOpen] = useState(false), [shapeTool, setShapeTool] = useState<WhiteboardShape | null>(null), [pen, setPen] = useState(false), [penColor, setPenColor] = useState("#9c9fe1"), [penWidth, setPenWidth] = useState(4);
   const [draftShape, setDraftShape] = useState<{ shape: WhiteboardShape; start: Point; end: Point } | null>(null);
   const shapeRef = useRef<{ shape: WhiteboardShape; start: Point; end: Point } | null>(null);
@@ -133,8 +135,16 @@ export function Whiteboard({ board, name, path = "", saveState, onChange, onRena
       {shapeTool && <span className="whiteboard-shape-hint" role="status">Drag on a blank area to draw <button type="button" onClick={() => setShapeTool(null)}>Cancel</button></span>}
       {pen && <><ColorMenu color={penColor} label="Pen color" onChange={setPenColor} /><label className="whiteboard-pen-width">Pen size <AppSelect label="Pen size" value={penWidth} onChange={(value) => setPenWidth(Number(value))}><option value="2">Fine</option><option value="4">Medium</option><option value="8">Thick</option></AppSelect></label></>}
       <button type="button" aria-label="Remove last pen stroke" title="Remove last pen stroke" disabled={!board.strokes.length} onClick={() => commit({ ...latest.current, strokes: latest.current.strokes.slice(0, -1) })}><RotateCcw size={15} /></button>
+      <button type="button" className="board-clear-button" disabled={!board.items.length && !board.connections.length && !board.strokes.length} onClick={() => setClearOpen(true)} title="Clear whiteboard contents"><Trash2 size={15} /> Clear board</button>
       <span className="todo-header-spacer" /><button type="button" aria-label="Zoom whiteboard out" onClick={() => setZoom((z) => Math.max(.4, z - .1))}><Minus size={15} /></button><span>{Math.round(zoom * 100)}%</span><button type="button" aria-label="Zoom whiteboard in" onClick={() => setZoom((z) => Math.min(2, z + .1))}><Plus size={15} /></button>
     </div>
+    {clearOpen && <ClearBoardDialog kind="whiteboard" onCancel={() => setClearOpen(false)} onConfirm={() => {
+      if (!commit({ ...latest.current, items: [], connections: [], strokes: [] })) return false;
+      cleanupDrag.current?.(); setLayers([]); setPositions({}); setSizes({}); setSelected(""); setDeleting(""); setDrawing(null);
+      shapeRef.current = null; strokeRef.current = null; canvasPointer.current = null; pan.current = null;
+      setDraftShape(null); setDraftStroke(null); setShapeOpen(false); setShapeTool(null); setPen(false);
+      return true;
+    }} />}
     {error && <p className="dialog-error" role="alert">{error}</p>}
     <div className={`todo-canvas whiteboard-stage${pen || shapeTool ? " pen-mode" : ""}`} ref={stage} aria-label="Whiteboard canvas" onPointerDown={(event) => {
       if (event.button !== 0 || (event.target as Element).closest("button,input,textarea,.whiteboard-item,.todo-link-hit,.todo-link-controls")) return;

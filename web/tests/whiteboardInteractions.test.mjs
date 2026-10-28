@@ -9,7 +9,7 @@ console.log('\nwhiteboard interactions');
 const dom=new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>',{pretendToBeVisual:true,url:'https://comet-whiteboard.test/'});
 globalThis.window=dom.window;globalThis.document=dom.window.document;globalThis.localStorage=dom.window.localStorage;globalThis.Node=dom.window.Node;globalThis.HTMLElement=dom.window.HTMLElement;globalThis.IS_REACT_ACT_ENVIRONMENT=true;
 Object.defineProperty(globalThis,'navigator',{value:dom.window.navigator,configurable:true});
-let current=newWhiteboard(), changes=0;function Harness(){const [board,setBoard]=useState(current);return React.createElement(Whiteboard,{board,name:'Canvas',path:'vault/Canvas.comet-whiteboard',saveState:'saved',onChange(next){changes++;current=next;setBoard(next);return true;},onRename(){},onRetry(){}});}
+let current=newWhiteboard(), changes=0, rejectChange=false;function Harness(){const [board,setBoard]=useState(current);return React.createElement(Whiteboard,{board,name:'Canvas',path:'vault/Canvas.comet-whiteboard',saveState:'saved',onChange(next){changes++;if(rejectChange)return false;current=next;setBoard(next);return true;},onRename(){},onRetry(){}});}
 const root=createRoot(document.getElementById('root'));await act(async()=>root.render(React.createElement(Harness)));
 const click=async element=>act(async()=>element.dispatchEvent(new dom.window.MouseEvent('click',{bubbles:true,cancelable:true})));
 const button=text=>[...document.querySelectorAll('button')].find(item=>item.textContent.trim()===text);
@@ -42,6 +42,8 @@ const resizeButton=document.querySelector('[aria-label="Resize text"]'), oldWidt
 await fire(resizeButton,new dom.window.KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true,cancelable:true}));
 check('the invisible corner resize remains keyboard-accessible',current.items[0].width===oldWidth+5&&/\.whiteboard-resize\s*\{\s*background:transparent/.test(css));
 
+await click(button('Pen')); await fire(stage,pointer('pointerdown',500,400)); await fire(stage,pointer('pointermove',540,440)); await fire(stage,pointer('pointerup',540,440)); await click(button('Pen'));
+check('a pen stroke is present before exercising clear all',current.strokes.length===1);
 const boardBeforeFocus=serializeWhiteboard(current), writesBeforeFocus=changes;
 const article=id=>document.querySelector(`[data-whiteboard-id="${id}"]`);
 await fire(article(current.items[2].id),pointer('pointerdown',10,10));
@@ -51,5 +53,13 @@ check('keyboard focus raises a card above the last focused shape',Number(article
 await act(async()=>root.unmount());
 const reopened=createRoot(document.getElementById('root'));await act(async()=>reopened.render(React.createElement(Harness)));
 check('focus ordering survives reopening on this device without rewriting the board',Number(article(current.items[0].id).style.zIndex)>Number(article(current.items[2].id).style.zIndex)&&serializeWhiteboard(current)===boardBeforeFocus&&changes===writesBeforeFocus);
+await click(button('Clear board'));
+check('clear whiteboard asks for confirmation and defaults to Cancel',document.querySelector('[role="alertdialog"]')?.textContent.includes('drawings and connections')&&document.activeElement.textContent==='Cancel'&&serializeWhiteboard(current)===boardBeforeFocus);
+await click(button('Cancel'));
+check('cancelling whiteboard clearing leaves all content intact',!document.querySelector('[role="alertdialog"]')&&serializeWhiteboard(current)===boardBeforeFocus);
+await click(button('Clear board')); rejectChange=true; await click([...document.querySelectorAll('[role="alertdialog"] button')].find(item=>item.textContent==='Clear board'));
+check('a rejected whiteboard clear preserves the content and keeps the confirmation open',!!document.querySelector('[role="alertdialog"] [role="alert"]')&&serializeWhiteboard(current)===boardBeforeFocus);
+rejectChange=false; await click([...document.querySelectorAll('[role="alertdialog"] button')].find(item=>item.textContent==='Clear board'));
+check('confirmed clear removes whiteboard items, links and strokes but preserves the board',current.format==='comet-whiteboard'&&!current.items.length&&!current.connections.length&&!current.strokes.length&&!document.querySelector('[role="alertdialog"]')&&button('Clear board').disabled);
 await act(async()=>reopened.unmount());dom.window.close();delete globalThis.localStorage;delete globalThis.IS_REACT_ACT_ENVIRONMENT;
 globalThis.__cometFailures=(globalThis.__cometFailures??0)+failures;

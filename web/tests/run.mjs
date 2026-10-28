@@ -30,6 +30,8 @@ const checks = [
   'tests/boardInteractions.test.mjs',
   'tests/exploreInteractions.test.mjs',
   'tests/coverCache.test.mjs',
+  'tests/audioNativeCacheInteractions.test.mjs',
+  'tests/deleteAndAutosize.test.mjs',
   'tests/latestFeatures.test.mjs',
   'tests/passwordRecovery.test.mjs',
   'tests/passwordBackup.test.mjs',

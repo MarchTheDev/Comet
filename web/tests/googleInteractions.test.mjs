@@ -31,6 +31,8 @@ check('deleting a Google event uses its latest ETag', deletion?.args.etag==='"ch
 let imported='', starts=0, ends=0;dom.window.confirm=()=>true;
 await act(async()=>root.render(React.createElement(GoogleSettings,{desktop:true,vault:'/vault',isSample:false,onImported:path=>{imported=path;},onSyncStart:async()=>{starts++;return true;},onSyncEnd:async()=>{ends++;}})));
 check('one connection describes both Calendar and Drive and discloses unencrypted revisions', document.querySelector('.google-settings')?.textContent.includes('Google Calendar and Drive') && document.querySelector('.drive-snapshots')?.textContent.includes('not encrypted'));
+check('an unconfigured build explains owner setup without forcing developer fields on users', document.querySelector('.google-setup')?.textContent.includes('project owner') && !document.querySelector('.google-setup details')?.open);
+check('current Drive revisions are explicitly labelled manual', document.querySelector('.drive-snapshots')?.textContent.includes('currently manual'));
 await click(button('Start syncing this workspace'));
 const sync=calls.find(call=>call.cmd==='google_sync_now');
 check('sync runs behind the editor safety guard and persists only its returned baseline', starts===1 && ends===1 && sync?.args.vault==='/vault' && sync?.args.group==='' && JSON.parse(localStorage.getItem('comet:google-sync:v1:%2Fvault')).base==='base1');

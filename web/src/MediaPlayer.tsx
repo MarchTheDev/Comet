@@ -4,7 +4,7 @@ import { Maximize, Minimize, Music2, Pause, Play, RotateCcw, RotateCw, Volume2, 
 import { parseWebStream, selectCover } from "music-metadata";
 import { invoke } from "@tauri-apps/api/core";
 import { desktopAvailable } from "./utils/vaultBridge";
-import { downloadCover, readCover, saveCover, validCoverUrl } from "./utils/coverCache";
+import { downloadCover, readCover, saveCover, validCoverUrl, readCoverAlias, saveCoverAlias, sampleCoverFingerprint, readAudioInfo, saveAudioInfo, type CachedAudioInfo } from "./utils/coverCache";
 
 function time(value: number): string {
   if (!Number.isFinite(value) || value < 0) return "0:00";
@@ -41,15 +41,54 @@ function usePlayerKeys(player: React.RefObject<HTMLElement | null>, onKey: (key:
 }
 
 interface AudioInfo { title: string; artist: string; artwork: string; loading: boolean }
-function useAudioInfo(url: string, name: string): AudioInfo {
+type NativeAudioMetadata = { title: string; artist: string; mime: string | null; data: string | null };
+function nativeAudioMetadata(value: NativeAudioMetadata | null): CachedAudioInfo | null {
+  try {
+    if (!value || typeof value.title !== "string" || value.title.length > 1000 || typeof value.artist !== "string" || value.artist.length > 1000) return null;
+    if (value.mime == null && value.data == null) return { title: value.title, artist: value.artist };
+    if (typeof value.mime !== "string" || !/^image\/(?:jpeg|png|gif|webp)$/.test(value.mime) || typeof value.data !== "string" || value.data.length > 11_185_000) return null;
+    const bytes = Uint8Array.from(atob(value.data), (char) => char.charCodeAt(0));
+    if (!bytes.length || bytes.length > 8 * 1024 * 1024) return null;
+    return { title: value.title, artist: value.artist, artwork: new Blob([bytes], { type: value.mime }) };
+  } catch { return null; }
+}
+async function rememberAudioInfo(fingerprint: string, info: CachedAudioInfo): Promise<void> {
+  await saveAudioInfo(fingerprint, info);
+  if (!desktopAvailable) return;
+  try {
+    let data: string | null = null;
+    if (info.artwork) {
+      const bytes = new Uint8Array(await info.artwork.arrayBuffer()); let binary = "";
+      for (let index = 0; index < bytes.length; index += 32_768) binary += String.fromCharCode(...bytes.subarray(index, index + 32_768));
+      data = btoa(binary);
+    }
+    await invoke("remember_audio_metadata", { fingerprint, metadata: { title: info.title, artist: info.artist, mime: info.artwork?.type ?? null, data } });
+  } catch { /* Artwork caching is optional. */ }
+}
+function useAudioInfo(url: string, name: string, fingerprint: string | null | undefined): AudioInfo {
   const [info, setInfo] = useState<AudioInfo>({ title: "", artist: "", artwork: "", loading: true });
   useEffect(() => {
     let active = true, objectUrl = "";
     const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), 20_000);
     setInfo({ title: "", artist: "", artwork: "", loading: true });
+    if (fingerprint === undefined) return () => { active = false; controller.abort(); };
+    const timeout = window.setTimeout(() => controller.abort(), 20_000);
+    const show = (cached: CachedAudioInfo) => {
+      if (!active) return;
+      if (cached.artwork) objectUrl = URL.createObjectURL(cached.artwork);
+      setInfo({ title: cached.title, artist: cached.artist, artwork: objectUrl, loading: false });
+    };
     void (async () => {
       try {
+        if (fingerprint) {
+          let cached = await readAudioInfo(fingerprint);
+          if (!cached && desktopAvailable) {
+            cached = nativeAudioMetadata(await invoke<NativeAudioMetadata | null>("read_audio_metadata", { fingerprint }).catch(() => null));
+            if (cached) void saveAudioInfo(fingerprint, cached);
+          }
+          if (cached) { show(cached); return; }
+        }
+        if (!active) return;
         const response = await fetch(url, { signal: controller.signal });
         if (!response.ok || !response.body) return;
         // Stream metadata, bounded independently from normal media playback.
@@ -58,56 +97,139 @@ function useAudioInfo(url: string, name: string): AudioInfo {
         const tags = await parseWebStream(bounded, { path: name, mimeType: response.headers.get("content-type")?.split(";")[0] || undefined }, { duration: false, skipPostHeaders: true, maxMemoryAllocation: 8 * 1024 * 1024, maxMetadataEntries: 5000 });
         if (!active) return;
         const picture = selectCover(tags.common.picture);
-        if (picture && picture.data.byteLength <= 8 * 1024 * 1024 && /^image\/(?:jpeg|png|gif|webp)$/i.test(picture.format)) objectUrl = URL.createObjectURL(new Blob([Uint8Array.from(picture.data)], { type: picture.format }));
-        if (active) setInfo({ title: tags.common.title ?? "", artist: tags.common.artist ?? "", artwork: objectUrl, loading: false });
+        const artwork = picture && picture.data.byteLength > 0 && picture.data.byteLength <= 8 * 1024 * 1024 && /^image\/(?:jpeg|png|gif|webp)$/i.test(picture.format) ? new Blob([Uint8Array.from(picture.data)], { type: picture.format.toLowerCase() }) : undefined;
+        const parsed = { title: (tags.common.title ?? "").slice(0, 1000), artist: (tags.common.artist ?? "").slice(0, 1000), artwork };
+        // Persist only a successful scan, and let it finish if the user switches files.
+        if (fingerprint) void rememberAudioInfo(fingerprint, parsed);
+        show(parsed);
       } catch { /* Missing metadata never blocks playback or online lookup. */ }
       finally { window.clearTimeout(timeout); if (active) setInfo((previous) => previous.loading ? { ...previous, loading: false } : previous); }
     })();
     return () => { active = false; controller.abort(); window.clearTimeout(timeout); if (objectUrl) URL.revokeObjectURL(objectUrl); };
-  }, [url, name]);
+  }, [url, name, fingerprint]);
   return info;
 }
+type NativeArtwork = { url: string; mime: string; data: string };
+function nativeArtwork(value: NativeArtwork | null): { url: string; blob: Blob } | null {
+  try {
+    if (!value || !validCoverUrl(value.url) || !/^image\/(?:jpeg|png|gif|webp)$/.test(value.mime) || value.data.length > 5_600_000) return null;
+    return { url: value.url, blob: new Blob([Uint8Array.from(atob(value.data), (char) => char.charCodeAt(0))], { type: value.mime }) };
+  } catch { return null; }
+}
 
-function useOnlineCover(info: AudioInfo, name: string, automatic: boolean) {
-  const [cover, setCover] = useState("");
+function useCoverFingerprint(vault: string, path: string, url: string, sample: boolean): string | null | undefined {
+  const source = `${vault}\0${path}\0${url}`;
+  const [result, setResult] = useState<{ source: string; id: string | null }>({ source: "", id: null });
+  useEffect(() => {
+    let active = true;
+    // A slow or unavailable native file cannot block playback or catalog lookup.
+    const timer = window.setTimeout(() => { if (active) setResult({ source, id: null }); }, 4_000);
+    void (async () => {
+      try {
+        const id = !path || !vault ? null : sample ? await sampleCoverFingerprint(path, url) : desktopAvailable ? await invoke<string>("music_file_fingerprint", { vault, path }) : null;
+        if (active) setResult({ source, id: typeof id === "string" && /^[a-f0-9]{64}$/.test(id) ? id : null });
+      } catch { if (active) setResult({ source, id: null }); }
+      finally { window.clearTimeout(timer); }
+    })();
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [source, vault, path, url, sample]);
+  return result.source === source ? result.id : undefined;
+}
+
+function useOnlineCover(info: AudioInfo, name: string, automatic: boolean, vault: string, path: string, url: string, fingerprint: string | null | undefined) {
+  const source = `${vault}\0${path}\0${url}`;
+  const [displayed, setDisplayed] = useState({ source: "", cover: "" });
+  const [restored, setRestored] = useState<{ source: string; fingerprint: string | null | undefined; status: "pending" | "hit" | "miss" }>({ source: "", fingerprint: undefined, status: "pending" });
   const [message, setMessage] = useState("");
   const [searching, setSearching] = useState(false);
   const [retry, setRetry] = useState(0);
+  const restoration = restored.source === source && restored.fingerprint === fingerprint ? restored.status : "pending";
+
+  // Restore by file identity immediately, without waiting for metadata parsing.
+  // Both native and browser aliases point to the bounded, existing image cache.
   useEffect(() => {
-    setCover(""); setMessage("");
-    if (info.loading || info.artwork) { setSearching(false); return; }
+    let active = true, objectUrl = "";
+    setDisplayed({ source, cover: "" }); setMessage(""); setSearching(false);
+    setRestored({ source, fingerprint, status: "pending" });
+    if (fingerprint === undefined) return () => { active = false; };
+    if (!fingerprint) { setRestored({ source, fingerprint, status: "miss" }); return () => { active = false; }; }
+    const show = (blob: Blob) => { if (active) { objectUrl = URL.createObjectURL(blob); setDisplayed({ source, cover: objectUrl }); } };
+    void (async () => {
+      try {
+        const alias = readCoverAlias(fingerprint);
+        const cached = alias ? await readCover(alias) : null;
+        if (cached?.blob) {
+          if (desktopAvailable && alias) void invoke("remember_music_cover_for_file", { fingerprint, query: alias }).catch(() => undefined);
+          show(cached.blob); if (active) setRestored({ source, fingerprint, status: "hit" }); return;
+        }
+        if (desktopAvailable) {
+          const found = await invoke<{ query: string; artwork: NativeArtwork } | null>("read_music_cover_for_file", { fingerprint }).catch(() => null);
+          const native = nativeArtwork(found?.artwork ?? null);
+          if (native && found?.query) {
+            const key = found.query.toLocaleLowerCase();
+            await saveCover(key, native.url, native.blob); saveCoverAlias(fingerprint, key);
+            show(native.blob); if (active) setRestored({ source, fingerprint, status: "hit" }); return;
+          }
+          // Existing query-only caches can be upgraded to file identity too.
+          if (alias) {
+            const old = nativeArtwork(await invoke<NativeArtwork | null>("read_cached_music_cover", { query: alias }).catch(() => null));
+            if (old) {
+              await saveCover(alias, old.url, old.blob); void invoke("remember_music_cover_for_file", { fingerprint, query: alias }).catch(() => undefined);
+              show(old.blob); if (active) setRestored({ source, fingerprint, status: "hit" }); return;
+            }
+          }
+        }
+        if (cached) {
+          // Older browser caches might have only a URL; show it and try to
+          // upgrade it to local bytes without re-searching the catalog.
+          if (active) { setDisplayed({ source, cover: cached.url }); setRestored({ source, fingerprint, status: "hit" }); }
+          if (!desktopAvailable && alias) {
+            const controller = new AbortController(), timer = window.setTimeout(() => controller.abort(), 15_000);
+            try { const blob = await downloadCover(cached.url, controller.signal); if (blob) { await saveCover(alias, cached.url, blob); show(blob); } }
+            catch { /* CORS or offline: the saved catalog URL is still usable. */ }
+            finally { window.clearTimeout(timer); }
+          }
+          return;
+        }
+      } catch { /* An unavailable cache must not prevent playback or lookup. */ }
+      if (active) setRestored({ source, fingerprint, status: "miss" });
+    })();
+    return () => { active = false; if (objectUrl) URL.revokeObjectURL(objectUrl); };
+  }, [source, fingerprint]);
+
+  useEffect(() => {
+    if (fingerprint === undefined || restoration !== "miss" || info.loading || info.artwork) return;
     const query = [info.artist, info.title || name.replace(/\.[^.]+$/, "")].filter(Boolean).join(" ").trim().slice(0, 400);
     if (!query) return;
-    const key = query.toLocaleLowerCase(); const controller = new AbortController(); let active = true, objectUrl = "";
+    const key = query.toLocaleLowerCase(), controller = new AbortController(); let active = true, objectUrl = "";
     const timeout = window.setTimeout(() => controller.abort(), 15_000);
+    const show = (blob: Blob) => { if (active) { objectUrl = URL.createObjectURL(blob); setDisplayed({ source, cover: objectUrl }); } };
+    const remember = () => {
+      if (!fingerprint) return;
+      saveCoverAlias(fingerprint, key);
+      if (desktopAvailable) void invoke("remember_music_cover_for_file", { fingerprint, query }).catch(() => undefined);
+    };
     void (async () => {
       try {
         const cached = await readCover(key);
         if (!active) return;
-        if (cached?.blob) { objectUrl = URL.createObjectURL(cached.blob); setCover(objectUrl); return; }
+        if (cached?.blob) { remember(); show(cached.blob); return; }
         if (desktopAvailable) {
-          const restore = await invoke<{ url: string; mime: string; data: string } | null>("read_cached_music_cover", { query });
-          if (!active) return;
-          if (restore && validCoverUrl(restore.url) && /^image\/(?:jpeg|png|gif|webp)$/.test(restore.mime) && restore.data.length <= 5_600_000) {
-            const blob = new Blob([Uint8Array.from(atob(restore.data), (char) => char.charCodeAt(0))], { type: restore.mime });
-            await saveCover(key, restore.url, blob); if (active) { objectUrl = URL.createObjectURL(blob); setCover(objectUrl); } return;
-          }
+          const restore = nativeArtwork(await invoke<NativeArtwork | null>("read_cached_music_cover", { query }).catch(() => null));
+          if (restore) { await saveCover(key, restore.url, restore.blob); remember(); show(restore.blob); return; }
         }
         if (cached) {
-          setCover(cached.url);
-          // Older cache entries may contain only the catalog URL. Upgrade them
-          // to local bytes when possible rather than depending on the network.
+          if (active) setDisplayed({ source, cover: cached.url });
+          remember();
+          // A query-only URL is upgraded in the background whenever possible.
           if (desktopAvailable && (automatic || retry)) {
             try {
-              const result = await invoke<{ url: string; mime: string; data: string } | null>("lookup_music_cover", { query });
-              if (result && validCoverUrl(result.url) && /^image\/(?:jpeg|png|gif|webp)$/.test(result.mime) && result.data.length <= 5_600_000) {
-                const blob = new Blob([Uint8Array.from(atob(result.data), (char) => char.charCodeAt(0))], { type: result.mime });
-                await saveCover(key, result.url, blob); if (active) { objectUrl = URL.createObjectURL(blob); setCover(objectUrl); }
-              }
+              const result = nativeArtwork(await invoke<NativeArtwork | null>("lookup_music_cover", { query }));
+              if (result) { await saveCover(key, result.url, result.blob); remember(); show(result.blob); }
             } catch { /* The existing URL is still usable. */ }
           } else if (!desktopAvailable) {
-            const imageRequest = new AbortController(); const imageTimeout = window.setTimeout(() => imageRequest.abort(), 15_000);
-            try { const blob = await downloadCover(cached.url, imageRequest.signal); if (blob) { await saveCover(key, cached.url, blob); if (active) { objectUrl = URL.createObjectURL(blob); setCover(objectUrl); } } }
+            const imageRequest = new AbortController(), imageTimeout = window.setTimeout(() => imageRequest.abort(), 15_000);
+            try { const blob = await downloadCover(cached.url, imageRequest.signal); if (blob) { await saveCover(key, cached.url, blob); show(blob); } }
             catch { /* Some catalog images cannot be fetched across origins. */ }
             finally { window.clearTimeout(imageTimeout); }
           }
@@ -116,11 +238,9 @@ function useOnlineCover(info: AudioInfo, name: string, automatic: boolean) {
         if (!automatic && !retry) return;
         setSearching(true);
         if (desktopAvailable) {
-          const result = await invoke<{ url: string; mime: string; data: string } | null>("lookup_music_cover", { query });
-          if (!result || !validCoverUrl(result.url) || !/^image\/(?:jpeg|png|gif|webp)$/.test(result.mime) || result.data.length > 5_600_000) throw new Error("No cover found");
-          const bytes = Uint8Array.from(atob(result.data), (char) => char.charCodeAt(0));
-          const blob = new Blob([bytes], { type: result.mime });
-          await saveCover(key, result.url, blob); if (active) { objectUrl = URL.createObjectURL(blob); setCover(objectUrl); } return;
+          const result = nativeArtwork(await invoke<NativeArtwork | null>("lookup_music_cover", { query }));
+          if (!result) throw new Error("No cover found");
+          await saveCover(key, result.url, result.blob); remember(); show(result.blob); return;
         }
         const response = await fetch(`https://itunes.apple.com/search?media=music&entity=song&limit=1&term=${encodeURIComponent(query)}`, { signal: controller.signal });
         if (!response.ok) throw new Error("Search failed");
@@ -129,29 +249,24 @@ function useOnlineCover(info: AudioInfo, name: string, automatic: boolean) {
         const candidate = first && typeof first.artworkUrl100 === "string" ? first.artworkUrl100.replace(/100x100[^/]*\./, "600x600bb.") : "";
         if (!validCoverUrl(candidate)) throw new Error("No cover found");
         if (!active) return;
-        setCover(candidate); await saveCover(key, candidate);
-        // Once a cover is found, let its bounded download finish even if the
-        // player unmounts while switching files. It can then be reused offline.
-        const imageRequest = new AbortController();
-        const imageTimeout = window.setTimeout(() => imageRequest.abort(), 15_000);
-        try {
-          const blob = await downloadCover(candidate, imageRequest.signal);
-          if (blob) { await saveCover(key, candidate, blob); if (active) { objectUrl = URL.createObjectURL(blob); setCover(objectUrl); } }
-        } catch { /* A remote image URL is still usable if CORS blocks caching. */ }
+        setDisplayed({ source, cover: candidate }); await saveCover(key, candidate); remember();
+        // Finish the bounded image download even if the user switches files.
+        const imageRequest = new AbortController(), imageTimeout = window.setTimeout(() => imageRequest.abort(), 15_000);
+        try { const blob = await downloadCover(candidate, imageRequest.signal); if (blob) { await saveCover(key, candidate, blob); show(blob); } }
+        catch { /* A remote image URL is still usable if CORS blocks caching. */ }
         finally { window.clearTimeout(imageTimeout); }
       } catch { if (active && retry) setMessage("No cover found. You can still play this track."); }
       finally { window.clearTimeout(timeout); if (active) setSearching(false); }
     })();
     return () => { active = false; controller.abort(); window.clearTimeout(timeout); if (objectUrl) URL.revokeObjectURL(objectUrl); };
-  }, [info.loading, info.artwork, info.artist, info.title, name, automatic, retry]);
-  return { cover, message, searching, search: () => setRetry((value) => value + 1) };
+  }, [source, fingerprint, restoration, info.loading, info.artwork, info.artist, info.title, name, automatic, retry]);
+  return { cover: displayed.source === source ? displayed.cover : "", message, searching, search: () => setRetry((value) => value + 1) };
 }
-
-export function AudioPlayer({ url, name, autoCoverArt = true }: { url: string; name: string; autoCoverArt?: boolean }) {
+export function AudioPlayer({ url, name, vault = "", path = "", sample = false, autoCoverArt = true }: { url: string; name: string; vault?: string; path?: string; sample?: boolean; autoCoverArt?: boolean }) {
   const audio = useRef<HTMLAudioElement>(null); const player = useRef<HTMLDivElement>(null); const visualizer = useRef<HTMLCanvasElement>(null); const volumeArea = useRef<HTMLDivElement>(null);
   const context = useRef<AudioContext | null>(null); const analyser = useRef<AnalyserNode | null>(null); const nativeFullscreen = useRef(false);
   const [playing, setPlaying] = useState(false); const [current, setCurrent] = useState(0); const [duration, setDuration] = useState(0); const [volume, setVolume] = useState(1); const [failed, setFailed] = useState(""); const [fullPlayer, setFullPlayer] = useState(false);
-  const info = useAudioInfo(url, name); const online = useOnlineCover(info, name, autoCoverArt); const artwork = info.artwork || online.cover;
+  const fingerprint = useCoverFingerprint(vault, path, url, sample); const info = useAudioInfo(url, name, fingerprint); const online = useOnlineCover(info, name, autoCoverArt, vault, path, url, fingerprint); const artwork = info.artwork || online.cover;
   const changeVolume = (value: number) => { const next = boundVolume(value); if (audio.current) audio.current.volume = next; setVolume(next); };
   const adjustVolume = (delta: number) => setVolume((previous) => { const next = boundVolume(previous + delta); if (audio.current) audio.current.volume = next; return next; });
   useVolumeWheel(volumeArea, adjustVolume);

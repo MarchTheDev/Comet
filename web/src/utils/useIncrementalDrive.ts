@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { readRcloneBinding } from "./rcloneBinding";
 import { DriveSyncRunner, readDriveActivity, readDriveBinding, recordDriveActivity, saveDriveBinding, type DriveActivity, type DriveApplied, type DriveBinding, type DrivePhase, type DrivePrepared, type DrivePublished } from "./incrementalSync";
 
 export type DriveStatus = "off" | "paused" | "waiting" | "checking" | "applying" | "uploading" | "error" | "synced";
@@ -15,6 +16,8 @@ export interface IncrementalDriveController {
   pause(): void;
   resume(): void;
   connectionChanged(connected: boolean): void;
+  changed(): void;
+  finishForQuit(): Promise<boolean>;
 }
 interface Options { desktop: boolean; vault: string; isSample: boolean; beforeApply(vault: string, incoming: boolean): Promise<boolean>; afterApply(vault: string, result: DriveApplied | null): Promise<void> }
 const INTERVAL = 30_000;
@@ -28,8 +31,9 @@ export function useIncrementalDrive(options: Options): IncrementalDriveControlle
   const [connected, setConnected] = useState(false), connectionRef = useRef(false);
   const [busy, setBusy] = useState(false), busyRef = useRef(false);
   const timer = useRef<number | null>(null), failures = useRef(0), mounted = useRef(true), runnerVault = useRef("");
-  const recovered = useRef<Promise<unknown> | null>(null);
-  const runRef = useRef<(initial?: boolean) => Promise<void>>(async () => {});
+  const recovered = useRef<Promise<unknown> | null>(null), pendingChanges = useRef(false);
+  const activeRun = useRef<Promise<boolean> | null>(null);
+  const runRef = useRef<(initial?: boolean) => Promise<boolean>>(async () => false);
   const schedule = useCallback((delay: number) => {
     if (timer.current !== null) window.clearTimeout(timer.current);
     timer.current = window.setTimeout(() => { timer.current = null; void runRef.current(); }, delay);
@@ -42,20 +46,21 @@ export function useIncrementalDrive(options: Options): IncrementalDriveControlle
     abort: (ticket) => invoke("google_incremental_abort", { ticket }),
     beforeApply: (vault, incoming) => latest.current.beforeApply(vault, incoming),
     afterApply: (vault, result) => latest.current.afterApply(vault, result),
-    isCurrent: (vault) => mounted.current && latest.current.vault === vault && connectionRef.current,
+    isCurrent: (vault) => mounted.current && latest.current.vault === vault && connectionRef.current && !readRcloneBinding(vault)?.enabled,
     save: (vault, next) => saveDriveBinding(vault, next),
     phase: (phase: DrivePhase) => { if (mounted.current && latest.current.vault === runnerVault.current) setStatus(phase); },
   });
-  const run = useCallback(async (initial = false) => {
+  const execute = useCallback(async (initial = false): Promise<boolean> => {
     const { vault, desktop, isSample } = latest.current;
     const current = readDriveBinding(vault);
-    if (busyRef.current || !desktop || isSample || !connectionRef.current || (!initial && !current?.enabled)) return;
+    if (busyRef.current || !desktop || isSample || !connectionRef.current || (!initial && !current?.enabled)) return false;
+    if (readRcloneBinding(vault)?.enabled) { setStatus("error"); setDetail("Pause rclone cloud sync before using the older Google Drive sync. Both histories are preserved."); return false; }
     if (timer.current !== null) { window.clearTimeout(timer.current); timer.current = null; }
-    busyRef.current = true; runnerVault.current = vault; setBusy(true); setDetail("");
+    pendingChanges.current = false; busyRef.current = true; runnerVault.current = vault; setBusy(true); setDetail("");
     try {
       if (recovered.current) await recovered.current;
       const result = await runner.current!.run(vault, initial ? null : current);
-      if (!mounted.current || latest.current.vault !== vault) return;
+      if (!mounted.current || latest.current.vault !== vault) return false;
       if (result) {
         failures.current = 0; setBinding(result.binding); setStatus("synced");
         const { applied, deleted, conflicts, uploaded, downloaded, safetyFolder, more } = result.summary;
@@ -65,25 +70,35 @@ export function useIncrementalDrive(options: Options): IncrementalDriveControlle
           setActivity(recordDriveActivity(vault, { time: Date.now(), kind: conflicts ? "conflict" : "sync", text: description }));
         }
         schedule(more ? 1000 : INTERVAL);
+        return true;
       } else {
         setStatus("waiting"); setDetail("Waiting until the workspace is ready to sync.");
         if (readDriveBinding(vault)?.enabled) schedule(5000);
+        return false;
       }
     } catch (error) {
-      if (!mounted.current || latest.current.vault !== vault) return;
+      if (!mounted.current || latest.current.vault !== vault) return false;
       const description = error instanceof Error ? error.message : String(error);
       setStatus("error"); setDetail(description);
       if (failures.current === 0) setActivity(recordDriveActivity(vault, { time: Date.now(), kind: "error", text: description }));
       failures.current += 1;
       if (readDriveBinding(vault)?.enabled && connectionRef.current) schedule(Math.min(MAX_RETRY, 15_000 * 2 ** Math.min(failures.current - 1, 5)));
+      return false;
     } finally {
       busyRef.current = false;
       if (mounted.current) {
         setBusy(false);
         if (latest.current.vault !== vault && connectionRef.current && readDriveBinding(latest.current.vault)?.enabled) schedule(250);
+        else if (pendingChanges.current && readDriveBinding(vault)?.enabled) schedule(1200);
       }
     }
   }, [schedule]);
+  const run = useCallback((initial = false) => {
+    if (activeRun.current) return activeRun.current;
+    const promise = execute(initial); activeRun.current = promise;
+    void promise.finally(() => { if (activeRun.current === promise) activeRun.current = null; });
+    return promise;
+  }, [execute]);
   runRef.current = run;
   useEffect(() => {
     mounted.current = true;
@@ -125,8 +140,11 @@ export function useIncrementalDrive(options: Options): IncrementalDriveControlle
   const resume = useCallback(() => {
     const vault = latest.current.vault, current = readDriveBinding(vault);
     if (!current || busyRef.current) return;
+    if (readRcloneBinding(vault)?.enabled) { setStatus("error"); setDetail("Pause rclone cloud sync before resuming the older Google Drive sync."); return; }
     try { const next = { ...current, enabled: true }; saveDriveBinding(vault, next); setBinding(next); setStatus("waiting"); setDetail(""); if (connectionRef.current) schedule(250); }
     catch { setStatus("error"); setDetail("Couldn't save the sync setting on this device."); }
   }, [schedule]);
-  return { binding, status, detail, busy, connected, activity, start, retry, pause, resume, connectionChanged };
+  const changed = useCallback(() => { if (readDriveBinding(latest.current.vault)?.enabled) { pendingChanges.current = true; if (!busyRef.current) schedule(1200); } }, [schedule]);
+  const finishForQuit = useCallback(async () => { if (!readDriveBinding(latest.current.vault)?.enabled) return true; if (activeRun.current) await activeRun.current; return run(); }, [run]);
+  return { binding, status, detail, busy, connected, activity, start, retry, pause, resume, connectionChanged, changed, finishForQuit };
 }

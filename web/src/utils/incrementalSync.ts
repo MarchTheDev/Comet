@@ -62,9 +62,9 @@ export class DriveSyncRunner {
       for (let count = 0; count < 5; count++) {
         this.adapter.phase("checking");
         const prepared = await this.adapter.prepare(vault, current?.group ?? "", current?.base ?? "");
-        if (!prepared || !/^[0-9a-f]{32}$/i.test(prepared.ticket)) throw new Error("Drive returned an invalid sync operation.");
+        if (!prepared || !/^[0-9a-f]{32}$/i.test(prepared.ticket)) throw new Error("Cloud returned an invalid sync operation.");
         ticket = prepared.ticket;
-        if (typeof prepared.incoming !== "boolean") throw new Error("Drive returned an invalid sync operation.");
+        if (typeof prepared.incoming !== "boolean") throw new Error("Cloud returned an invalid sync operation.");
         if (!this.adapter.isCurrent(vault)) return null;
         if (!(await this.adapter.beforeApply(vault, prepared.incoming))) return null;
         applying = true;
@@ -84,9 +84,9 @@ export class DriveSyncRunner {
         const published = await this.adapter.publish(ticket);
         ticket = ""; // publication releases the native job even when successful
         const next: DriveBinding = { group: published.group, base: published.base, enabled: true };
-        if (!validBinding(next)) throw new Error("Drive returned invalid sync state; local files were preserved.");
+        if (!validBinding(next)) throw new Error("Cloud returned invalid sync state; local files were preserved.");
         try { this.adapter.save(vault, next); }
-        catch { throw new Error("Drive received a revision, but this device could not save its sync state. Local files were preserved; restore device storage before retrying."); }
+        catch { throw new Error("Cloud received a revision, but this device could not save its sync state. Local files were preserved; restore device storage before retrying."); }
         current = next;
         summary.uploaded += published.uploaded; summary.downloaded += published.downloaded; summary.more = published.more;
         if (!published.more || !this.adapter.isCurrent(vault)) break;

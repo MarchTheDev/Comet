@@ -224,7 +224,7 @@ mod tests {
     }
 }
 
-/// Three-way merge for Drive revisions. Never overwrites a changed local file;
+/// Three-way merge for cloud revisions. Never overwrites a changed local file;
 /// replaced/deleted originals are moved to a separate same-volume safety folder
 /// before create-new writes, so a racing editor cannot silently lose its work.
 #[derive(Debug, serde::Serialize)]
@@ -251,7 +251,7 @@ fn conflict_path(path: &Path, tag: &str, index: usize) -> Result<PathBuf, String
     let name = path.file_name().and_then(|part| part.to_str()).ok_or("A sync filename is not UTF-8.")?;
     // Keep extensions at the end so conflict copies still open as their type.
     let (stem, ext) = name.rsplit_once('.').filter(|(stem, _)| !stem.is_empty()).map(|(stem, ext)| (stem, format!(".{ext}"))).unwrap_or((name, String::new()));
-    let suffix = if index == 0 { format!(" (Google conflict {tag}){ext}") } else { format!(" (Google conflict {tag}-{index}){ext}") };
+    let suffix = if index == 0 { format!(" (sync conflict {tag}){ext}") } else { format!(" (sync conflict {tag}-{index}){ext}") };
     if suffix.len() >= 255 { return Err("A sync filename is too long to preserve a conflict.".into()); }
     let limit = 255 - suffix.len();
     let mut trimmed = stem.to_string(); while trimmed.len() > limit { trimmed.pop(); }
@@ -446,12 +446,12 @@ mod sync_tests {
         assert_eq!(fs::read_to_string(local.join("conflict.txt")).unwrap(), "local edit");
         assert!(!local.join("deleted.txt").exists()); assert_eq!(fs::read_to_string(local.join("new.txt")).unwrap(), "new");
         assert_eq!(summary.conflicts, 1); assert_eq!(summary.deleted, 1);
-        let conflict = fs::read_dir(&local).unwrap().map(Result::unwrap).find(|entry| entry.file_name().to_string_lossy().starts_with("conflict (Google conflict ")).unwrap();
+        let conflict = fs::read_dir(&local).unwrap().map(Result::unwrap).find(|entry| entry.file_name().to_string_lossy().starts_with("conflict (sync conflict ")).unwrap();
         assert_eq!(fs::read_to_string(conflict.path()).unwrap(), "remote edit");
         let safety = PathBuf::from(summary.safety_folder.unwrap()); assert_eq!(fs::read_dir(&safety).unwrap().count(), 2);
         // Retrying with the same baseline does not duplicate the remote conflict.
         merge(local.to_str().unwrap(), Some(&base_bytes), &remote_bytes).unwrap();
-        assert_eq!(fs::read_dir(&local).unwrap().map(Result::unwrap).filter(|entry| entry.file_name().to_string_lossy().starts_with("conflict (Google conflict ")).count(), 1);
+        assert_eq!(fs::read_dir(&local).unwrap().map(Result::unwrap).filter(|entry| entry.file_name().to_string_lossy().starts_with("conflict (sync conflict ")).count(), 1);
         fs::remove_dir_all(area).unwrap();
     }
     #[test]

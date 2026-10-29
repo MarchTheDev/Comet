@@ -131,6 +131,19 @@ jobs:
       # nsis makes the setup exe, msi makes an installer for anyone who prefers
       # that. Both are built from the same binary, which is also left behind:
       # that is the standalone exe.
+      - name: Bundle verified rclone for Windows x64
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP "rclone-v1.75.2-windows-amd64.zip"
+          Invoke-WebRequest -Uri "https://github.com/rclone/rclone/releases/download/v1.75.2/rclone-v1.75.2-windows-amd64.zip" -OutFile $archive
+          $actual = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne "8a9db2bad1dc79a65b3348fd857069598e2aab7cf4d118b77b1df23055aff818") { throw "rclone archive checksum mismatch" }
+          Expand-Archive $archive -DestinationPath (Join-Path $env:RUNNER_TEMP "comet-rclone")
+          $exe = Join-Path $env:RUNNER_TEMP "comet-rclone/rclone-v1.75.2-windows-amd64/rclone.exe"
+          if (-not (Test-Path $exe)) { throw "Verified rclone executable not found" }
+          "COMET_RCLONE_BIN=$exe" >> $env:GITHUB_ENV
+          "COMET_REQUIRE_BUNDLED_RCLONE=1" >> $env:GITHUB_ENV
+
       - name: Build
         working-directory: web
         run: npx tauri build --bundles nsis,msi

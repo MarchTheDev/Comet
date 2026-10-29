@@ -71,6 +71,15 @@ jobs:
         with:
           workspaces: web/src-tauri
 
+      - name: Prepare official rclone for local transport contract tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 https://github.com/rclone/rclone/releases/download/v1.75.2/rclone-v1.75.2-linux-amd64.zip -o "$RUNNER_TEMP/rclone.zip"
+          echo "349ac8fba6ff65d6247043f1750cdcb518ec5d500ef91463a10d37c0ccdf3702  $RUNNER_TEMP/rclone.zip" | sha256sum --check
+          unzip -q "$RUNNER_TEMP/rclone.zip" -d "$RUNNER_TEMP/rclone"
+          echo "COMET_RCLONE_TEST_BIN=$RUNNER_TEMP/rclone/rclone-v1.75.2-linux-amd64/rclone" >> "$GITHUB_ENV"
+
       # `--message-format=short` puts every compile error on one line with its
       # file and position, which is what the annotations below need.
       #

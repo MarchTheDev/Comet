@@ -46,6 +46,17 @@ remove either.
 4. Review the release notes, then publish the draft when ready. The workflow
    leaves an already-published release untouched.
 
+### Bundled rclone
+
+The Windows workflow downloads official rclone v1.75.2 for AMD64, verifies the
+pinned SHA-256, and embeds it into the executable. It fails closed if the bundle
+is unavailable. Its MIT notice is included in Cloud settings. For local release
+builds, download and verify the same official ZIP, set `COMET_RCLONE_BIN` to its
+extracted `rclone.exe` and set `COMET_REQUIRE_BUNDLED_RCLONE=1` before the build.
+Debug builds can alternatively use `COMET_RCLONE_DEV_BIN` at runtime. Manually
+building another platform requires its own matching rclone binary. See
+[rclone sync](rclone-sync.md) for security, limits and real-device test steps.
+
 ### Google sign-in configuration
 
 Google requires a registered Desktop OAuth client. Create one for the Comet

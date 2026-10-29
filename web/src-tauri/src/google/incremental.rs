@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::Manager;
 
-const MANIFEST_LIMIT: usize = 8 * 1024 * 1024;
+pub(crate) const MANIFEST_LIMIT: usize = 8 * 1024 * 1024;
 #[cfg(test)]
 static TEST_DRIVE_ORIGIN: Mutex<Option<String>> = Mutex::new(None);
 fn drive_url(path: &str) -> String {
@@ -25,23 +25,23 @@ static PREPARED: Mutex<Option<Job>> = Mutex::new(None);
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Manifest {
-    version: u8,
-    group: String,
-    entries: Vec<ManifestEntry>,
+pub(crate) struct Manifest {
+    pub(crate) version: u8,
+    pub(crate) group: String,
+    pub(crate) entries: Vec<ManifestEntry>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ManifestEntry {
-    path: String,
-    directory: bool,
-    size: u64,
-    hash: Option<String>,
-    blob: Option<String>,
+pub(crate) struct ManifestEntry {
+    pub(crate) path: String,
+    pub(crate) directory: bool,
+    pub(crate) size: u64,
+    pub(crate) hash: Option<String>,
+    pub(crate) blob: Option<String>,
 }
-fn hash(bytes: &[u8]) -> String { Sha256::digest(bytes).iter().map(|byte| format!("{byte:02x}")).collect() }
-fn hash_ok(value: &str) -> bool { value.len() == 64 && value.bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c)) }
-fn validate_manifest(manifest: &Manifest, group: &str) -> Result<(), String> {
+pub(crate) fn hash(bytes: &[u8]) -> String { Sha256::digest(bytes).iter().map(|byte| format!("{byte:02x}")).collect() }
+pub(crate) fn hash_ok(value: &str) -> bool { value.len() == 64 && value.bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c)) }
+pub(crate) fn validate_manifest(manifest: &Manifest, group: &str) -> Result<(), String> {
     if manifest.version != 3 || !group_id(group) || manifest.group != group || manifest.entries.len() > MAX_ENTRIES {
         return Err("Invalid incremental workspace manifest. Nothing was changed.".into());
     }
@@ -68,16 +68,16 @@ fn validate_manifest(manifest: &Manifest, group: &str) -> Result<(), String> {
     }
     Ok(())
 }
-fn fingerprint_archive(bytes: &[u8]) -> Result<BTreeMap<String, (bool, u64, Option<String>)>, String> {
+pub(crate) fn fingerprint_archive(bytes: &[u8]) -> Result<BTreeMap<String, (bool, u64, Option<String>)>, String> {
     Ok(workspace_archive::entries(bytes)?.into_iter().map(|entry| {
         let digest = if entry.directory { None } else { Some(hash(entry.bytes)) };
         (entry.name, (entry.directory, entry.bytes.len() as u64, digest))
     }).collect())
 }
-fn fingerprint_manifest(manifest: &Manifest) -> BTreeMap<String, (bool, u64, Option<String>)> {
+pub(crate) fn fingerprint_manifest(manifest: &Manifest) -> BTreeMap<String, (bool, u64, Option<String>)> {
     manifest.entries.iter().map(|entry| (entry.path.clone(), (entry.directory, entry.size, entry.hash.clone()))).collect()
 }
-fn archive_matches(bytes: &[u8], manifest: &Manifest) -> bool {
+pub(crate) fn archive_matches(bytes: &[u8], manifest: &Manifest) -> bool {
     fingerprint_archive(bytes).ok().is_some_and(|actual| actual == fingerprint_manifest(manifest))
 }
 
@@ -114,10 +114,10 @@ async fn revisions3(access: &str) -> Result<Vec<Revision>, String> {
     }
     Err("Too many sync revisions to list safely. No files were changed.".into())
 }
-fn validate_history(revisions: &[Revision]) -> Result<(), String> {
+pub(crate) fn validate_history(revisions: &[Revision]) -> Result<(), String> {
     let ids: HashSet<&str> = revisions.iter().map(|item| item.id.as_str()).collect();
     if ids.len() != revisions.len() || revisions.iter().any(|item| item.parents.iter().any(|p| !ids.contains(p.as_str()))) {
-        return Err("The Drive sync history is incomplete. No local files were changed; restore missing revisions or reconnect the original account.".into());
+        return Err("The cloud sync history is incomplete. No local files were changed; restore missing revisions or reconnect the original account.".into());
     }
     let mut remaining: HashMap<&str, usize> = revisions.iter().map(|item| (item.id.as_str(), item.parents.len())).collect();
     let mut children: HashMap<&str, Vec<&str>> = HashMap::new();
@@ -130,7 +130,7 @@ fn validate_history(revisions: &[Revision]) -> Result<(), String> {
             if let Some(count) = remaining.get_mut(child) { *count -= 1; if *count == 0 { roots.push(child); } }
         } }
     }
-    if seen != revisions.len() { return Err("The Drive sync history contains a cycle. No local files were changed.".into()); }
+    if seen != revisions.len() { return Err("The cloud sync history contains a cycle. No local files were changed.".into()); }
     Ok(())
 }
 async fn media(access: &str, id: &str, limit: usize) -> Result<Vec<u8>, String> {
@@ -217,7 +217,7 @@ fn cache_dir(app: &tauri::AppHandle, group: &str) -> Result<PathBuf, String> {
     }
     Ok(root)
 }
-fn read_cache(app: &tauri::AppHandle, group: &str, id: &str, manifest: &Manifest) -> Option<Vec<u8>> {
+pub(crate) fn read_cache(app: &tauri::AppHandle, group: &str, id: &str, manifest: &Manifest) -> Option<Vec<u8>> {
     if !drive_id(id) { return None; }
     let path = cache_dir(app, group).ok()?.join(format!("{id}.comet-cache"));
     let meta = fs::symlink_metadata(&path).ok()?;
@@ -225,7 +225,7 @@ fn read_cache(app: &tauri::AppHandle, group: &str, id: &str, manifest: &Manifest
     let bytes = fs::read(path).ok()?;
     archive_matches(&bytes, manifest).then_some(bytes)
 }
-fn write_cache(app: &tauri::AppHandle, group: &str, id: &str, bytes: &[u8]) -> Result<(), String> {
+pub(crate) fn write_cache(app: &tauri::AppHandle, group: &str, id: &str, bytes: &[u8]) -> Result<(), String> {
     if !drive_id(id) || bytes.len() > MAX_ARCHIVE { return Err("Invalid sync cache item.".into()); }
     let dir = cache_dir(app, group)?;
     let target = dir.join(format!("{id}.comet-cache"));
@@ -317,7 +317,7 @@ fn acquire_sync() -> bool {
     }
     false
 }
-fn ticket() -> Result<String, String> {
+pub(crate) fn ticket() -> Result<String, String> {
     let mut nonce = [0u8; 16]; getrandom::fill(&mut nonce).map_err(|_| "Couldn't start sync.")?;
     Ok(nonce.iter().map(|b| format!("{b:02x}")).collect())
 }

@@ -10,6 +10,7 @@ use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
 mod update;
 mod google;
+mod rclone_sync;
 mod workspace_archive;
 mod artwork;
 mod upload;
@@ -513,6 +514,19 @@ pub fn run() {
             google::incremental::google_incremental_recover,
             google::incremental::google_incremental_list,
             google::incremental::google_incremental_import,
+            rclone_sync::rclone_accounts,
+            rclone_sync::rclone_connect_google,
+            rclone_sync::rclone_disconnect,
+            rclone_sync::rclone_icloud_begin,
+            rclone_sync::rclone_icloud_continue,
+            rclone_sync::rclone_icloud_cancel,
+            rclone_sync::rclone_incremental_prepare,
+            rclone_sync::rclone_incremental_apply,
+            rclone_sync::rclone_incremental_publish,
+            rclone_sync::rclone_incremental_abort,
+            rclone_sync::rclone_incremental_recover,
+            rclone_sync::rclone_incremental_list,
+            rclone_sync::rclone_incremental_import,
             quit_app,
             open_vault_file,
             open_workspace_directory,

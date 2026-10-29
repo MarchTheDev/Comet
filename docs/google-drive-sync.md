@@ -1,5 +1,7 @@
 # Google Drive workspace sync
 
+For the newer, separate rclone transport and experimental iCloud Drive support, see [rclone sync](rclone-sync.md). The direct Drive histories below remain unchanged and are not migrated automatically.
+
 ## What is implemented
 
 Comet has a **preview** of automatic, file-level Google Drive sync. After the user opts in for a local workspace, Comet checks for changes while it is open (including in the tray), normally every 30 seconds, and retries after connection errors with backoff. Local files remain usable offline; when the app and connection are available again, the current local state is compared with the last saved baseline. Nothing syncs while Comet is fully closed.

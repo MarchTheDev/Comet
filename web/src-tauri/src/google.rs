@@ -16,7 +16,7 @@ const SERVICE: &str = "com.marco.comet.google";
 static CONNECTING: AtomicBool = AtomicBool::new(false);
 
 #[derive(Serialize, Deserialize)]
-struct Credentials { client_id: String, client_secret: String, refresh_token: String }
+pub(crate) struct Credentials { pub(crate) client_id: String, pub(crate) client_secret: String, pub(crate) refresh_token: String }
 #[derive(Deserialize)]
 struct TokenReply { access_token: Option<String>, refresh_token: Option<String>, scope: Option<String> }
 
@@ -32,7 +32,7 @@ fn entry(service: &str) -> Result<keyring::Entry, String> {
     scope(service)?;
     keyring::Entry::new(SERVICE, service).map_err(|_| "The system credential store isn't available.".into())
 }
-fn read_credentials(service: &str) -> Result<Credentials, String> {
+pub(crate) fn read_credentials(service: &str) -> Result<Credentials, String> {
     let raw = match entry("all")?.get_password() {
         Ok(raw) => raw,
         Err(keyring::Error::NoEntry) if service != "all" => entry(service)?.get_password().map_err(|_| "Google isn't connected or the system credential store is locked.")?,
@@ -44,7 +44,7 @@ fn client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder().user_agent(concat!("Comet/", env!("CARGO_PKG_VERSION")))
         .redirect(reqwest::redirect::Policy::none()).timeout(Duration::from_secs(60)).build().map_err(|_| "Couldn't initialize the network connection.".into())
 }
-struct ConnectingGuard(&'static AtomicBool);
+pub(crate) struct ConnectingGuard(pub(crate) &'static AtomicBool);
 impl Drop for ConnectingGuard { fn drop(&mut self) { self.0.store(false, Ordering::Release); } }
 
 #[tauri::command]
@@ -140,7 +140,7 @@ fn wait_callback(listener: TcpListener, expected: &str) -> Result<String, String
     Err("Google sign-in timed out. Please try again.".into())
 }
 
-async fn token(service: &str) -> Result<String, String> {
+pub(crate) async fn token(service: &str) -> Result<String, String> {
     let name = service.to_string();
     let credentials = tauri::async_runtime::spawn_blocking(move || read_credentials(&name)).await.map_err(|_| "Couldn't read Google authorization.")??;
     let mut form = vec![("client_id", credentials.client_id.as_str()), ("refresh_token", credentials.refresh_token.as_str()), ("grant_type", "refresh_token")];
@@ -216,7 +216,7 @@ pub async fn google_calendar_delete(id: String, etag: String) -> Result<(), Stri
 
 // Drive snapshots are immutable and explicit: no existing file or workspace is
 // overwritten, so two devices cannot silently destroy each other's changes.
-fn drive_id(value: &str) -> bool { !value.is_empty() && value.len() <= 200 && value.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-')) }
+pub(crate) fn drive_id(value: &str) -> bool { !value.is_empty() && value.len() <= 200 && value.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-')) }
 fn drive_client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder().user_agent(concat!("Comet/", env!("CARGO_PKG_VERSION")))
         .redirect(reqwest::redirect::Policy::none()).timeout(Duration::from_secs(900)).build().map_err(|_| "Couldn't initialize the network connection.".into())
@@ -290,10 +290,10 @@ mod tests {
 // Immutable revision snapshots form a small DAG. Concurrent uploads create
 // separate heads; a later sync merges them with their common ancestor rather
 // than letting a last-writer-wins update erase another device's work.
-static SYNCING: AtomicBool = AtomicBool::new(false);
+pub(crate) static SYNCING: AtomicBool = AtomicBool::new(false);
 #[derive(Clone, Debug)]
-struct Revision { id: String, group: String, name: String, modified: String, parents: Vec<String> }
-fn group_id(value: &str) -> bool { value.len() == 32 && value.bytes().all(|b| b.is_ascii_hexdigit()) }
+pub(crate) struct Revision { pub(crate) id: String, pub(crate) group: String, pub(crate) name: String, pub(crate) modified: String, pub(crate) parents: Vec<String> }
+pub(crate) fn group_id(value: &str) -> bool { value.len() == 32 && value.bytes().all(|b| b.is_ascii_hexdigit()) }
 fn revision(value: &Value) -> Option<Revision> {
     let id = value.get("id")?.as_str()?.to_string(); let props = value.get("appProperties")?.as_object()?;
     let group = props.get("cometGroup")?.as_str()?.to_string();
@@ -316,11 +316,11 @@ async fn revisions(access: &str) -> Result<Vec<Revision>, String> {
     }
     Err("Too many sync revisions to list safely. No files were changed.".into())
 }
-fn heads(revisions: &[Revision]) -> Vec<&Revision> {
+pub(crate) fn heads(revisions: &[Revision]) -> Vec<&Revision> {
     let referenced: std::collections::HashSet<&str> = revisions.iter().flat_map(|r| r.parents.iter().map(String::as_str)).collect();
     revisions.iter().filter(|r| !referenced.contains(r.id.as_str())).collect()
 }
-fn ancestor_distances(id: &str, revisions: &[Revision]) -> std::collections::HashMap<String, usize> {
+pub(crate) fn ancestor_distances(id: &str, revisions: &[Revision]) -> std::collections::HashMap<String, usize> {
     let map: std::collections::HashMap<&str, &Revision> = revisions.iter().map(|r| (r.id.as_str(), r)).collect();
     let mut distances = std::collections::HashMap::new(); let mut pending = std::collections::VecDeque::from([(id.to_string(), 0usize)]);
     while let Some((next, distance)) = pending.pop_front() {
@@ -330,7 +330,7 @@ fn ancestor_distances(id: &str, revisions: &[Revision]) -> std::collections::Has
     }
     distances
 }
-fn common_ancestor(left: &str, right: &str, revisions: &[Revision]) -> Option<String> {
+pub(crate) fn common_ancestor(left: &str, right: &str, revisions: &[Revision]) -> Option<String> {
     let a = ancestor_distances(left, revisions); let b = ancestor_distances(right, revisions);
     a.iter().filter_map(|(id, distance)| b.get(id).map(|other| (id, distance + other))).min_by(|(left_id, left_distance), (right_id, right_distance)| left_distance.cmp(right_distance).then_with(|| left_id.cmp(right_id))).map(|(id, _)| id.clone())
 }

@@ -58,6 +58,7 @@ import { loadMarkdownNote } from "./utils/editor";
 import { SAMPLE_ROOT, SAMPLE_WELCOME, sampleVault } from "./utils/sampleVault";
 import { SaveQueue, type SaveState } from "./utils/saveQueue";
 import { useIncrementalDrive } from "./utils/useIncrementalDrive";
+import { useRcloneSync } from "./utils/useRcloneSync";
 import type { DriveApplied } from "./utils/incrementalSync";
 import { clearSession, readSampleSelection, readSession, saveSampleSelection, saveSession } from "./utils/session";
 import {
@@ -202,7 +203,8 @@ function App() {
   const [dialogError, setDialogError] = useState("");
   const [dialogBusy, setDialogBusy] = useState(false);
   const [captureOpen, setCaptureOpen] = useState(false);
-  const [syncBusy, setSyncBusy] = useState(false);
+  const [syncBusy, setSyncBusy] = useState(false), [quitPending, setQuitPending] = useState(false);
+  const quitting = useRef(false), syncAllowApply = useRef(true), quitStatus = useRef<HTMLDivElement>(null);
   const [captureType, setCaptureType] = useState<CaptureType>("text");
   const [captureText, setCaptureText] = useState("");
   const [captureImage, setCaptureImage] = useState("");
@@ -590,7 +592,7 @@ function App() {
     return () => { window.removeEventListener("pointerdown", down, true); window.removeEventListener("pointerup", up, true); window.removeEventListener("pointercancel", up, true); window.removeEventListener("keydown", input, true); window.removeEventListener("input", input, true); window.removeEventListener("compositionstart", compositionStart, true); window.removeEventListener("compositionend", compositionEnd, true); window.removeEventListener("blur", blur); };
   }, []);
   const beforeIncrementalApply = useCallback(async (vault: string, incoming: boolean): Promise<boolean> => {
-    if (vaultRef.current !== vault || activeUploads.current || syncInFlight.current) return false;
+    if (vaultRef.current !== vault || activeUploads.current || syncInFlight.current || !syncAllowApply.current) return false;
     if (!incoming) {
       // Capturing local-only changes never writes into the workspace. Keep the
       // editor usable; a change during capture is retried on the next pass.
@@ -611,7 +613,7 @@ function App() {
       if (vaultRef.current === vault) return true;
     } catch { setNotice("Couldn't save before syncing. Retry your save first."); }
     syncGuardOwned.current = false; syncInFlight.current = false; setSyncBusy(false);
-    editorRef.current?.setEditable(modeRef.current === "write" && isMarkdown(selectedRef.current), false);
+    editorRef.current?.setEditable(!quitting.current && modeRef.current === "write" && isMarkdown(selectedRef.current), false);
     const focus = syncFocus.current; syncFocus.current = null; if (focus?.isConnected) focus.focus({ preventScroll: true });
     return false;
   }, [flushAll]);
@@ -650,12 +652,21 @@ function App() {
       throw new Error(`The workspace changed, but the open file could not be refreshed. Reopen it before editing: ${errorMessage(error)}`);
     } finally {
       syncGuardOwned.current = false; syncInFlight.current = false; setSyncBusy(false);
-      editorRef.current?.setEditable(modeRef.current === "write" && isMarkdown(selectedRef.current), false);
+      editorRef.current?.setEditable(!quitting.current && modeRef.current === "write" && isMarkdown(selectedRef.current), false);
       const focus = syncFocus.current; syncFocus.current = null;
       if (focus?.isConnected) window.requestAnimationFrame(() => { if (focus.isConnected) focus.focus({ preventScroll: true }); });
     }
   }, []);
   const incremental = useIncrementalDrive({ desktop: desktopAvailable, vault: vaultPath, isSample, beforeApply: beforeIncrementalApply, afterApply: afterIncrementalApply });
+  const cloudSync = useRcloneSync({ desktop: desktopAvailable, vault: vaultPath, isSample, beforeApply: beforeIncrementalApply, afterApply: afterIncrementalApply });
+  const syncControllers = useRef({ incremental, cloudSync });
+  syncControllers.current = { incremental, cloudSync };
+  // A successful local save and file-tree changes debounce an incremental
+  // check; periodic polling also picks up external edits and incoming work.
+  useEffect(() => { if (saveState === "saved") { incremental.changed(); cloudSync.changed(); } }, [saveState, incremental.changed, cloudSync.changed]);
+  useEffect(() => { incremental.changed(); cloudSync.changed(); }, [entries, incremental.changed, cloudSync.changed]);
+  const visibleSync = cloudSync.binding?.enabled ? cloudSync : incremental.binding?.enabled ? incremental : cloudSync.binding ? cloudSync : incremental;
+  const visibleSyncName = visibleSync === cloudSync ? "Cloud" : "Google Drive";
 
   useEffect(() => {
     if (!lastSession) return;
@@ -1304,23 +1315,51 @@ function App() {
       let available = false, handlersReady = false;
       try {
         available = await invoke<boolean>("tray_available").catch(() => false);
-        const stopClose = await windowHandle.onCloseRequested(async (event) => {
-          const hideToTray = settingsRef.current.closeToTray && available && handlersReady;
-          if (hideToTray) event.preventDefault();
+        const finishAndQuit = async () => {
+          if (quitting.current) return;
+          if (activeUploads.current) { setNotice("Wait for file imports to finish before quitting."); return; }
+          quitting.current = true; syncAllowApply.current = true;
+          (document.activeElement as HTMLElement | null)?.blur?.();
+          editorRef.current?.setEditable(false, false);
+          flushSync(() => setQuitPending(true));
+          quitStatus.current?.focus({ preventScroll: true });
           try {
             await flushAll();
-            if (hideToTray) await windowHandle.hide();
+            const { incremental, cloudSync } = syncControllers.current;
+            let timeout: number | undefined;
+            const deadline = new Promise<boolean>((resolve) => { timeout = window.setTimeout(() => resolve(false), 8000); });
+            const finalAttempt = Promise.all([incremental.finishForQuit(), cloudSync.finishForQuit()]).then((results) => results.every(Boolean)).catch(() => false);
+            const synced = await Promise.race([finalAttempt, deadline]);
+            if (timeout !== undefined) window.clearTimeout(timeout);
+            // Prevent a slow preparation from entering a local merge after the
+            // deadline. Never terminate a merge that already owns the guard.
+            syncAllowApply.current = false;
+            if (syncInFlight.current) { setNotice("Sync is still finishing local changes. Comet stayed open; try quitting again shortly."); return; }
+            // Edits made while the network was working must also be durable.
+            await flushAll();
+            if (!synced) {
+              await windowHandle.show().catch(() => undefined);
+              if (!window.confirm("Your files are saved locally, but cloud sync did not finish. Quit anyway? Changes will retry next time Comet is open.")) return;
+            }
+            await invoke("quit_app");
           } catch {
-            event.preventDefault();
-            setNotice("Couldn't save your changes or hide the window, so Comet stayed open. Retry before closing.");
+            await windowHandle.show().catch(() => undefined);
+            setNotice("Couldn't save your changes, so Comet stayed open. Retry before quitting.");
+          } finally {
+            quitting.current = false; syncAllowApply.current = true; setQuitPending(false);
+            if (!syncInFlight.current) editorRef.current?.setEditable(modeRef.current === "write" && isMarkdown(selectedRef.current), false);
           }
+        };
+        const stopClose = await windowHandle.onCloseRequested(async (event) => {
+          event.preventDefault();
+          const hideToTray = settingsRef.current.closeToTray && available && handlersReady;
+          if (!hideToTray) { await finishAndQuit(); return; }
+          try { await flushAll(); await windowHandle.hide(); }
+          catch { setNotice("Couldn't save your changes or hide the window, so Comet stayed open. Retry before closing."); }
         });
         if (!active) { stopClose(); return; }
         unlisten.push(stopClose);
-        const stopQuit = await listen("comet-request-quit", async () => {
-          try { await flushAll(); await invoke("quit_app"); }
-          catch { await windowHandle.show().catch(() => undefined); setNotice("Couldn't save your changes, so Comet stayed open. Retry before quitting."); }
-        });
+        const stopQuit = await listen("comet-request-quit", async () => { await finishAndQuit(); });
         if (!active) { stopQuit(); return; }
         unlisten.push(stopQuit);
         handlersReady = true;
@@ -1335,7 +1374,7 @@ function App() {
     return () => { active = false; unlisten.forEach((stop) => stop()); };
   }, [flushAll]);
 
-  const modalOpen = Boolean(syncBusy || bulkDelete || workspaceCustomize || createDialog || pathCreateDialog || renameNode || deleteNode || linkOpen || captureOpen || desktopInfoOpen || searchOpen || tagDialogOpen || moveDialog);
+  const modalOpen = Boolean(quitPending || syncBusy || bulkDelete || workspaceCustomize || createDialog || pathCreateDialog || renameNode || deleteNode || linkOpen || captureOpen || desktopInfoOpen || searchOpen || tagDialogOpen || moveDialog);
   useEffect(() => {
     if (!modalOpen) return;
     const dialog = document.querySelector<HTMLElement>('[role="dialog"][aria-modal="true"]');
@@ -1915,7 +1954,7 @@ function App() {
                 </div>}
               </form>
             <div className="topbar-actions">
-              {incremental.binding && <button type="button" className={`sync-status-button ${incremental.status}`} onClick={() => { setSettingsSection("cloud"); void showSettings(); }} title={incremental.detail || "Google Drive sync"} aria-label={`Google Drive sync: ${!incremental.connected ? "disconnected" : incremental.status}`}><Cloud size={16} /><span>{!incremental.connected ? "Disconnected" : incremental.status === "synced" ? "Last sync OK" : incremental.status === "error" ? "Sync issue" : incremental.status === "paused" ? "Paused" : incremental.status === "waiting" ? "Waiting" : "Syncing…"}</span></button>}
+              {visibleSync.binding && <button type="button" className={`sync-status-button ${visibleSync.status}`} onClick={() => { setSettingsSection("cloud"); void showSettings(); }} title={visibleSync.detail || `${visibleSyncName} sync`} aria-label={`${visibleSyncName} sync: ${!visibleSync.connected ? "disconnected" : visibleSync.status}`}><Cloud size={16} /><span>{!visibleSync.connected ? "Disconnected" : visibleSync.status === "synced" ? "Last sync OK" : visibleSync.status === "error" ? "Sync issue" : visibleSync.status === "paused" ? "Paused" : visibleSync.status === "waiting" ? "Waiting" : "Syncing…"}</span></button>}
               {!isSample && <button className="icon-button" type="button" aria-label="Show current path in file explorer" title="Show current path in file explorer" onClick={() => void revealPath(currentLocation)}><FolderOpen size={17} /></button>}
               {selection.size > 0 && <button className="selection-clear icon-button" type="button" aria-label="Clear selection" title="Clear selection (Escape)" onClick={() => { const empty = new Set<string>(); selectionRef.current = empty; selectionAnchor.current = ""; selectionAnchorOpened.current = false; setSelection(empty); }}><X size={15} /></button>}
               {selection.size > 0 && <button className="selection-trash icon-button" type="button" aria-label={`Delete ${selection.size} selected items`} title={`Delete ${selection.size} selected items`} onClick={openBulkDelete}><Trash2 size={17} /><span>{selection.size}</span></button>}
@@ -1926,7 +1965,7 @@ function App() {
           </header>
 
           <div ref={workspaceScrollRef} className={`workspace-scroll without-cover${dropIndicator?.surface === "workspace" && dropIndicator.path === workspaceDestination && dropIndicator.position === "into" ? " drop-target" : ""}`} data-drop-folder={workspaceDestination} onClick={(event) => { const target = event.target as Element; if (!target.closest("button, a, input, select, textarea, [contenteditable=true], .workspace-entry, .brain-node, .todo-card, .todo-link-hit, .note-card, .media-card")) clearSelection(); }} onDragOver={(event) => { event.preventDefault(); showDropIndicator({ path: workspaceDestination, position: "into", surface: "workspace" }); }} onDrop={(event) => dropToFolder(event, workspaceDestination)} onContextMenu={(event) => { if (event.target === event.currentTarget) openNewMenu(event, workspaceDestination); }}>
-            {workspaceView === "tree" ? <TreeExplore key={vaultPath} vault={vaultPath} name={vaultName} tree={tree} onOpen={openEntry} onContext={entryContext} selectedPaths={selection} onActivate={activateSelection} onClearSelection={clearSelection} dropIndicator={dropIndicator?.surface === "map" ? dropIndicator : null} dropGroup={dropIndicator?.surface === "map" ? dropGroup : ""} onDragStart={dragStart} onDragOverNode={(event, item) => dragOverTree(event, item, "map")} onDropNode={(event, item) => dropOnTree(event, item, "map")} onDragOverRoot={(event) => { event.preventDefault(); event.stopPropagation(); const root = (event.target as Element).closest<HTMLElement>("[data-map-path]"); if (root?.dataset.mapPath === vaultPath && (!dragSourceRef.current || normalizePath(parentPath(dragSourceRef.current)) !== normalizePath(vaultPath))) showDropIndicator({ path: vaultPath, position: "into", surface: "map", source: dragSourceRef.current }); else showDropIndicator(null); }} onDropRoot={(event) => { const root = (event.target as Element).closest<HTMLElement>("[data-map-path]"); if (root?.dataset.mapPath === vaultPath) dropToFolder(event, vaultPath); else { event.preventDefault(); event.stopPropagation(); showDropIndicator(null); } }} /> : workspaceView === "brain" ? <BrainExplore key={vaultPath} vault={vaultPath} name={vaultName} entries={entries} onOpen={openEntry} onContext={entryContext} selectedPaths={selection} onActivate={activateSelection} onClearSelection={clearSelection} /> : workspaceView === "calendar" ? <CalendarView key={vaultPath} vault={vaultPath} name={vaultName} desktop={desktopAvailable} onConnect={() => { setSettingsSection("cloud"); void showSettings(); }} /> : workspaceView === "passwords" ? <PasswordsView onManage={() => { setSettingsSection("passwords"); void showSettings(); }} /> : workspaceView === "settings" ? <SettingsPage incremental={incremental} settings={settings} persisted={settingsPersisted} isSample={isSample} vault={vaultPath} onImported={(path) => void activateVault(path, true)} onSyncStart={async () => { if (activeUploads.current) { setNotice("Wait for file imports to finish before syncing."); return false; } syncInFlight.current = true; try { await flushAll(); setSyncBusy(true); return true; } catch { syncInFlight.current = false; setNotice("Couldn't save before syncing. Retry your save first."); return false; } }} onSyncEnd={async () => { try { await refresh(vaultRef.current); } finally { syncInFlight.current = false; setSyncBusy(false); } }} modifier={modifier} desktop={desktopAvailable} trayAvailable={trayAvailable} section={settingsSection} onSection={setSettingsSection} version={APP_VERSION} update={availableUpdate} updateStatus={updateStatus} onCheckUpdate={() => void runUpdateCheck()} onInstallUpdate={() => void installUpdate()} onUpdatePage={openUpdatePage} onChange={updateSettings} onBack={() => history.index > 0 ? void navigateHistory(-1) : void showOverview("all")} onOpenVault={() => void openVault()} onOpenPasswords={() => void showOverview("passwords")} /> : workspaceView === "whiteboard" && selectedPath && parseWhiteboard(content) ? <div className="todo-workspace"><div className="media-top-actions"><button className="icon-button" type="button" aria-label={`More options for ${selectedName}`} onClick={(event) => handleTreeContext(event, { name: selectedName, path: selectedPath, kind: "file", children: [] })}><MoreHorizontal size={19} /></button></div><Whiteboard key={selectedPath} path={selectedPath} board={parseWhiteboard(content)!} name={selectedName.replace(/\.comet-whiteboard$/i, "")} saveState={saveState} onChange={updateWhiteboard} onRename={() => openRename({ name: selectedName, path: selectedPath, kind: "file", children: [] })} onRetry={() => void flushAll().catch(() => setNotice("Still couldn't save. Please check the folder and try again."))} /></div> : workspaceView === "todo" && selectedPath && parseTodo(content) ? <div className="todo-workspace"><div className="media-top-actions"><button className={`icon-button ${itemMeta(metadata, selectedPath).pinned ? "active" : ""}`} type="button" aria-label={itemMeta(metadata, selectedPath).pinned ? "Unpin board" : "Pin board"} onClick={() => toggleProperty(selectedPath, "pinned")}><Pin size={17} /></button><button className={`icon-button ${itemMeta(metadata, selectedPath).favorite ? "active" : ""}`} type="button" aria-label={itemMeta(metadata, selectedPath).favorite ? "Remove board from favorites" : "Add board to favorites"} onClick={() => toggleProperty(selectedPath, "favorite")}><Star size={17} /></button><button className="icon-button" type="button" aria-label="Edit board tags" onClick={() => openTags(selectedPath)}><Tag size={17} /></button><button className="icon-button" type="button" aria-label={`More options for ${selectedName}`} onClick={(event) => handleTreeContext(event, { name: selectedName, path: selectedPath, kind: "file", children: [] })}><MoreHorizontal size={19} /></button></div><TodoBoard key={selectedPath} board={parseTodo(content)!} arrowheads={settings.todoArrowheads} name={selectedName.replace(/\.comet-todo$/i, "")} onRename={() => openRename({ name: selectedName, path: selectedPath, kind: "file", children: [] })} saveState={saveState} onChange={updateTodo} onRetry={() => void flushAll().catch(() => setNotice("Still couldn't save. Please check the folder and try again."))} /></div> : workspaceView === "note" && selectedPath ? <section className="note-card" aria-label={`File: ${selectedName}`}>
+            {workspaceView === "tree" ? <TreeExplore key={vaultPath} vault={vaultPath} name={vaultName} tree={tree} onOpen={openEntry} onContext={entryContext} selectedPaths={selection} onActivate={activateSelection} onClearSelection={clearSelection} dropIndicator={dropIndicator?.surface === "map" ? dropIndicator : null} dropGroup={dropIndicator?.surface === "map" ? dropGroup : ""} onDragStart={dragStart} onDragOverNode={(event, item) => dragOverTree(event, item, "map")} onDropNode={(event, item) => dropOnTree(event, item, "map")} onDragOverRoot={(event) => { event.preventDefault(); event.stopPropagation(); const root = (event.target as Element).closest<HTMLElement>("[data-map-path]"); if (root?.dataset.mapPath === vaultPath && (!dragSourceRef.current || normalizePath(parentPath(dragSourceRef.current)) !== normalizePath(vaultPath))) showDropIndicator({ path: vaultPath, position: "into", surface: "map", source: dragSourceRef.current }); else showDropIndicator(null); }} onDropRoot={(event) => { const root = (event.target as Element).closest<HTMLElement>("[data-map-path]"); if (root?.dataset.mapPath === vaultPath) dropToFolder(event, vaultPath); else { event.preventDefault(); event.stopPropagation(); showDropIndicator(null); } }} /> : workspaceView === "brain" ? <BrainExplore key={vaultPath} vault={vaultPath} name={vaultName} entries={entries} onOpen={openEntry} onContext={entryContext} selectedPaths={selection} onActivate={activateSelection} onClearSelection={clearSelection} /> : workspaceView === "calendar" ? <CalendarView key={vaultPath} vault={vaultPath} name={vaultName} desktop={desktopAvailable} onConnect={() => { setSettingsSection("cloud"); void showSettings(); }} /> : workspaceView === "passwords" ? <PasswordsView onManage={() => { setSettingsSection("passwords"); void showSettings(); }} /> : workspaceView === "settings" ? <SettingsPage incremental={incremental} cloudSync={cloudSync} settings={settings} persisted={settingsPersisted} isSample={isSample} vault={vaultPath} onImported={(path) => void activateVault(path, true)} onSyncStart={async () => { if (activeUploads.current) { setNotice("Wait for file imports to finish before syncing."); return false; } syncInFlight.current = true; try { await flushAll(); setSyncBusy(true); return true; } catch { syncInFlight.current = false; setNotice("Couldn't save before syncing. Retry your save first."); return false; } }} onSyncEnd={async () => { try { await refresh(vaultRef.current); } finally { syncInFlight.current = false; setSyncBusy(false); } }} modifier={modifier} desktop={desktopAvailable} trayAvailable={trayAvailable} section={settingsSection} onSection={setSettingsSection} version={APP_VERSION} update={availableUpdate} updateStatus={updateStatus} onCheckUpdate={() => void runUpdateCheck()} onInstallUpdate={() => void installUpdate()} onUpdatePage={openUpdatePage} onChange={updateSettings} onBack={() => history.index > 0 ? void navigateHistory(-1) : void showOverview("all")} onOpenVault={() => void openVault()} onOpenPasswords={() => void showOverview("passwords")} /> : workspaceView === "whiteboard" && selectedPath && parseWhiteboard(content) ? <div className="todo-workspace"><div className="media-top-actions"><button className="icon-button" type="button" aria-label={`More options for ${selectedName}`} onClick={(event) => handleTreeContext(event, { name: selectedName, path: selectedPath, kind: "file", children: [] })}><MoreHorizontal size={19} /></button></div><Whiteboard key={selectedPath} path={selectedPath} board={parseWhiteboard(content)!} name={selectedName.replace(/\.comet-whiteboard$/i, "")} saveState={saveState} onChange={updateWhiteboard} onRename={() => openRename({ name: selectedName, path: selectedPath, kind: "file", children: [] })} onRetry={() => void flushAll().catch(() => setNotice("Still couldn't save. Please check the folder and try again."))} /></div> : workspaceView === "todo" && selectedPath && parseTodo(content) ? <div className="todo-workspace"><div className="media-top-actions"><button className={`icon-button ${itemMeta(metadata, selectedPath).pinned ? "active" : ""}`} type="button" aria-label={itemMeta(metadata, selectedPath).pinned ? "Unpin board" : "Pin board"} onClick={() => toggleProperty(selectedPath, "pinned")}><Pin size={17} /></button><button className={`icon-button ${itemMeta(metadata, selectedPath).favorite ? "active" : ""}`} type="button" aria-label={itemMeta(metadata, selectedPath).favorite ? "Remove board from favorites" : "Add board to favorites"} onClick={() => toggleProperty(selectedPath, "favorite")}><Star size={17} /></button><button className="icon-button" type="button" aria-label="Edit board tags" onClick={() => openTags(selectedPath)}><Tag size={17} /></button><button className="icon-button" type="button" aria-label={`More options for ${selectedName}`} onClick={(event) => handleTreeContext(event, { name: selectedName, path: selectedPath, kind: "file", children: [] })}><MoreHorizontal size={19} /></button></div><TodoBoard key={selectedPath} board={parseTodo(content)!} arrowheads={settings.todoArrowheads} name={selectedName.replace(/\.comet-todo$/i, "")} onRename={() => openRename({ name: selectedName, path: selectedPath, kind: "file", children: [] })} saveState={saveState} onChange={updateTodo} onRetry={() => void flushAll().catch(() => setNotice("Still couldn't save. Please check the folder and try again."))} /></div> : workspaceView === "note" && selectedPath ? <section className="note-card" aria-label={`File: ${selectedName}`}>
               <div className="document-header">
                 <div className="document-heading">
                   <div className="document-icon"><FileText size={20} /></div>
@@ -1968,7 +2007,7 @@ function App() {
                 </> : <span className="mode-hint">{viewMode === "source" ? <><FileCode2 size={15} /> Editing the {isMarkdown(selectedPath) ? "plain Markdown" : "UTF-8 text"} file</> : <><BookOpen size={15} /> Reading view · select Write to make changes</>}</span>}
               </div>
               <div className="document-body">
-                {loading ? <div className="document-loading"><LoaderCircle size={18} className="spin" /> Opening your note…</div> : viewMode === "source" ? <textarea ref={sourceRef} className="source-editor" aria-label={isMarkdown(selectedPath) ? "Markdown source" : "Text editor"} spellCheck={settings.spellcheck} value={content} placeholder={isMarkdown(selectedPath) ? "Start writing in Markdown…" : "Start writing…"} onChange={(event) => {
+                {loading ? <div className="document-loading"><LoaderCircle size={18} className="spin" /> Opening your note…</div> : viewMode === "source" ? <textarea ref={sourceRef} readOnly={quitPending || syncBusy} className="source-editor" aria-label={isMarkdown(selectedPath) ? "Markdown source" : "Text editor"} spellCheck={settings.spellcheck} value={content} placeholder={isMarkdown(selectedPath) ? "Start writing in Markdown…" : "Start writing…"} onChange={(event) => {
                   const next = event.target.value;
                   contentRef.current = next;
                   setContent(next);
@@ -2137,6 +2176,7 @@ function App() {
           <div className="modal-actions"><button type="button" className="primary-button" onClick={() => setDesktopInfoOpen(false)}>Back to sample</button></div>
         </div>
       </div>}
+      {quitPending && !syncBusy && <div ref={quitStatus} tabIndex={-1} className="restoring-overlay" role="status"><LoaderCircle size={20} className="spin" /> Saving and checking cloud sync before quitting…</div>}
       {syncBusy && <div className="restoring-overlay" role="dialog" aria-modal="true" aria-label="Syncing workspace"><LoaderCircle size={20} className="spin" /> Syncing your workspace safely…</div>}
       {restoring && <div className="restoring-overlay" role="status"><LoaderCircle size={20} className="spin" /> Reopening your workspace…</div>}
     </div>

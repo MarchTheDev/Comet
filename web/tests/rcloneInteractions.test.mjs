@@ -14,13 +14,13 @@ globalThis.window=dom.window;globalThis.document=dom.window.document;globalThis.
 Object.defineProperty(globalThis,'navigator',{value:dom.window.navigator,configurable:true});
 const timers=new Map(), realSet=window.setTimeout, realClear=window.clearTimeout;let timerId=0;
 window.setTimeout=(fn,ms)=>{const id=++timerId;timers.set(id,{fn,ms});return id;};window.clearTimeout=id=>timers.delete(id);
-const calls=[];let linked=false,offline=false,sequence=0,imported='',guard=0,controller;
+const calls=[];let linked=false,offline=false,accountsFail=false,sequence=0,imported='',guard=0,controller;
 const account={provider:'icloud',remote:`comet-icloud-${'a'.repeat(32)}`,identity:'b'.repeat(64),label:'preview@example.test'};
 window.__TAURI_INTERNALS__={invoke:async(cmd,args={})=>{calls.push({cmd,args});
   if(cmd==='rclone_incremental_recover')return;
-  if(cmd==='rclone_accounts')return linked?[account]:[];
+  if(cmd==='rclone_accounts'){if(accountsFail)throw Error('credential store locked');return linked?[account]:[];}
   if(cmd==='rclone_icloud_begin')return {complete:false,remote:account.remote,identity:account.identity,prompt:"Enter your code or type sms",choices:[]};
-  if(cmd==='rclone_icloud_continue'){linked=true;return {complete:true,remote:account.remote,identity:account.identity,prompt:'',choices:[]};}
+  if(cmd==='rclone_icloud_continue'){if(args.answer==='sms')return {complete:false,remote:account.remote,identity:account.identity,prompt:'Choose a trusted phone',choices:[{value:'1_sms',label:'+1 •••• 23'},{value:'2_sms',label:'+1 •••• 45'}]};if(args.answer==='1_sms')return {complete:false,remote:account.remote,identity:account.identity,prompt:'Enter SMS code',choices:[]};linked=true;return {complete:true,remote:account.remote,identity:account.identity,prompt:'',choices:[]};}
   if(cmd==='rclone_icloud_cancel'||cmd==='rclone_incremental_abort')return;
   if(cmd==='rclone_incremental_prepare'){if(offline)throw Error('offline');return {ticket:'e'.repeat(32),incoming:true};}
   if(cmd==='rclone_incremental_apply')return {applied:1,deleted:0,conflicts:1,safetyFolder:'/safe',changedPaths:['note.md']};
@@ -41,15 +41,25 @@ await click(button('Connect iCloud Drive'));
 check('iCloud sign-in explains regular password, 2FA, web access and reauthentication',document.querySelector('.rclone-auth')?.textContent.includes('regular Apple ID password')&&document.querySelector('.rclone-auth')?.textContent.includes('two-factor')&&document.querySelector('.rclone-auth')?.textContent.includes('30 days'));
 const inputs=[...document.querySelectorAll('.rclone-auth input')];await fill(inputs[0],'preview@example.test');await fill(inputs[1],'not-a-real-password');await submit(document.querySelector('.rclone-auth form'));
 check('password is cleared from the form while the native verification step is pending',calls.find(c=>c.cmd==='rclone_icloud_begin')?.args.password==='not-a-real-password'&&!document.querySelector('.rclone-auth input[type=password]')&&document.querySelector('.rclone-auth')?.textContent.includes('type sms'));
+await fill(document.querySelector('[aria-label="Apple verification code"]'),'sms');await submit(document.querySelector('.rclone-auth form'));
+await click(document.querySelector('.rclone-auth [role=combobox]'));await click([...document.querySelectorAll('[role=option]')].find(item=>item.textContent.includes('23')));await submit(document.querySelector('.rclone-auth form'));
+check('iCloud verification supports SMS and trusted-phone selection',calls.some(c=>c.cmd==='rclone_icloud_continue'&&c.args.answer==='sms')&&calls.some(c=>c.cmd==='rclone_icloud_continue'&&c.args.answer==='1_sms')&&document.querySelector('.rclone-auth')?.textContent.includes('SMS code'));
 await fill(document.querySelector('[aria-label="Apple verification code"]'),'123456');await submit(document.querySelector('.rclone-auth form'));
 check('successful verification offers the connected account without storing a password in local storage',calls.some(c=>c.cmd==='rclone_icloud_continue')&&document.querySelector('.rclone-account-row')?.textContent.includes('preview@example.test')&&![...Array(localStorage.length)].some((_,i)=>localStorage.getItem(localStorage.key(i))?.includes('not-a-real-password')));
 localStorage.setItem(driveKey('/vault'),JSON.stringify({group:'9'.repeat(32),base:'oldbase',enabled:true}));
 const before=calls.filter(c=>c.cmd==='rclone_incremental_prepare').length;await click(button('Start automatic sync'));
 check('older Drive sync blocks starting a second independent engine',calls.filter(c=>c.cmd==='rclone_incremental_prepare').length===before&&document.querySelector('.dialog-error')?.textContent.includes('Pause the older Google'));
-localStorage.setItem(driveKey('/vault'),JSON.stringify({group:'9'.repeat(32),base:'oldbase',enabled:false}));await click(button('Start automatic sync'));
+localStorage.setItem(driveKey('/vault'),JSON.stringify({group:'9'.repeat(32),base:'oldbase',enabled:false}));offline=true;await click(button('Start automatic sync'));
+const pending=JSON.parse(localStorage.getItem(rcloneBindingKey('/vault')));
+check('starting offline persists an enabled pending intent and schedules a retry',pending?.group===''&&pending.base===''&&pending.remote===account.remote&&document.querySelector('.dialog-error')?.textContent.includes('offline')&&[...timers.values()].some(t=>t.ms===15000));
+offline=false;const initialRetry=[...timers.entries()].find(([,t])=>t.ms===15000);timers.delete(initialRetry[0]);await act(async()=>initialRetry[1].fn());
 const saved=JSON.parse(localStorage.getItem(rcloneBindingKey('/vault')));
 check('starting sync saves the provider identity and reports conflict safety',saved?.base==='d'.repeat(32)&&saved.remote===account.remote&&guard===1&&document.querySelector('.drive-sync-detail')?.textContent.includes('/safe'));
 check('automatic cloud sync schedules periodic incoming checks',[...timers.values()].some(t=>t.ms===30000));
+accountsFail=true;await act(async()=>{try{await controller.refreshAccounts();}catch{}});
+check('a locked credential store is visible and account loading retries',[...timers.values()].some(t=>t.ms===15000)&&document.querySelector('.dialog-error')?.textContent.includes('credential store locked'));
+accountsFail=false;const accountRetry=[...timers.entries()].find(([,t])=>t.ms===15000);timers.delete(accountRetry[0]);await act(async()=>accountRetry[1].fn());
+check('account loading recovers without changing the workspace baseline',JSON.parse(localStorage.getItem(rcloneBindingKey('/vault'))).base==='d'.repeat(32)&&controller.connected);
 offline=true;const old=localStorage.getItem(rcloneBindingKey('/vault'));await click(button('Sync changes now'));
 check('an offline error preserves the baseline and schedules retry',localStorage.getItem(rcloneBindingKey('/vault'))===old&&document.querySelector('.dialog-error')?.textContent.includes('offline')&&[...timers.values()].some(t=>t.ms===15000));
 let final=false;await act(async()=>{final=await controller.finishForQuit();});check('a final quit attempt reports failure rather than pretending offline work synced',final===false&&localStorage.getItem(rcloneBindingKey('/vault'))===old);

@@ -69,8 +69,9 @@ pub async fn rclone_icloud_begin(app: tauri::AppHandle, apple_id: String, passwo
         Ok(value) => value,
         Err(error) => { let _ = engine.call("config/delete", json!({"name":remote})).await; return Err(error); }
     };
-    if step.0.complete { verified_icloud(&engine, &remote).await?; }
-    else { *PENDING.lock().map_err(|_| "Cloud sign-in state is unavailable.")? = Some(Pending { remote: remote.clone(), state: state(&step.1)?.into(), identity: account_identity }); }
+    if step.0.complete {
+        if let Err(error) = verified_icloud(&engine, &remote).await { let _ = engine.call("config/delete", json!({"name":remote})).await; return Err(error); }
+    } else { *PENDING.lock().map_err(|_| "Cloud sign-in state is unavailable.")? = Some(Pending { remote: remote.clone(), state: state(&step.1)?.into(), identity: account_identity }); }
     Ok(step.0)
 }
 #[tauri::command]
@@ -121,6 +122,9 @@ pub async fn rclone_connect_google(app: tauri::AppHandle) -> Result<(), String> 
 pub async fn rclone_accounts(app: tauri::AppHandle) -> Result<Vec<Account>, String> {
     let _guard = lock_cloud()?; let engine = Engine::start(app).await?;
     let remotes = engine.call("config/listremotes", json!({})).await?;
+    // A restart or abandoned sign-in must not retain an unfinished encrypted
+    // password/session indefinitely. Never remove the currently active 2FA step.
+    let pending_remote = PENDING.lock().map_err(|_| "Cloud sign-in state is unavailable.")?.as_ref().map(|pending| pending.remote.clone());
     let mut accounts = Vec::new();
     for name in remotes.get("remotes").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).filter(|name| remote_ok(name)) {
         let data = engine.call("config/get", json!({"name":name})).await?;
@@ -128,6 +132,8 @@ pub async fn rclone_accounts(app: tauri::AppHandle) -> Result<Vec<Account>, Stri
             accounts.push(Account { remote: name.into(), provider: "google".into(), identity: "google".into(), label: "Google Drive".into() });
         } else if name.starts_with("comet-icloud-") && data.get("type").and_then(Value::as_str) == Some("iclouddrive") && data.get("trust_token").and_then(Value::as_str).is_some_and(|v| !v.is_empty()) {
             if let Some(apple_id) = data.get("apple_id").and_then(Value::as_str) { accounts.push(Account { remote: name.into(), provider: "icloud".into(), identity: identity(apple_id), label: apple_id.into() }); }
+        } else if name.starts_with("comet-icloud-") && pending_remote.as_deref() != Some(name) {
+            engine.call("config/delete", json!({"name":name})).await?;
         }
     }
     Ok(accounts)

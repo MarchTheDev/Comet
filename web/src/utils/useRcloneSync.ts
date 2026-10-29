@@ -19,6 +19,7 @@ export function useRcloneSync(options: Options): RcloneController {
   const [busy, setBusy] = useState(false), busyRef = useRef(false);
   const mounted = useRef(true), timer = useRef<number | null>(null), failures = useRef(0), runnerVault = useRef("");
   const runnerAccount = useRef<CloudAccount | null>(null), recovered = useRef<Promise<unknown> | null>(null);
+  const accountRetry = useRef<number | null>(null), refreshRef = useRef<() => Promise<void>>(async () => {});
   const pendingChanges = useRef(false);
   const activeRun = useRef<Promise<boolean> | null>(null), runRef = useRef<(initial?: CloudAccount) => Promise<boolean>>(async () => false);
   const schedule = useCallback((delay: number) => {
@@ -75,13 +76,25 @@ export function useRcloneSync(options: Options): RcloneController {
   runRef.current = run;
   const refreshAccounts = useCallback(async () => {
     if (!latest.current.desktop) return;
-    const result = await invoke<CloudAccount[]>("rclone_accounts");
-    accountsRef.current = result; if (mounted.current) setAccounts(result);
-    if (accountForBinding(readRcloneBinding(latest.current.vault), result)?.remote && readRcloneBinding(latest.current.vault)?.enabled) schedule(1500);
+    try {
+      const result = await invoke<CloudAccount[]>("rclone_accounts");
+      if (accountRetry.current !== null) { window.clearTimeout(accountRetry.current); accountRetry.current = null; }
+      accountsRef.current = result; if (mounted.current) setAccounts(result);
+      const current = readRcloneBinding(latest.current.vault);
+      if (accountForBinding(current, result)?.remote && current?.enabled) schedule(1500);
+    } catch (error) {
+      if (mounted.current && readRcloneBinding(latest.current.vault)?.enabled) {
+        setStatus("error"); setDetail(error instanceof Error ? error.message : String(error));
+        if (accountRetry.current !== null) window.clearTimeout(accountRetry.current);
+        accountRetry.current = window.setTimeout(() => { accountRetry.current = null; void refreshRef.current().catch(() => undefined); }, 15_000);
+      }
+      throw error;
+    }
   }, [schedule]);
+  refreshRef.current = refreshAccounts;
   useEffect(() => {
     mounted.current = true;
-    return () => { mounted.current = false; if (timer.current !== null) window.clearTimeout(timer.current); };
+    return () => { mounted.current = false; if (timer.current !== null) window.clearTimeout(timer.current); if (accountRetry.current !== null) window.clearTimeout(accountRetry.current); };
   }, []);
   useEffect(() => {
     const current = readRcloneBinding(options.vault); setBinding(current); setDetail(""); setStatus(current?.enabled ? "waiting" : current ? "paused" : "off"); failures.current = 0;
@@ -97,7 +110,16 @@ export function useRcloneSync(options: Options): RcloneController {
     const online = () => { if (readRcloneBinding(latest.current.vault)?.enabled) schedule(250); };
     window.addEventListener("online", online); return () => window.removeEventListener("online", online);
   }, [schedule]);
-  const start = useCallback(async (account: CloudAccount) => { if (!readRcloneBinding(latest.current.vault)) await run(account); }, [run]);
+  const start = useCallback(async (account: CloudAccount) => {
+    const { vault, desktop, isSample } = latest.current;
+    if (!desktop || isSample || busyRef.current || readRcloneBinding(vault)) return;
+    if (readDriveBinding(vault)?.enabled) { setStatus("error"); setDetail("Pause the older Google Drive sync before using this cloud connection. Both histories are preserved."); return; }
+    try {
+      const pending: RcloneBinding = { group: "", base: "", enabled: true, remote: account.remote, provider: account.provider, identity: account.identity };
+      saveRcloneBinding(vault, pending); setBinding(pending); setStatus("waiting"); setDetail("");
+    } catch { setStatus("error"); setDetail("Couldn't save the sync setting on this device. Check device storage and try again."); return; }
+    await run();
+  }, [run]);
   const retry = useCallback(async () => { await run(); }, [run]);
   const pause = useCallback(() => {
     const vault = latest.current.vault, current = readRcloneBinding(vault); if (!current || busyRef.current) return;

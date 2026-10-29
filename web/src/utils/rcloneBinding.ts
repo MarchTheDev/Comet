@@ -4,10 +4,12 @@ export interface CloudAccount { remote: string; provider: "icloud" | "google"; i
 export interface RcloneBinding extends DriveBinding { remote: string; provider: "icloud" | "google"; identity: string }
 export const rcloneBindingKey = (vault: string) => `comet:rclone-sync:v1:${encodeURIComponent(vault)}`;
 export function validRcloneBinding(value: unknown): value is RcloneBinding {
-  if (!validBinding(value)) return false;
-  const b = value as RcloneBinding;
+  const b = value as Partial<RcloneBinding> | null;
+  // Persist an initial intent before the first network attempt so an offline
+  // start is retried after reconnect or restart. A half-filled baseline is invalid.
+  if (!b || !(validBinding(value) || (b.group === "" && b.base === "" && typeof b.enabled === "boolean"))) return false;
   return ((b.provider === "google" && b.remote === "comet-google" && b.identity === "google") ||
-    (b.provider === "icloud" && /^comet-icloud-[0-9a-f]{32}$/.test(b.remote) && /^[0-9a-f]{64}$/.test(b.identity)));
+    (b.provider === "icloud" && typeof b.remote === "string" && typeof b.identity === "string" && /^comet-icloud-[0-9a-f]{32}$/.test(b.remote) && /^[0-9a-f]{64}$/.test(b.identity)));
 }
 export function readRcloneBinding(vault: string): RcloneBinding | null {
   try { const value: unknown = JSON.parse(localStorage.getItem(rcloneBindingKey(vault)) || "null"); return validRcloneBinding(value) ? value : null; }

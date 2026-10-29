@@ -75,7 +75,7 @@ async fn materialize(engine: &Engine, remote: &str, group: &str, manifest: &Mani
         };
         content.push((entry.path.clone(), false, bytes));
     }
-    let entries = content.iter().map(|(name, directory, bytes)| ArchiveEntry { name: name.clone(), directory: *directory, bytes }).collect();
+    let entries: Vec<ArchiveEntry<'_>> = content.iter().map(|(name, directory, bytes)| ArchiveEntry { name: name.clone(), directory: *directory, bytes: bytes.as_slice() }).collect();
     let archive = workspace_archive::assemble(entries)?;
     if !archive_matches(&archive, manifest) { return Err("The cloud workspace failed verification. No local files were changed.".into()); }
     Ok((archive, count))

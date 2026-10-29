@@ -516,6 +516,7 @@ pub fn run() {
             google::incremental::google_incremental_import,
             rclone_sync::auth::rclone_accounts,
             rclone_sync::auth::rclone_connect_google,
+            rclone_sync::auth::rclone_cancel_google,
             rclone_sync::auth::rclone_disconnect,
             rclone_sync::auth::rclone_icloud_begin,
             rclone_sync::auth::rclone_icloud_continue,

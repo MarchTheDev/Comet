@@ -7,7 +7,7 @@ import type { DriveStatus } from "./useIncrementalDrive";
 interface Options { desktop: boolean; vault: string; isSample: boolean; beforeApply(vault: string, incoming: boolean): Promise<boolean>; afterApply(vault: string, result: DriveApplied | null): Promise<void> }
 export interface RcloneController {
   binding: RcloneBinding | null; accounts: CloudAccount[]; connected: boolean; status: DriveStatus; detail: string; busy: boolean;
-  refreshAccounts(): Promise<void>; start(account: CloudAccount): Promise<void>; retry(): Promise<void>; pause(): void; resume(): void; changed(): void; finishForQuit(): Promise<boolean>;
+  refreshAccounts(): Promise<void>; start(account: CloudAccount, expectedVault?: string): Promise<void>; retry(): Promise<void>; pause(): void; resume(expectedVault?: string): void; changed(): void; finishForQuit(): Promise<boolean>;
 }
 const INTERVAL = 30_000, MAX_RETRY = 5 * 60_000;
 export function useRcloneSync(options: Options): RcloneController {
@@ -110,9 +110,9 @@ export function useRcloneSync(options: Options): RcloneController {
     const online = () => { if (readRcloneBinding(latest.current.vault)?.enabled) schedule(250); };
     window.addEventListener("online", online); return () => window.removeEventListener("online", online);
   }, [schedule]);
-  const start = useCallback(async (account: CloudAccount) => {
+  const start = useCallback(async (account: CloudAccount, expectedVault?: string) => {
     const { vault, desktop, isSample } = latest.current;
-    if (!desktop || isSample || busyRef.current || readRcloneBinding(vault)) return;
+    if ((expectedVault && vault !== expectedVault) || !desktop || isSample || busyRef.current || readRcloneBinding(vault)) return;
     if (readDriveBinding(vault)?.enabled) { setStatus("error"); setDetail("Pause the older Google Drive sync before using this cloud connection. Both histories are preserved."); return; }
     try {
       const pending: RcloneBinding = { group: "", base: "", enabled: true, remote: account.remote, provider: account.provider, identity: account.identity };
@@ -126,8 +126,8 @@ export function useRcloneSync(options: Options): RcloneController {
     try { const next = { ...current, enabled: false }; saveRcloneBinding(vault, next); setBinding(next); setStatus("paused"); setDetail("Cloud sync is paused on this device. Local files and cloud history were not deleted."); if (timer.current !== null) window.clearTimeout(timer.current); timer.current = null; }
     catch { setStatus("error"); setDetail("Couldn't save the pause setting on this device."); }
   }, []);
-  const resume = useCallback(() => {
-    const vault = latest.current.vault, current = readRcloneBinding(vault); if (!current || busyRef.current) return;
+  const resume = useCallback((expectedVault?: string) => {
+    const vault = latest.current.vault, current = readRcloneBinding(vault); if ((expectedVault && vault !== expectedVault) || !current || busyRef.current) return;
     if (readDriveBinding(vault)?.enabled) { setStatus("error"); setDetail("Pause the older Google Drive sync before resuming this cloud connection."); return; }
     try { const next = { ...current, enabled: true }; saveRcloneBinding(vault, next); setBinding(next); setStatus("waiting"); setDetail(""); if (accountForBinding(next, accountsRef.current)) schedule(250); }
     catch { setStatus("error"); setDetail("Couldn't save the sync setting on this device."); }

@@ -59,18 +59,23 @@ building another platform requires its own matching rclone binary. See
 
 ### Google sign-in configuration
 
-Google requires a registered Desktop OAuth client. Create one for the Comet
-project, enable the Google Calendar and Drive APIs, and configure the consent
-screen, test users and any required verification with Google. Set GitHub Actions
-repository variables `COMET_GOOGLE_CLIENT_ID` and, if required,
-`COMET_GOOGLE_CLIENT_SECRET` before building. The workflow passes them into the
-frontend as `VITE_GOOGLE_CLIENT_ID` and `VITE_GOOGLE_CLIENT_SECRET`; local builds
-can set those environment variables directly. A desktop client ID and secret are
-publicly extractable from an installed app, not a protected secret. Do not put
-refresh tokens or user passwords in either variable. If no client is configured,
-the app clearly offers advanced manual setup instead of pretending one-click
-sign-in is ready. Verify the final installer against a real Google account and
-OS credential store; mocked tests cannot prove OAuth or Drive integration.
+Rclone Drive uses rclone's built-in shared client and needs no user-entered OAuth
+client configuration. **That shared client is scheduled to stop working during
+2026**, so it is not a durable release strategy. See [rclone sync](rclone-sync.md)
+for the warning, retained history and real-account test requirements. Do not
+assume that this Drive sign-in provides Calendar.
+
+The separate Calendar and earlier direct-Drive integration requires Comet's
+publisher to register a Desktop OAuth client, enable the applicable Google APIs,
+and configure the consent screen and any required verification. Set the Actions
+variables `COMET_GOOGLE_CLIENT_ID` and, if required, `COMET_GOOGLE_CLIENT_SECRET`;
+the workflow supplies `VITE_GOOGLE_CLIENT_ID` and `VITE_GOOGLE_CLIENT_SECRET` to
+the build. These desktop values are extractable from the application, not private
+secrets. Never put refresh tokens or user passwords in variables. Without this
+configuration, Calendar sign-in remains unavailable; the app no longer asks end
+users to configure developer credentials. Testing-mode custom refresh tokens can
+expire after seven days. Verify the installer, both separate authorizations, and
+the OS credential store with real accounts; mocked tests cannot prove these work.
 
 To build locally on Windows, install Rust with the MSVC toolchain, Visual Studio
 Build Tools with **Desktop development with C++**, Node.js 22.13 or newer, and

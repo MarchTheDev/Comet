@@ -132,8 +132,14 @@ impl Engine {
     pub async fn call(&self, path: &str, input: Value) -> Result<Value, String> {
         self.call_optional(path, input).await?.ok_or_else(|| ERROR.into())
     }
+    pub async fn call_for(&self, path: &str, input: Value, timeout: Duration) -> Result<Value, String> {
+        self.call_optional_for(path, input, timeout).await?.ok_or_else(|| ERROR.into())
+    }
     pub async fn call_optional(&self, path: &str, input: Value) -> Result<Option<Value>, String> {
-        let mut response = self.http.post(format!("{}/{}", self.origin, path)).basic_auth(RC_USER, Some(&self.password)).json(&input).send().await.map_err(|_| ERROR)?;
+        self.call_optional_for(path, input, Duration::from_secs(120)).await
+    }
+    async fn call_optional_for(&self, path: &str, input: Value, timeout: Duration) -> Result<Option<Value>, String> {
+        let mut response = self.http.post(format!("{}/{}", self.origin, path)).basic_auth(RC_USER, Some(&self.password)).timeout(timeout).json(&input).send().await.map_err(|_| ERROR)?;
         if response.status() == StatusCode::NOT_FOUND { return Ok(None); }
         if !response.status().is_success() { return Err(ERROR.into()); }
         let mut bytes = Vec::new();
@@ -142,6 +148,36 @@ impl Engine {
             bytes.extend_from_slice(&chunk);
         }
         serde_json::from_slice(&bytes).map(Some).map_err(|_| "Cloud returned invalid metadata; no local files were changed.".into())
+    }
+    /// Resolve rclone's one-time loopback redirect ourselves so only the
+    /// provider page is opened in the browser. Never follow external redirects.
+    pub async fn google_authorization_page(&self, address: &str) -> Result<String, String> {
+        let local = url::Url::parse(address).map_err(|_| "Invalid local Google sign-in address.")?;
+        if local.scheme() != "http" || local.host_str() != Some("127.0.0.1") || local.port() != Some(53682)
+            || local.path() != "/auth" || !local.username().is_empty() || local.password().is_some() || local.fragment().is_some() {
+            return Err("Invalid local Google sign-in address.".into());
+        }
+        let states: Vec<_> = local.query_pairs().filter(|(key, _)| key == "state").map(|(_, value)| value.into_owned()).collect();
+        if states.len() != 1 || states[0].is_empty() || states[0].len() > 500 { return Err("Invalid local Google sign-in state.".into()); }
+        let response = self.http.get(local).timeout(Duration::from_secs(5)).send().await.map_err(|_| "Couldn't start the Google sign-in page.")?;
+        if !response.status().is_redirection() { return Err("Couldn't start the Google sign-in page.".into()); }
+        let location = response.headers().get(reqwest::header::LOCATION).and_then(|value| value.to_str().ok()).ok_or("Invalid Google sign-in response.")?;
+        let mut google = url::Url::parse(location).map_err(|_| "Invalid Google sign-in response.")?;
+        if google.scheme() != "https" || google.host_str() != Some("accounts.google.com") || google.port_or_known_default() != Some(443)
+            || !google.username().is_empty() || google.password().is_some() || google.fragment().is_some() {
+            return Err("Invalid Google sign-in destination.".into());
+        }
+        let values = |name: &str| google.query_pairs().filter(|(key, _)| key == name).map(|(_, value)| value.into_owned()).collect::<Vec<_>>();
+        if values("state") != states || values("redirect_uri") != ["http://127.0.0.1:53682/"]
+            || values("response_type") != ["code"] || values("scope") != ["https://www.googleapis.com/auth/drive.file"]
+            || values("client_id").len() != 1 {
+            return Err("Invalid Google sign-in parameters.".into());
+        }
+        // Google may omit a refresh token on repeat grants unless consent is
+        // requested again. Never borrow a previous account's token instead.
+        if values("prompt").is_empty() { google.query_pairs_mut().append_pair("prompt", "consent"); }
+        else if values("prompt") != ["consent"] { return Err("Invalid Google sign-in parameters.".into()); }
+        Ok(google.to_string())
     }
     pub async fn list(&self, remote: &str, path: &str) -> Result<Vec<Value>, String> {
         let result = self.call_optional("operations/list", json!({"fs":format!("{remote}:"),"remote":path,"opt":{"noMimeType":true}})).await?;

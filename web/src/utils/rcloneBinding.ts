@@ -8,7 +8,7 @@ export function validRcloneBinding(value: unknown): value is RcloneBinding {
   // Persist an initial intent before the first network attempt so an offline
   // start is retried after reconnect or restart. A half-filled baseline is invalid.
   if (!b || !(validBinding(value) || (b.group === "" && b.base === "" && typeof b.enabled === "boolean"))) return false;
-  return ((b.provider === "google" && b.remote === "comet-google" && b.identity === "google") ||
+  return ((b.provider === "google" && ((b.remote === "comet-google" && b.identity === "google") || (b.remote === "comet-rclone-google" && typeof b.identity === "string" && /^[0-9a-f]{64}$/.test(b.identity)))) ||
     (b.provider === "icloud" && typeof b.remote === "string" && typeof b.identity === "string" && /^comet-icloud-[0-9a-f]{32}$/.test(b.remote) && /^[0-9a-f]{64}$/.test(b.identity)));
 }
 export function readRcloneBinding(vault: string): RcloneBinding | null {

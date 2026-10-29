@@ -40,6 +40,7 @@ const checks = [
   'tests/incrementalInteractions.test.mjs',
   'tests/rcloneSync.test.mjs',
   'tests/rcloneInteractions.test.mjs',
+  'tests/rcloneGoogleInteractions.test.mjs',
   'tests/whiteboardInteractions.test.mjs',
   'tests/uploadInteractions.test.mjs',
   'tests/droppedUpload.test.mjs',

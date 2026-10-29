@@ -15,7 +15,7 @@ Object.defineProperty(globalThis,'navigator',{value:dom.window.navigator,configu
 const calls=[]; let syncFailure=false, moreOnce=false; const today=new Date(), next=new Date(today.getFullYear(),today.getMonth(),today.getDate()+1);
 let events=[{id:'google1',etag:'"original"',summary:'Meeting',description:'Keep notes',start:{date:dateKey(today)},end:{date:dateKey(next)}}];
 dom.window.__TAURI_INTERNALS__={invoke:async(cmd,args={})=>{calls.push({cmd,args});if(cmd==='google_status')return true;if(cmd==='google_calendar_list')return events;if(cmd==='google_calendar_update'){events=events.map(item=>item.id===args.id?{...item,...args.patch,etag:'"changed"'}:item);return {};}if(cmd==='google_calendar_create'){events=[...events,{id:'created',etag:'"new"',...args.patch}];return {};}if(cmd==='google_calendar_delete'){events=events.filter(item=>item.id!==args.id);return;}if(cmd==='google_sync_list')return [{id:'base1',group:'a'.repeat(32),name:'Synced',modified:'2026-01-01T00:00:00Z',branches:1}];if(cmd==='google_sync_now'){if(syncFailure)throw new Error('interrupted upload');const more=moreOnce;moreOnce=false;return {group:'a'.repeat(32),base:args.base ? 'base2' : 'base1',applied:1,conflicts:1,deleted:0,safetyFolder:more?'/safe-first':'/safe',more};}if(cmd==='google_sync_import')return {path:'/synced/workspace',group:args.group,base:args.id};if(cmd==='google_drive_list')return [{id:'file1',name:'Comet snapshot'}];if(cmd==='google_drive_import')return '/new/workspace';if(cmd==='google_drive_backup')return;}};
-const root=createRoot(document.getElementById('root'));
+let root=createRoot(document.getElementById('root'));
 const click=async element=>act(async()=>element.dispatchEvent(new dom.window.MouseEvent('click',{bubbles:true,cancelable:true})));
 const button=text=>[...document.querySelectorAll('button')].find(item=>item.textContent.trim()===text);
 const fill=async(element,text)=>act(async()=>{element.focus();Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype,'value').set.call(element,text);const change=new dom.window.Event('propertychange',{bubbles:true});Object.defineProperty(change,'propertyName',{value:'value'});element.dispatchEvent(change);element.dispatchEvent(new dom.window.Event('input',{bubbles:true}));});
@@ -31,7 +31,7 @@ check('deleting a Google event uses its latest ETag', deletion?.args.etag==='"ch
 let imported='', starts=0, ends=0;dom.window.confirm=()=>true;
 await act(async()=>root.render(React.createElement(GoogleSettings,{desktop:true,vault:'/vault',isSample:false,onImported:path=>{imported=path;},onSyncStart:async()=>{starts++;return true;},onSyncEnd:async()=>{ends++;}})));
 check('one connection describes both Calendar and Drive and discloses unencrypted revisions', document.querySelector('.google-settings')?.textContent.includes('Google Calendar and Drive') && document.querySelector('.drive-snapshots')?.textContent.includes('not encrypted'));
-check('an unconfigured build explains owner setup without forcing developer fields on users', document.querySelector('.google-setup')?.textContent.includes('project owner') && !document.querySelector('.google-setup details')?.open);
+check('an unconfigured build explains owner setup without forcing developer fields on users', document.querySelector('.google-setup')?.textContent.includes('project owner') && !document.querySelector('[aria-label="Google OAuth client ID"]') && !document.querySelector('[aria-label="Google OAuth client secret"]'));
 check('current Drive revisions are explicitly labelled manual', document.querySelector('.drive-snapshots')?.textContent.includes('currently manual'));
 await click(button('Start syncing this workspace'));
 const sync=calls.find(call=>call.cmd==='google_sync_now');
@@ -48,5 +48,14 @@ await click(button('Upload current workspace'));await click(button('Import as ne
 check('older manual backups still import into a separate destination', calls.some(call=>call.cmd==='google_drive_backup'&&call.args.vault==='/vault') && imported==='/new/workspace');
 let stopped=0;await act(async()=>root.render(React.createElement(GoogleSettings,{desktop:true,vault:'/other',isSample:false,onImported:()=>{},onSyncStart:async()=>{stopped++;return false;}})));const before=calls.filter(call=>call.cmd==='google_sync_now').length;
 await click(button('Start syncing this workspace'));check('a failed save guard prevents native sync',stopped===1 && calls.filter(call=>call.cmd==='google_sync_now').length===before);
+let paused=0;const cloudSync={binding:{remote:'comet-rclone-google',provider:'google',identity:'a'.repeat(64),enabled:true},accounts:[],pause:()=>{paused++;}};
+await act(async()=>root.render(React.createElement(GoogleSettings,{desktop:true,vault:'/other',isSample:false,onImported:()=>{},cloudSync})));
+await click(button('Disconnect'));
+check('disconnecting Calendar and earlier Google does not pause the independent rclone account',paused===0&&calls.some(call=>call.cmd==='google_disconnect'));
+await act(async()=>root.unmount());root=createRoot(document.getElementById('root'));
+cloudSync.binding={...cloudSync.binding,remote:'comet-google',identity:'google'};
+await act(async()=>root.render(React.createElement(GoogleSettings,{desktop:true,vault:'/other',isSample:false,onImported:()=>{},cloudSync})));
+await click(button('Disconnect'));
+check('disconnecting earlier Google still pauses its legacy rclone binding',paused===1);
 await act(async()=>root.unmount());dom.window.close();delete globalThis.IS_REACT_ACT_ENVIRONMENT;delete globalThis.localStorage;
 globalThis.__cometFailures=(globalThis.__cometFailures??0)+failures;

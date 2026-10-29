@@ -1,9 +1,10 @@
 # Rclone cloud workspace sync (preview)
 
-Comet can use the **bundled rclone transport** for iCloud Drive (experimental)
-and an already connected Comet Google Drive account. Calendar remains a Google
-feature and has its own authorization; rclone does not provide Calendar or
-bypass Google OAuth. No separately installed rclone client is needed in the
+Comet can use the **bundled rclone transport** for Google Drive and iCloud Drive
+(experimental). Google Drive opens the provider sign-in in a browser and does
+not require the user to enter a client ID or register a Google project.
+Calendar remains a separate Google feature and needs its own configured
+connection; rclone does not provide Calendar or bypass Google OAuth. No separately installed rclone client is needed in the
 Windows release. No user's cloud password or token belongs in GitHub, release
 variables, support messages, or chat.
 
@@ -24,23 +25,36 @@ In Settings → Cloud:
    lasts around 30 days; reauthentication may be needed. Advanced Data Protection
    is supported by current rclone, but approval on a trusted device can be needed.
    This is iCloud Drive, not the read-only iCloud Photos backend.
-2. For Google Drive, connect the Comet Google account below, then choose **Use
-   connected Google Drive**. A release must have the publisher's OAuth client
-   configured for one-click Google sign-in; end users should not need to register
-   their own cloud project. Rclone is not a Google authentication bypass. Google
-   Testing-mode refresh tokens for these scopes can expire after seven days,
-   and Google's policies/revocation still apply; switching transport does not
-   remove that restriction. Calendar permissions remain separate from rclone.
-3. Open a local workspace and choose **Start automatic sync**, or select an
-   account and **Find cloud workspaces** → **Open on this device**. Import
-   creates a new local folder rather than overwriting an existing one. To
-   reconnect iCloud, use the same Apple ID; the new local session can resume the
-   existing binding. Disconnect removes local authorization, not cloud history.
+2. For Google Drive, open a local workspace and choose **Connect Google Drive**.
+   Sign in and approve rclone's `drive.file` access in the browser; no additional
+   client credentials are entered in Comet. If that account has no Comet cloud
+   workspaces, Comet starts syncing the current workspace automatically. If it
+   finds existing workspaces, choose **Open on this device** to import one into a
+   new local folder; it will not merge an unrelated existing folder silently.
+   Sign-in can be cancelled while the browser is open. This is the same shared
+   rclone client approach used by Orbit, not a Google-authentication bypass.
+3. For iCloud, select the connected account and choose **Start automatic sync**,
+   or **Find cloud workspaces** → **Open on this device**. To reconnect, use
+   the same Apple ID; the new local session can resume the existing binding.
+   Disconnect removes local authorization, not cloud history.
+
+**Important Google limitation:** [rclone states that its shared Google Drive
+client is being retired and will stop working during 2026](https://rclone.org/drive/#making-your-own-client-id).
+The exact cutoff has not been confirmed here. Until a replacement is provided,
+this browser-only flow can stop working or become rate-limited; keep independent
+backups. This is separate from Google's seven-day expiration for some scopes on
+custom clients in Testing mode, and is not a promise of permanent authorization.
+Google can revoke access at any time. Calendar still needs a separate,
+publisher-configured connection; Drive sign-in does not authorize Calendar.
 
 The previous direct Google Drive automatic and manual histories remain separate
 and untouched. Starting rclone sync creates a new history; it does not migrate
-old revisions. Pause the previous automatic engine before enabling rclone, and
-vice versa. Do not run other folder-sync engines against the same workspace.
+old revisions. In addition, Google's narrow `drive.file` scope can make files
+created with a different OAuth client invisible to the shared rclone client,
+even on the same Google account. Existing files and the earlier connection are
+preserved; reconnect with the earlier client to view its history. Pause the
+previous automatic engine before enabling rclone, and vice versa. Do not run
+other folder-sync engines against the same workspace.
 
 ## Synchronization and privacy
 
@@ -82,9 +96,13 @@ vice versa. Do not run other folder-sync engines against the same workspace.
   on Windows/Linux); no Apple password or Google
   token is put on a command line or deliberately logged. Provider metadata may
   also be stored in rclone's local cache. OS-account security still matters.
-- The Google account may only see `drive.file` data created by the same
-  publisher OAuth client. Different client IDs or a different account can make
-  existing history unavailable; Comet stops rather than silently replacing it.
+- For a new shared-client Google connection, Comet verifies Drive access and
+  hashes the account's Drive permission ID using `about.get` with the existing
+  `drive.file` scope. This distinguishes accounts without storing the email in
+  the sync binding. A reconnect stages credentials first; cancellation or a
+  failed verification leaves the previous connection intact where possible.
+  The hash and cloud group must match before an existing binding resumes. A
+  different client or account can make history unavailable; it is not deleted.
 
 ## Packaging and development
 
@@ -100,4 +118,6 @@ binary before compiling (to embed it), or set `COMET_RCLONE_DEV_BIN` when
 running a debug build. A non-Windows manually packaged build needs its matching
 binary. `COMET_REQUIRE_BUNDLED_RCLONE=1` makes a missing compile-time binary a
 build error. The Rust CI contract test uses a separately downloaded, verified
-Linux rclone and a temporary local alias; it does not contact a cloud account.
+Linux rclone and a temporary local alias. It also starts and cancels a real
+local rclone Google authorization listener with fake data; it does not sign in or
+contact a real cloud account.

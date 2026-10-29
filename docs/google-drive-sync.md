@@ -1,6 +1,6 @@
 # Google Drive workspace sync
 
-For the newer, separate rclone transport and experimental iCloud Drive support, see [rclone sync](rclone-sync.md). The direct Drive histories below remain unchanged and are not migrated automatically.
+This page describes the earlier **direct Google** integration. For the newer browser-only rclone Drive connection and experimental iCloud Drive support, see [rclone sync](rclone-sync.md). Direct Drive histories remain unchanged and are not migrated automatically; a different `drive.file` OAuth client may not be able to see them.
 
 ## What is implemented
 
@@ -26,13 +26,13 @@ The previous version-2 manual whole-workspace revision system and older one-off 
 
 Keep an independent backup and test with non-critical data first. Do not run another folder-sync service on the same workspace at the same time.
 
-## Preparing a one-click desktop release
+## Preparing Calendar and the earlier direct-Drive release
 
-Google requires Comet's publisher to create an OAuth application once; there is no legitimate zero-registration direct Google API client. End users do **not** need a Google developer project or client ID. Until the publisher completes these steps, the Connect button cannot work out of the box in an unconfigured build.
+The earlier direct Google API integration requires Comet's publisher to create an OAuth application once. End users do **not** need a Google developer project or client ID. Until the publisher completes these steps, the separate Calendar connection cannot work in an unconfigured build. The newer rclone Drive button uses rclone's shared client instead, which is [being retired](https://rclone.org/drive/#making-your-own-client-id).
 
 1. In a project owned by Comet's publisher, enable the Google Drive API and Google Calendar API. Configure the OAuth consent screen for the intended audience; while the app is in testing, add the Google accounts that may sign in. Complete any verification Google requires for public distribution and the requested `calendar.events` and `drive.file` scopes.
 2. Create a **Desktop app** OAuth client. In the GitHub repository's **Settings → Secrets and variables → Actions → Variables**, set `COMET_GOOGLE_CLIENT_ID` to the client ID and, only if Google requires it, `COMET_GOOGLE_CLIENT_SECRET` to the desktop client secret. Rebuild the installer through the Release workflow. For a local build use `VITE_GOOGLE_CLIENT_ID` and, if needed, `VITE_GOOGLE_CLIENT_SECRET`.
-3. Install that build, click **Connect Google**, and sign in on Google's browser page. Test Calendar and the automatic Drive preview with two real devices, including simultaneous edits, offline recovery, deletions, interrupted uploads and imports, before publishing or using it for important work. Credentials belong in the system credential store; never put a user's Google password or refresh token in GitHub variables.
+3. Install that build, click **Connect Calendar**, and sign in on Google's browser page. Test Calendar and the automatic Drive preview with two real devices, including simultaneous edits, offline recovery, deletions, interrupted uploads and imports, before publishing or using it for important work. Credentials belong in the system credential store; never put a user's Google password or refresh token in GitHub variables.
 
 The desktop client identifier and any bundled desktop client secret are public application configuration, not a private credential. No client has been registered or verified by this repository change, and the release workflow cannot create a Google project on the publisher's behalf. An iPhone port requires its own mobile OAuth design and should not reuse the desktop loopback flow.
 

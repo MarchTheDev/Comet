@@ -124,6 +124,11 @@ impl Engine {
         engine.call("config/unlock", json!({"configPassword":key})).await?;
         Ok(engine)
     }
+    #[cfg(test)]
+    pub fn stop_for_test(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
     pub async fn call(&self, path: &str, input: Value) -> Result<Value, String> {
         self.call_optional(path, input).await?.ok_or_else(|| ERROR.into())
     }

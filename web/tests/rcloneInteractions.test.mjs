@@ -31,7 +31,7 @@ window.__TAURI_INTERNALS__={invoke:async(cmd,args={})=>{calls.push({cmd,args});
 }};
 window.confirm=()=>true;
 function Harness(){controller=useRcloneSync({desktop:true,vault:'/vault',isSample:false,beforeApply:async()=>{guard++;return true;},afterApply:async()=>{}});return React.createElement(RcloneSettings,{desktop:true,vault:'/vault',isSample:false,controller,onImported:path=>{imported=path;}});}
-const root=createRoot(document.getElementById('root'));const button=text=>[...document.querySelectorAll('button')].find(item=>item.textContent.trim()===text);
+let root=createRoot(document.getElementById('root'));const button=text=>[...document.querySelectorAll('button')].find(item=>item.textContent.trim()===text);
 const click=async element=>act(async()=>element.dispatchEvent(new dom.window.MouseEvent('click',{bubbles:true,cancelable:true})));
 const fill=async(element,text)=>act(async()=>{element.focus();Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype,'value').set.call(element,text);const change=new dom.window.Event('propertychange',{bubbles:true});Object.defineProperty(change,'propertyName',{value:'value'});element.dispatchEvent(change);element.dispatchEvent(new dom.window.Event('input',{bubbles:true}));});
 const submit=async form=>act(async()=>form.dispatchEvent(new dom.window.Event('submit',{bubbles:true,cancelable:true})));
@@ -52,7 +52,9 @@ check('older Drive sync blocks starting a second independent engine',calls.filte
 localStorage.setItem(driveKey('/vault'),JSON.stringify({group:'9'.repeat(32),base:'oldbase',enabled:false}));offline=true;await click(button('Start automatic sync'));
 const pending=JSON.parse(localStorage.getItem(rcloneBindingKey('/vault')));
 check('starting offline persists an enabled pending intent and schedules a retry',pending?.group===''&&pending.base===''&&pending.remote===account.remote&&document.querySelector('.dialog-error')?.textContent.includes('offline')&&[...timers.values()].some(t=>t.ms===15000));
-offline=false;const initialRetry=[...timers.entries()].find(([,t])=>t.ms===15000);timers.delete(initialRetry[0]);await act(async()=>initialRetry[1].fn());
+await act(async()=>root.unmount());root=createRoot(document.getElementById('root'));await act(async()=>root.render(React.createElement(Harness)));
+check('an offline first sync survives a restart and is queued when its account reloads',controller.binding?.group===''&&controller.binding.enabled&&controller.connected&&[...timers.values()].some(t=>t.ms===1500));
+offline=false;const initialRetry=[...timers.entries()].find(([,t])=>t.ms===1500);timers.delete(initialRetry[0]);await act(async()=>initialRetry[1].fn());
 const saved=JSON.parse(localStorage.getItem(rcloneBindingKey('/vault')));
 check('starting sync saves the provider identity and reports conflict safety',saved?.base==='d'.repeat(32)&&saved.remote===account.remote&&guard===1&&document.querySelector('.drive-sync-detail')?.textContent.includes('/safe'));
 check('automatic cloud sync schedules periodic incoming checks',[...timers.values()].some(t=>t.ms===30000));

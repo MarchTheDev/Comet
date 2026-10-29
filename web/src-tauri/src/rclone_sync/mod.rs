@@ -311,6 +311,67 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
     #[test]
+    fn local_rclone_two_device_conflicts_survive_offline_restart() {
+        let Ok(exe) = std::env::var("COMET_RCLONE_TEST_BIN") else { return; };
+        let root = std::env::temp_dir().join(format!("comet-rclone-merge-{}-{}", std::process::id(), new_id().unwrap()));
+        let remote = root.join("remote"); let base_dir = root.join("base"); let device_a = root.join("device-a"); let device_b = root.join("device-b");
+        for dir in [&remote, &base_dir, &device_a, &device_b] { std::fs::create_dir_all(dir).unwrap(); }
+        for dir in [&base_dir, &device_a, &device_b] {
+            std::fs::write(dir.join("note.md"), "common ancestor").unwrap();
+            std::fs::write(dir.join("unchanged.md"), "unchanged").unwrap();
+        }
+        tauri::async_runtime::block_on(async {
+            let mut engine = Engine::for_test(exe.clone().into(), root.clone()).await.unwrap();
+            engine.call("config/create", serde_json::json!({"name":"comet-google","type":"alias","parameters":{"remote":remote.to_string_lossy()},"opt":{"nonInteractive":true}})).await.unwrap();
+            let group = "1".repeat(32); let base_id = "2".repeat(32); let a_id = "3".repeat(32); let b_id = "4".repeat(32); let merge_id = "5".repeat(32);
+            let base = workspace_archive::pack(base_dir.to_str().unwrap()).unwrap();
+            let (base_manifest, _) = build_manifest(&engine, "comet-google", &group, &[], &base).await.unwrap();
+            commit(&engine, &group, &base_id, vec![], base_manifest.clone()).await;
+            // Stop the transport, edit offline, and verify the local file
+            // survives. A new process must reopen the encrypted configuration
+            // and find the same baseline before either device publishes.
+            engine.stop_for_test();
+            std::fs::write(device_a.join("note.md"), "device A offline edit").unwrap();
+            assert!(history(&engine, "comet-google", &group).await.is_err());
+            assert_eq!(std::fs::read_to_string(device_a.join("note.md")).unwrap(), "device A offline edit");
+            drop(engine);
+            let engine = Engine::for_test(exe.into(), root.clone()).await.unwrap();
+            let recovered = history(&engine, "comet-google", &group).await.unwrap();
+            assert_eq!(recovered.len(), 1); assert_eq!(recovered[0].revision.id, base_id);
+            // Both devices edit from the same ancestor, then publish without
+            // deleting or overwriting the other revision.
+            std::fs::write(device_b.join("note.md"), "device B independent edit").unwrap();
+            let a_snapshot = workspace_archive::pack(device_a.to_str().unwrap()).unwrap();
+            let b_snapshot = workspace_archive::pack(device_b.to_str().unwrap()).unwrap();
+            let (a_manifest, a_uploads) = build_manifest(&engine, "comet-google", &group, &[base_manifest.clone()], &a_snapshot).await.unwrap();
+            let (b_manifest, b_uploads) = build_manifest(&engine, "comet-google", &group, &[base_manifest.clone()], &b_snapshot).await.unwrap();
+            assert_eq!((a_uploads, b_uploads), (1, 1));
+            commit(&engine, &group, &a_id, vec![base_id.clone()], a_manifest.clone()).await;
+            commit(&engine, &group, &b_id, vec![base_id.clone()], b_manifest.clone()).await;
+            let divergent = history(&engine, "comet-google", &group).await.unwrap();
+            assert_eq!(heads(&divergent.iter().map(|item| item.revision.clone()).collect::<Vec<_>>()).len(), 2);
+            let (incoming, _) = materialize(&engine, "comet-google", &group, &b_manifest, &[&base]).await.unwrap();
+            let result = workspace_archive::merge(device_a.to_str().unwrap(), Some(&base), &incoming).unwrap();
+            assert_eq!(result.conflicts, 1);
+            assert_eq!(std::fs::read_to_string(device_a.join("note.md")).unwrap(), "device A offline edit");
+            let merged = workspace_archive::pack(device_a.to_str().unwrap()).unwrap();
+            let (merged_manifest, new_uploads) = build_manifest(&engine, "comet-google", &group, &[a_manifest, b_manifest], &merged).await.unwrap();
+            assert_eq!(new_uploads, 0); // both independently uploaded contents are reused
+            commit(&engine, &group, &merge_id, vec![a_id, b_id], merged_manifest.clone()).await;
+            let final_history = history(&engine, "comet-google", &group).await.unwrap();
+            let final_revisions: Vec<_> = final_history.iter().map(|item| item.revision.clone()).collect();
+            let final_heads = heads(&final_revisions);
+            assert_eq!(final_heads.len(), 1); assert_eq!(final_heads[0].id, merge_id);
+            let (restored, _) = materialize(&engine, "comet-google", &group, &merged_manifest, &[]).await.unwrap();
+            let files = workspace_archive::entries(&restored).unwrap();
+            assert!(files.iter().any(|entry| entry.name == "note.md" && entry.bytes == b"device A offline edit"));
+            assert!(files.iter().any(|entry| entry.name.starts_with("note (sync conflict ") && entry.bytes == b"device B independent edit"));
+            assert!(files.iter().any(|entry| entry.name == "unchanged.md" && entry.bytes == b"unchanged"));
+            drop(engine);
+        });
+        let _ = std::fs::remove_dir_all(root);
+    }
+    #[test]
     fn markers_and_revision_validation_reject_tampering() {
         let id = "a".repeat(32); let digest = "b".repeat(64);
         assert_eq!(marker(&format!("{id}-{digest}.commit")), Some((id.as_str(), digest.as_str())));

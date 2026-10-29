@@ -38,6 +38,8 @@ const checks = [
   'tests/googleInteractions.test.mjs',
   'tests/incrementalSync.test.mjs',
   'tests/incrementalInteractions.test.mjs',
+  'tests/rcloneSync.test.mjs',
+  'tests/rcloneInteractions.test.mjs',
   'tests/whiteboardInteractions.test.mjs',
   'tests/uploadInteractions.test.mjs',
   'tests/droppedUpload.test.mjs',
@@ -55,6 +57,7 @@ try {
       // Left to Node, so the bundle finds the copies installed here.
       external: ['jsdom', 'react', 'react-dom', 'react-dom/server', 'lucide-react', 'music-metadata', 'fake-indexeddb'],
       jsx: 'automatic',
+      loader: { '.txt': 'text' },
       logLevel: 'silent',
     });
     await import(pathToFileURL(path.resolve(out)).href);

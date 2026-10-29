@@ -599,7 +599,7 @@ function App() {
       try { await flushAll(); return vaultRef.current === vault; }
       catch { setNotice("Couldn't save before syncing. Retry your save first."); return false; }
     }
-    if (document.querySelector('[role="dialog"][aria-modal="true"]') || syncActivity.current.pointers.size || syncActivity.current.composing || Date.now() - syncActivity.current.lastInput < 1500) return false;
+    if (document.querySelector('[role="dialog"][aria-modal="true"]') || syncActivity.current.pointers.size || syncActivity.current.composing || (!quitting.current && Date.now() - syncActivity.current.lastInput < 1500)) return false;
     syncGuardOwned.current = true;
     syncInFlight.current = true;
     syncFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -1317,7 +1317,7 @@ function App() {
         available = await invoke<boolean>("tray_available").catch(() => false);
         const finishAndQuit = async () => {
           if (quitting.current) return;
-          if (activeUploads.current) { setNotice("Wait for file imports to finish before quitting."); return; }
+          if (activeUploads.current) { await windowHandle.show().catch(() => undefined); setNotice("Wait for file imports to finish before quitting."); return; }
           quitting.current = true; syncAllowApply.current = true;
           (document.activeElement as HTMLElement | null)?.blur?.();
           editorRef.current?.setEditable(false, false);

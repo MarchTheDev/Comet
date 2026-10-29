@@ -174,7 +174,7 @@ fn launch(exe: &Path, config: &Path, cache: &Path, key: &str) -> Result<(Child, 
     command.args(["rcd", "--rc-addr=127.0.0.1:0", "--rc-serve", "--ask-password=false", "--contimeout=15s", "--timeout=90s", "--retries=1", "--low-level-retries=2"])
         .arg("--config").arg(config).arg("--cache-dir").arg(cache)
         .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped());
-    for (name, _) in std::env::vars_os() { if name.to_string_lossy().starts_with("RCLONE_") || name == "_RCLONE_CONFIG_KEY_FILE" { command.env_remove(name); } }
+    for (name, _) in std::env::vars_os() { if name.to_string_lossy().to_ascii_uppercase().starts_with("RCLONE_") || name.to_string_lossy().eq_ignore_ascii_case("_RCLONE_CONFIG_KEY_FILE") { command.env_remove(name); } }
     command.env("RCLONE_RC_USER", RC_USER).env("RCLONE_RC_PASS", &password).env("RCLONE_CONFIG_PASS", key);
     #[cfg(windows)] { use std::os::windows::process::CommandExt; command.creation_flags(0x08000000); }
     #[cfg(target_os = "linux")] {

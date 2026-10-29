@@ -1,0 +1,64 @@
+import { JSDOM } from 'jsdom';
+import React, { act } from 'react';
+import { createRoot } from 'react-dom/client';
+import { RcloneSettings } from '../src/RcloneSettings.tsx';
+import { useRcloneSync } from '../src/utils/useRcloneSync.ts';
+import { bindingKey as driveKey } from '../src/utils/incrementalSync.ts';
+import { rcloneBindingKey } from '../src/utils/rcloneBinding.ts';
+
+let failures=0;const check=(name,ok)=>{if(ok)console.log(`  ok   ${name}`);else{failures++;console.log(`  FAIL ${name}`);}};
+console.log('\nrclone cloud settings and recovery (mocked native bridge)');
+const dom=new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>',{pretendToBeVisual:true,url:'https://comet-rclone.test/'});
+dom.window.HTMLElement.prototype.attachEvent=function(name,listener){this.addEventListener(name.replace(/^on/,''),listener);};dom.window.HTMLElement.prototype.detachEvent=function(name,listener){this.removeEventListener(name.replace(/^on/,''),listener);};
+globalThis.window=dom.window;globalThis.document=dom.window.document;globalThis.localStorage=dom.window.localStorage;globalThis.Node=dom.window.Node;globalThis.HTMLElement=dom.window.HTMLElement;globalThis.IS_REACT_ACT_ENVIRONMENT=true;
+Object.defineProperty(globalThis,'navigator',{value:dom.window.navigator,configurable:true});
+const timers=new Map(), realSet=window.setTimeout, realClear=window.clearTimeout;let timerId=0;
+window.setTimeout=(fn,ms)=>{const id=++timerId;timers.set(id,{fn,ms});return id;};window.clearTimeout=id=>timers.delete(id);
+const calls=[];let linked=false,offline=false,sequence=0,imported='',guard=0,controller;
+const account={provider:'icloud',remote:`comet-icloud-${'a'.repeat(32)}`,identity:'b'.repeat(64),label:'preview@example.test'};
+window.__TAURI_INTERNALS__={invoke:async(cmd,args={})=>{calls.push({cmd,args});
+  if(cmd==='rclone_incremental_recover')return;
+  if(cmd==='rclone_accounts')return linked?[account]:[];
+  if(cmd==='rclone_icloud_begin')return {complete:false,remote:account.remote,identity:account.identity,prompt:"Enter your code or type sms",choices:[]};
+  if(cmd==='rclone_icloud_continue'){linked=true;return {complete:true,remote:account.remote,identity:account.identity,prompt:'',choices:[]};}
+  if(cmd==='rclone_icloud_cancel'||cmd==='rclone_incremental_abort')return;
+  if(cmd==='rclone_incremental_prepare'){if(offline)throw Error('offline');return {ticket:'e'.repeat(32),incoming:true};}
+  if(cmd==='rclone_incremental_apply')return {applied:1,deleted:0,conflicts:1,safetyFolder:'/safe',changedPaths:['note.md']};
+  if(cmd==='rclone_incremental_publish')return {group:'c'.repeat(32),base:(++sequence===1?'d':'f').repeat(32),uploaded:1,downloaded:1,more:false};
+  if(cmd==='rclone_incremental_list')return [{group:'c'.repeat(32),id:'d'.repeat(32),name:'Cloud workspace',modified:'',branches:2}];
+  if(cmd==='rclone_incremental_import')return {path:'/new-workspace',group:args.group,base:args.id};
+  if(cmd==='rclone_disconnect'){linked=false;return;}
+}};
+window.confirm=()=>true;
+function Harness(){controller=useRcloneSync({desktop:true,vault:'/vault',isSample:false,beforeApply:async()=>{guard++;return true;},afterApply:async()=>{}});return React.createElement(RcloneSettings,{desktop:true,vault:'/vault',isSample:false,controller,onImported:path=>{imported=path;}});}
+const root=createRoot(document.getElementById('root'));const button=text=>[...document.querySelectorAll('button')].find(item=>item.textContent.trim()===text);
+const click=async element=>act(async()=>element.dispatchEvent(new dom.window.MouseEvent('click',{bubbles:true,cancelable:true})));
+const fill=async(element,text)=>act(async()=>{element.focus();Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype,'value').set.call(element,text);const change=new dom.window.Event('propertychange',{bubbles:true});Object.defineProperty(change,'propertyName',{value:'value'});element.dispatchEvent(change);element.dispatchEvent(new dom.window.Event('input',{bubbles:true}));});
+const submit=async form=>act(async()=>form.dispatchEvent(new dom.window.Event('submit',{bubbles:true,cancelable:true})));
+await act(async()=>root.render(React.createElement(Harness)));
+check('cloud settings disclose local-first behavior, preview limit and lack of end-to-end encryption',document.querySelector('.rclone-settings')?.textContent.includes('128 MB')&&document.querySelector('.rclone-settings')?.textContent.includes('not end-to-end encrypt'));
+await click(button('Connect iCloud Drive'));
+check('iCloud sign-in explains regular password, 2FA, web access and reauthentication',document.querySelector('.rclone-auth')?.textContent.includes('regular Apple ID password')&&document.querySelector('.rclone-auth')?.textContent.includes('two-factor')&&document.querySelector('.rclone-auth')?.textContent.includes('30 days'));
+const inputs=[...document.querySelectorAll('.rclone-auth input')];await fill(inputs[0],'preview@example.test');await fill(inputs[1],'not-a-real-password');await submit(document.querySelector('.rclone-auth form'));
+check('password is cleared from the form while the native verification step is pending',calls.find(c=>c.cmd==='rclone_icloud_begin')?.args.password==='not-a-real-password'&&!document.querySelector('.rclone-auth input[type=password]')&&document.querySelector('.rclone-auth')?.textContent.includes('type sms'));
+await fill(document.querySelector('[aria-label="Apple verification code"]'),'123456');await submit(document.querySelector('.rclone-auth form'));
+check('successful verification offers the connected account without storing a password in local storage',calls.some(c=>c.cmd==='rclone_icloud_continue')&&document.querySelector('.rclone-account-row')?.textContent.includes('preview@example.test')&&![...Array(localStorage.length)].some((_,i)=>localStorage.getItem(localStorage.key(i))?.includes('not-a-real-password')));
+localStorage.setItem(driveKey('/vault'),JSON.stringify({group:'9'.repeat(32),base:'oldbase',enabled:true}));
+const before=calls.filter(c=>c.cmd==='rclone_incremental_prepare').length;await click(button('Start automatic sync'));
+check('older Drive sync blocks starting a second independent engine',calls.filter(c=>c.cmd==='rclone_incremental_prepare').length===before&&document.querySelector('.dialog-error')?.textContent.includes('Pause the older Google'));
+localStorage.setItem(driveKey('/vault'),JSON.stringify({group:'9'.repeat(32),base:'oldbase',enabled:false}));await click(button('Start automatic sync'));
+const saved=JSON.parse(localStorage.getItem(rcloneBindingKey('/vault')));
+check('starting sync saves the provider identity and reports conflict safety',saved?.base==='d'.repeat(32)&&saved.remote===account.remote&&guard===1&&document.querySelector('.drive-sync-detail')?.textContent.includes('/safe'));
+check('automatic cloud sync schedules periodic incoming checks',[...timers.values()].some(t=>t.ms===30000));
+offline=true;const old=localStorage.getItem(rcloneBindingKey('/vault'));await click(button('Sync changes now'));
+check('an offline error preserves the baseline and schedules retry',localStorage.getItem(rcloneBindingKey('/vault'))===old&&document.querySelector('.dialog-error')?.textContent.includes('offline')&&[...timers.values()].some(t=>t.ms===15000));
+let final=false;await act(async()=>{final=await controller.finishForQuit();});check('a final quit attempt reports failure rather than pretending offline work synced',final===false&&localStorage.getItem(rcloneBindingKey('/vault'))===old);
+offline=false;await act(async()=>controller.changed());check('a successful local save schedules a debounced cloud check',[...timers.values()].some(t=>t.ms===1200));
+const scheduled=[...timers.entries()].find(([,t])=>t.ms===1200);timers.delete(scheduled[0]);await act(async()=>scheduled[1].fn());
+check('recovery retries against the previous baseline and advances only on publication',calls.filter(c=>c.cmd==='rclone_incremental_prepare').at(-1).args.base==='d'.repeat(32)&&JSON.parse(localStorage.getItem(rcloneBindingKey('/vault'))).base==='f'.repeat(32));
+await click(button('Pause'));localStorage.setItem(driveKey('/vault'),JSON.stringify({group:'9'.repeat(32),base:'oldbase',enabled:true}));await click(button('Resume'));
+check('resuming cloud sync is blocked while older Drive sync is active',JSON.parse(localStorage.getItem(rcloneBindingKey('/vault'))).enabled===false&&document.querySelector('.dialog-error')?.textContent.includes('Pause the older Google'));
+await click(button('Find cloud workspaces'));await click(button('Open on this device'));
+check('another device imports a separate workspace and saves its cloud binding',imported==='/new-workspace'&&JSON.parse(localStorage.getItem(rcloneBindingKey('/new-workspace'))).group==='c'.repeat(32));
+await act(async()=>root.unmount());window.setTimeout=realSet;window.clearTimeout=realClear;dom.window.close();delete globalThis.IS_REACT_ACT_ENVIRONMENT;delete globalThis.localStorage;
+globalThis.__cometFailures=(globalThis.__cometFailures??0)+failures;

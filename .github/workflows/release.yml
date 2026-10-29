@@ -146,7 +146,24 @@ jobs:
 
       - name: Build
         working-directory: web
-        run: npx tauri build --bundles nsis,msi
+        shell: pwsh
+        run: |
+          $env:CARGO_TERM_COLOR = "never"
+          $ErrorActionPreference = "Continue"
+          npx tauri build --bundles nsis,msi *>&1 | Tee-Object -FilePath "../windows-build.log"
+          $buildExit = $LASTEXITCODE
+          if ($buildExit -ne 0) {
+            # Publish useful diagnostics as annotations: hosted runner log URLs
+            # are not always reachable from a restricted development sandbox.
+            $lines = Get-Content "../windows-build.log"
+            for ($i = 0; $i -lt $lines.Count; $i++) {
+              if ($lines[$i] -match 'error(\[E[0-9]+\])?:|error:|failed to') {
+                $detail = ($lines[$i..([Math]::Min($i + 4, $lines.Count - 1))] -join ' ')
+                Write-Output "::error::$detail"
+              }
+            }
+            exit $buildExit
+          }
 
       - name: Collect the installers
         shell: pwsh

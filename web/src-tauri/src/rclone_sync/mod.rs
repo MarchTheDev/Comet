@@ -2,10 +2,9 @@
 //! hash-checked revision manifests, then publishes a zero-byte commit marker.
 //! No `sync`, `bisync`, mirror, remote deletion, or last-writer-wins copy is
 //! used. Existing Google Drive v3 history is deliberately a separate protocol.
-mod auth;
+pub(crate) mod auth;
 mod engine;
 
-pub use auth::{rclone_accounts, rclone_connect_google, rclone_disconnect, rclone_icloud_begin, rclone_icloud_cancel, rclone_icloud_continue};
 use auth::remote_ok;
 use engine::Engine;
 use crate::google::{ancestor_distances, common_ancestor, group_id, heads, ConnectingGuard, Revision, SYNCING};

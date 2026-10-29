@@ -78,7 +78,8 @@ vice versa. Do not run other folder-sync engines against the same workspace.
   If the credential store is unavailable or the key is missing, Comet refuses
   cloud access rather than falling back to a plaintext config. Rclone's
   short-lived remote-control process is authenticated, loopback-only, given
-  random credentials, and terminated with Comet; no Apple password or Google
+  random credentials, and terminated on normal exit (with parent-death protection
+  on Windows/Linux); no Apple password or Google
   token is put on a command line or deliberately logged. Provider metadata may
   also be stored in rclone's local cache. OS-account security still matters.
 - The Google account may only see `drive.file` data created by the same

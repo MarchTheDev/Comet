@@ -1,29 +1,55 @@
-#!/bin/sh
-# Check that a Linux package's X11 entry point reached the files it names.
-# A bundler that copies nothing does not fail, so the check is there to catch
-# the packages that silently ship empty.
+#!/usr/bin/env bash
+# Confirm the X11 entry point really is inside a finished package.
+#
+# Bundling without complaint and shipping the file are not the same fact, and
+# the difference stays invisible until somebody installs the package, opens the
+# menu on a Wayland session, and Comet (X11) is not there. The bundler only
+# says it copied something; this looks at what is actually in the archive.
+#
+# usage: check-x11.sh <label> <package> <listing command...>
+#
+# The listing command prints permissions and path, one file per line, which is
+# what dpkg-deb --contents, rpm -qlvp and tar -tvf all do.
 set -euo pipefail
 
-if [ "$#" -ne 3 ]; then
-  echo "usage: check-x11.sh <label> <package> <list-command>" >&2
+if [ "$#" -lt 3 ]; then
+  echo "Usage: check-x11.sh <label> <package> <listing command...>" >&2
   exit 2
 fi
 
 label="$1"
-package="$2"
-command="$3"
+shift
+package="$1"
+shift
+listing=$("$@" "$package")
+name=$(basename "$package")
+failed=0
 
-listing="$(command -v sh -c "true" >/dev/null 2>&1; $command "$package" 2>/dev/null | tr '\n' '\n')"
-echo "$listing"
-
-for needle in /comet-x11 /comet-x11.desktop /README.txt; do
-  if ! printf '%s\n' "$listing" | grep -q "$needle"; then
-    echo "::error title=The package::$label is missing $needle"
-    exit 1
+# Permissions differ between tools but every one of them writes `rwx` for a
+# file it is possible to run, which is the only part this cares about.
+report() {
+  local what="$1" pattern="$2" runnable="$3" line
+  line=$(printf '%s\n' "$listing" | grep -E "$pattern" || true)
+  if [ -z "$line" ]; then
+    echo "::error title=$label::$what is not in $name"
+    failed=1
+    return
   fi
-done
+  if [ "$runnable" = yes ] && ! printf '%s\n' "$line" | grep -q rwx; then
+    echo "::error title=$label::$what is in $name but cannot be run: $line"
+    failed=1
+    return
+  fi
+  echo "  $what: $(printf '%s\n' "$line" | tr -s ' ')"
+}
 
-if ! printf '%s\n' "$listing" | grep -qE '/comet-x11$'; then
-  echo "::error title=The package::$label is missing the executable bit on comet-x11"
+report "the desktop entry" 'applications/[Cc]omet\.desktop$' no
+report "the X11 wrapper" 'usr/bin/comet-x11$' yes
+report "the X11 menu entry" 'applications/comet-x11\.desktop$' no
+report "the application-id menu entry" 'applications/com\.marco\.comet\.desktop$' no
+
+if [ "$failed" -ne 0 ]; then
   exit 1
 fi
+
+echo "::notice title=$label::the X11 entry points are in $name"

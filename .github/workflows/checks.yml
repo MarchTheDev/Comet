@@ -43,7 +43,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             libwebkit2gtk-4.1-dev build-essential curl wget file \
-            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev \
+            libxdo-dev libssl-dev libdbus-1-dev libayatana-appindicator3-dev librsvg2-dev \
             patchelf libfuse2
 
       - uses: actions/setup-node@v4
@@ -71,13 +71,20 @@ jobs:
         with:
           workspaces: web/src-tauri
 
+      - name: Prepare official rclone for local transport contract tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 https://github.com/rclone/rclone/releases/download/v1.75.2/rclone-v1.75.2-linux-amd64.zip -o "$RUNNER_TEMP/rclone.zip"
+          echo "349ac8fba6ff65d6247043f1750cdcb518ec5d500ef91463a10d37c0ccdf3702  $RUNNER_TEMP/rclone.zip" | sha256sum --check
+          unzip -q "$RUNNER_TEMP/rclone.zip" -d "$RUNNER_TEMP/rclone"
+          echo "COMET_RCLONE_TEST_BIN=$RUNNER_TEMP/rclone/rclone-v1.75.2-linux-amd64/rclone" >> "$GITHUB_ENV"
+
       # `--message-format=short` puts every compile error on one line with its
       # file and position, which is what the annotations below need.
       #
-      # No `--locked`: the committed Cargo.lock is version 3 and a current Cargo
-      # rewrites it to version 4 on sight, so insisting on the file as it stands
-      # stops the tests before they start. The release builds have never used
-      # `--locked` either, so they resolve the same way this does.
+      # The version 4 Cargo.lock is committed and checked here, so CI cannot
+      # silently resolve a different set of native dependencies.
       - name: cargo test
         working-directory: web/src-tauri
         shell: bash
@@ -86,7 +93,7 @@ jobs:
           # --color=never because cargo colourises even into a pipe, and the
           # escape codes sit between the file name and the word "error", which
           # is exactly where the greps below are looking.
-          cargo test --color=never --message-format=short 2>&1 | tee ../cargo.log
+          cargo test --locked --color=never --message-format=short 2>&1 | tee ../cargo.log
 
       # A failed run's log cannot always be downloaded, so anything worth
       # reading is turned into an annotation, which can.

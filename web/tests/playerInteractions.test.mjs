@@ -1,0 +1,37 @@
+import { JSDOM } from 'jsdom';
+import React, { act } from 'react';
+import { createRoot } from 'react-dom/client';
+import { AudioPlayer } from '../src/MediaPlayer.tsx';
+
+let failures = 0;
+function check(name, ok) { if (ok) console.log(`  ok   ${name}`); else { failures++; console.log(`  FAIL ${name}`); } }
+console.log('\nplayer keyboard interactions');
+const dom = new JSDOM('<!doctype html><html><body><input id="outside"><div id="root"></div></body></html>', { pretendToBeVisual: true, url: 'https://comet-player.test/' });
+globalThis.window = dom.window; globalThis.document = dom.window.document; globalThis.Node = dom.window.Node; globalThis.HTMLElement = dom.window.HTMLElement; globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+Object.defineProperty(globalThis, 'navigator', { value: dom.window.navigator, configurable: true });
+globalThis.cancelAnimationFrame = () => {};
+dom.window.HTMLCanvasElement.prototype.getContext = () => null;
+const originalFetch = globalThis.fetch; globalThis.fetch = async () => { throw new Error('metadata unavailable'); };
+const root = createRoot(document.getElementById('root'));
+await act(async () => root.render(React.createElement(AudioPlayer, { url: 'https://comet-player.test/track.mp3', name: 'track.mp3', autoCoverArt: false })));
+const audio = document.querySelector('audio');
+Object.defineProperty(audio, 'duration', { value: 120, configurable: true }); audio.currentTime = 30;
+let paused = true;
+Object.defineProperty(audio, 'paused', { get: () => paused, configurable: true });
+audio.play = async () => { paused = false; audio.dispatchEvent(new dom.window.Event('play')); };
+audio.pause = () => { paused = true; audio.dispatchEvent(new dom.window.Event('pause')); };
+await act(async () => audio.dispatchEvent(new dom.window.Event('loadedmetadata')));
+const key = async (element, value) => { const event = new dom.window.KeyboardEvent('keydown', { key: value, bubbles: true, cancelable: true }); await act(async () => element.dispatchEvent(event)); return event; };
+const player = document.querySelector('.audio-player');
+await key(player, 'ArrowDown'); await key(player, 'ArrowRight');
+check('player arrow keys adjust volume and seek', Math.abs(audio.volume - .95) < .001 && audio.currentTime === 40);
+const volume = document.querySelector('[aria-label="Audio volume"]'), position = document.querySelector('[aria-label="Audio position"]');
+await key(volume, 'ArrowLeft'); await key(position, 'ArrowUp');
+check('arrow shortcuts also work when a player slider is focused', audio.currentTime === 30 && audio.volume === 1);
+const fullscreen = document.querySelector('[aria-label="Open full-screen player"]');
+const space = await key(fullscreen, ' ');
+check('Space on the fullscreen button toggles playback without opening an overlay', space.defaultPrevented && !paused && !player.classList.contains('audio-fullscreen'));
+const outside = document.querySelector('#outside'); const outsideKey = await key(outside, 'ArrowDown');
+check('player shortcuts do not intercept text input elsewhere', !outsideKey.defaultPrevented && audio.volume === 1);
+await act(async () => root.unmount()); dom.window.close(); globalThis.fetch = originalFetch; delete globalThis.cancelAnimationFrame; delete globalThis.IS_REACT_ACT_ENVIRONMENT;
+globalThis.__cometFailures = (globalThis.__cometFailures ?? 0) + failures;

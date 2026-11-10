@@ -8,6 +8,6 @@ Comment=The same Comet, forced onto X11 for sessions where the native Wayland wi
 Exec=env GDK_BACKEND=x11 comet
 Icon=comet
 Terminal=false
-Categories=Utility;NoteTaking;
+Categories=Utility;
 Keywords=notes;markdown;comet;x11;xwayland;
-StartupWMClass=com.comet.launcher
+StartupWMClass=com.marco.comet

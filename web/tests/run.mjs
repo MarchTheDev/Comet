@@ -15,6 +15,40 @@ const dir = path.join('.test-build');
 mkdirSync(dir, { recursive: true });
 const checks = [
   'tests/markdown.test.mjs',
+  'tests/vault.test.mjs',
+  'tests/pathNavigation.test.mjs',
+  'tests/settings.test.mjs',
+  'tests/settingsInteractions.test.mjs',
+  'tests/appSelect.test.mjs',
+  'tests/calendar.test.mjs',
+  'tests/tools.test.mjs',
+  'tests/cloudPaused.test.mjs',
+  'tests/linuxPackaging.test.mjs',
+  'tests/siteIcons.test.mjs',
+  'tests/session.test.mjs',
+  'tests/editor.test.mjs',
+  'tests/organization.test.mjs',
+  'tests/richText.test.mjs',
+  'tests/saveQueue.test.mjs',
+  'tests/newFeatures.test.mjs',
+  'tests/boardInteractions.test.mjs',
+  'tests/exploreInteractions.test.mjs',
+  'tests/coverCache.test.mjs',
+  'tests/audioNativeCacheInteractions.test.mjs',
+  'tests/deleteAndAutosize.test.mjs',
+  'tests/latestFeatures.test.mjs',
+  'tests/passwordRecovery.test.mjs',
+  'tests/passwordBackup.test.mjs',
+  'tests/googleInteractions.test.mjs',
+  'tests/incrementalSync.test.mjs',
+  'tests/incrementalInteractions.test.mjs',
+  'tests/rcloneSync.test.mjs',
+  'tests/rcloneInteractions.test.mjs',
+  'tests/rcloneGoogleInteractions.test.mjs',
+  'tests/whiteboardInteractions.test.mjs',
+  'tests/uploadInteractions.test.mjs',
+  'tests/droppedUpload.test.mjs',
+  'tests/playerInteractions.test.mjs',
 ];
 try {
   for (const file of checks) {
@@ -26,8 +60,9 @@ try {
       platform: 'node',
       outfile: out,
       // Left to Node, so the bundle finds the copies installed here.
-      external: ['jsdom', 'react', 'react-dom', 'react-dom/server', 'lucide-react'],
+      external: ['jsdom', 'react', 'react-dom', 'react-dom/server', 'lucide-react', 'music-metadata', 'fake-indexeddb'],
       jsx: 'automatic',
+      loader: { '.txt': 'text' },
       logLevel: 'silent',
     });
     await import(pathToFileURL(path.resolve(out)).href);

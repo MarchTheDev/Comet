@@ -1,0 +1,112 @@
+/** Orchestrate the native incremental sync in two phases: network preparation
+ * happens without blocking the editor; only local application/capture is guarded.
+ * A failed publication never advances the saved baseline. */
+export interface DriveBinding { group: string; base: string; enabled: boolean }
+export interface DrivePrepared { ticket: string; incoming: boolean }
+export interface DriveApplied { applied: number; deleted: number; conflicts: number; safetyFolder: string | null; changedPaths: string[]; recovered?: boolean }
+export interface DrivePublished { group: string; base: string; uploaded: number; downloaded: number; more: boolean; readableNeeded?: boolean }
+export interface DriveRunSummary extends DriveApplied { uploaded: number; downloaded: number; more: boolean; readableWarning?: string }
+export type DrivePhase = "checking" | "applying" | "uploading";
+export const bindingKey = (vault: string) => `comet:drive-incremental:v1:${encodeURIComponent(vault)}`;
+export function validBinding(value: unknown): value is DriveBinding {
+  const b = value as Partial<DriveBinding> | null;
+  return !!b && typeof b.group === "string" && /^[0-9a-f]{32}$/i.test(b.group) && typeof b.base === "string" && /^[a-z0-9_-]{1,200}$/i.test(b.base) && typeof b.enabled === "boolean";
+}
+export function readDriveBinding(vault: string): DriveBinding | null {
+  try { const value: unknown = JSON.parse(localStorage.getItem(bindingKey(vault)) || "null"); return validBinding(value) ? value : null; }
+  catch { return null; }
+}
+export function saveDriveBinding(vault: string, binding: DriveBinding): void {
+  if (!validBinding(binding)) throw new Error("Invalid Drive sync binding.");
+  // Do not claim a successful link when persistent state is unavailable.
+  localStorage.setItem(bindingKey(vault), JSON.stringify(binding));
+  const saved = readDriveBinding(vault);
+  if (!saved || saved.group !== binding.group || saved.base !== binding.base || saved.enabled !== binding.enabled) throw new Error("This device could not save its Drive sync state.");
+}
+export interface DriveActivity { time: number; kind: "sync" | "conflict" | "error"; text: string }
+export const activityKey = (vault: string) => `comet:drive-activity:v1:${encodeURIComponent(vault)}`;
+export function readDriveActivity(vault: string): DriveActivity[] {
+  try {
+    const value: unknown = JSON.parse(localStorage.getItem(activityKey(vault)) || "[]");
+    if (!Array.isArray(value)) return [];
+    return value.filter((item): item is DriveActivity => item && Number.isSafeInteger(item.time) && item.time >= 0 && item.time <= 8_640_000_000_000_000 && ["sync", "conflict", "error"].includes(item.kind) && typeof item.text === "string" && item.text.length <= 20_000).slice(0, 50);
+  } catch { return []; }
+}
+export function recordDriveActivity(vault: string, entry: DriveActivity): DriveActivity[] {
+  const next = [{ ...entry, text: entry.text.slice(0, 20_000) }, ...readDriveActivity(vault)].slice(0, 50);
+  // Activity is helpful but never required to advance a durable sync baseline.
+  try { localStorage.setItem(activityKey(vault), JSON.stringify(next)); } catch { /* keep in memory for this session */ }
+  return next;
+}
+export interface DriveAdapter {
+  prepare(vault: string, group: string, base: string): Promise<DrivePrepared>;
+  apply(ticket: string): Promise<DriveApplied>;
+  publish(ticket: string): Promise<DrivePublished>;
+  afterPublish?(vault: string, published: DrivePublished): Promise<void>;
+  abort(ticket: string): Promise<void>;
+  beforeApply(vault: string, incoming: boolean): Promise<boolean>;
+  afterApply(vault: string, result: DriveApplied | null): Promise<void>;
+  isCurrent(vault: string): boolean;
+  save(vault: string, binding: DriveBinding): void;
+  phase(phase: DrivePhase): void;
+}
+export class DriveSyncRunner {
+  private running = false;
+  constructor(private readonly adapter: DriveAdapter) {}
+  async run(vault: string, binding: DriveBinding | null): Promise<{ binding: DriveBinding; summary: DriveRunSummary } | null> {
+    if (this.running) return null;
+    this.running = true;
+    let current = binding, ticket = "", applying = false;
+    const summary: DriveRunSummary = { applied: 0, deleted: 0, conflicts: 0, safetyFolder: null, changedPaths: [], uploaded: 0, downloaded: 0, more: false };
+    const safety: string[] = [];
+    try {
+      for (let count = 0; count < 5; count++) {
+        this.adapter.phase("checking");
+        const prepared = await this.adapter.prepare(vault, current?.group ?? "", current?.base ?? "");
+        if (!prepared || !/^[0-9a-f]{32}$/i.test(prepared.ticket)) throw new Error("Cloud returned an invalid sync operation.");
+        ticket = prepared.ticket;
+        if (typeof prepared.incoming !== "boolean") throw new Error("Cloud returned an invalid sync operation.");
+        if (!this.adapter.isCurrent(vault)) return null;
+        if (!(await this.adapter.beforeApply(vault, prepared.incoming))) return null;
+        applying = true;
+        let applied: DriveApplied | null = null;
+        try {
+          this.adapter.phase("applying");
+          applied = await this.adapter.apply(ticket);
+        } finally {
+          // Refresh even if a partial native merge reported an error.
+          try { await this.adapter.afterApply(vault, applied); } finally { applying = false; }
+        }
+        if (!applied) throw new Error("The local sync was interrupted.");
+        summary.applied += applied.applied; summary.deleted += applied.deleted; summary.conflicts += applied.conflicts; summary.changedPaths.push(...applied.changedPaths); if (applied.recovered) summary.recovered = true;
+        if (applied.safetyFolder) { safety.push(applied.safetyFolder); summary.safetyFolder = safety.join(", "); }
+        if (!this.adapter.isCurrent(vault)) return null;
+        this.adapter.phase("uploading");
+        const published = await this.adapter.publish(ticket);
+        ticket = ""; // publication releases the native job even when successful
+        const next: DriveBinding = { group: published.group, base: published.base, enabled: true };
+        if (!validBinding(next)) throw new Error("Cloud returned invalid sync state; local files were preserved.");
+        try { this.adapter.save(vault, next); }
+        catch { throw new Error("Cloud received a revision, but this device could not save its sync state. Local files were preserved; restore device storage before retrying."); }
+        current = next;
+        // The durable baseline is saved first. Browseable copies are an
+        // optional post-commit step, so a failed copy cannot roll sync back.
+        if (published.readableNeeded && this.adapter.afterPublish && this.adapter.isCurrent(vault)) {
+          try { await this.adapter.afterPublish(vault, published); delete summary.readableWarning; }
+          catch { summary.readableWarning = "Files synced, but readable cloud copies could not be completed. Comet will retry; your originals are safe."; }
+        }
+        summary.uploaded += published.uploaded; summary.downloaded += published.downloaded; summary.more = published.more;
+        if (!published.more || !this.adapter.isCurrent(vault)) break;
+      }
+      return current ? { binding: current, summary } : null;
+    } catch (reason) {
+      const detail = reason instanceof Error ? reason.message : String(reason);
+      const preserved = summary.safetyFolder ? ` Originals moved during sync are in ${summary.safetyFolder}.` : "";
+      throw new Error(`${detail}${preserved}`);
+    } finally {
+      if (applying) { try { await this.adapter.afterApply(vault, null); } catch {} }
+      if (ticket) { try { await this.adapter.abort(ticket); } catch {} }
+      this.running = false;
+    }
+  }
+}

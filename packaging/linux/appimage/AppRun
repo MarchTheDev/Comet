@@ -1,8 +1,26 @@
 #!/bin/sh
-# AppImage entry point.
-# Resolves the binary relative to itself, because nothing inside a mounted
-# image is on the PATH.
-#!/bin/sh
-SELF="$(readlink -f "$0")"
-HERE="$(dirname "$SELF")"
-exec env GDK_BACKEND="${GDK_BACKEND:-}" comet "$@"
+# Comet's AppImage entry point.
+#
+# An AppImage is mounted read-only and run from wherever it was mounted, so
+# nothing inside it can rely on being on the PATH. Every path here is resolved
+# relative to this file rather than assumed.
+#
+# WEBKIT_DISABLE_DMABUF_RENDERER is set with := rather than = so that it is a
+# default and not an override: if this session already works without it, set it
+# to 0 and keep DMA-BUF. It is on by default because a window that never paints
+# is a worse first impression than a slightly slower one. See the X11 note in
+# the portable readme for the other half of this.
+HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+
+: "${WEBKIT_DISABLE_DMABUF_RENDERER:=1}"
+export WEBKIT_DISABLE_DMABUF_RENDERER
+
+# The X11 menu entry passes --x11 here rather than running the comet-x11
+# wrapper: inside the image the wrapper's bare `comet` would not resolve, and
+# this is the same one binary either way.
+if [ "${1-}" = --x11 ]; then
+    shift
+    exec env GDK_BACKEND=x11 "$HERE/usr/bin/comet" "$@"
+fi
+
+exec "$HERE/usr/bin/comet" "$@"

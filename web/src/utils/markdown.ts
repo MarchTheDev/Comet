@@ -227,6 +227,16 @@ export function parseInline(text: string): Inline[] {
   return out;
 }
 
+/** Count note words without counting Markdown syntax or link destinations. */
+export function countWords(markdown: string): number {
+  const text = markdown
+    .replace(/!?\[([^\]]*)\]\([^)]+\)/g, "$1")
+    .replace(/^\s*[-*+]\s+\[[ xX]\](?=\s|$)/gm, " ")
+    .replace(/^\s*\d+[.)]\s+/gm, " ")
+    .replace(/^\s*(?:`{3,}|~{3,})[^\n]*/gm, " ");
+  return (text.match(/[\p{L}\p{N}]+(?:['’-][\p{L}\p{N}]+)*/gu) ?? []).length;
+}
+
 /** The plain text of a run of inlines, used for headings and list labels. */
 export function inlineText(inlines: Inline[]): string {
   return inlines

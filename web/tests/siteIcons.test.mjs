@@ -1,0 +1,41 @@
+import { JSDOM } from 'jsdom';
+import React, { act } from 'react';
+import { createRoot } from 'react-dom/client';
+import { SiteIcon } from '../src/PasswordsView.tsx';
+import { faviconUrl, siteIconHost } from '../src/utils/passwords.ts';
+import { siteIconSources } from '../src/utils/siteIcons.ts';
+
+let failures = 0;
+function check(name, ok) { if (ok) console.log(`  ok   ${name}`); else { failures++; console.log(`  FAIL ${name}`); } }
+console.log('\npassword site logos');
+const known = siteIconSources('https://open.spotify.com/track/SECRET?q=PRIVATE', '');
+check('popular brands have a real bundled logo without a network request', known[0]?.kind === 'local' && known[0].icon.slug === 'spotify');
+check('brand matching respects domain boundaries', siteIconSources('spotify.com.evil.com', '')[0]?.kind === 'duckduckgo');
+const remote = siteIconSources('https://login.example.com/path/SECRET?q=PRIVATE#fragment', 'public-id');
+check('Brandfetch uses a public client ID, origin-only referrer, and 404 fallback', remote[0]?.kind === 'brandfetch' && remote[0].referrerPolicy === 'origin' && remote[0].url === 'https://cdn.brandfetch.io/domain/login.example.com/w/64/h/64/fallback/404/icon?c=public-id');
+check('every provider receives only the hostname, never path, query or fragment', remote.filter(item => item.kind !== 'local').every(item => item.url.includes('login.example.com') && !/SECRET|PRIVATE|fragment/.test(item.url)));
+check('invalid or absent Brandfetch configuration never invokes it', siteIconSources('example.com', '')[0]?.kind === 'duckduckgo' && siteIconSources('example.com', 'bad?id')[0]?.kind === 'duckduckgo');
+const privateSites = ['http://127.0.0.1/', 'http://[::1]/', 'http://10.1.1.2/', 'http://printer.local/', 'http://server.home.arpa/', 'http://x.test/', 'http://secret.onion/', 'http://localhost/', 'http://router.local./', 'https://user:password@example.com'];
+check('private hosts, IPs and URLs with embedded credentials never reach icon providers', privateSites.every(site => !siteIconHost(site) && !siteIconSources(site, 'public-id').length && !faviconUrl(site)));
+
+const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', { pretendToBeVisual: true, url: 'https://comet-icon.test/' });
+globalThis.window = dom.window; globalThis.document = dom.window.document; globalThis.Node = dom.window.Node; globalThis.HTMLElement = dom.window.HTMLElement; globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+const root = createRoot(document.getElementById('root'));
+const render = async props => act(async () => root.render(React.createElement(SiteIcon, props)));
+const error = async () => act(async () => document.querySelector('img').dispatchEvent(new dom.window.Event('error')));
+await render({ website: 'example.com/sensitive?token=secret', clientId: 'comet-id' });
+check('configured Brandfetch is rendered as a hotlinked image', document.querySelector('img')?.dataset.siteIconSource === 'brandfetch' && document.querySelector('img')?.getAttribute('referrerpolicy') === 'origin');
+await error();
+check('a failed Brandfetch request falls back to DuckDuckGo without a referrer', document.querySelector('img')?.dataset.siteIconSource === 'duckduckgo' && document.querySelector('img')?.getAttribute('referrerpolicy') === 'no-referrer');
+await error();
+check('a failed DuckDuckGo request falls back to Google', document.querySelector('img')?.dataset.siteIconSource === 'google');
+await error();
+check('failed providers produce a safe globe rather than a broken image', !document.querySelector('img') && !!document.querySelector('svg'));
+await render({ website: 'spotify.com', clientId: 'comet-id' });
+check('changing website resets failed-provider state', document.querySelector('img')?.dataset.siteIconSource === 'brandfetch');
+await error();
+check('a known brand falls back to its locally bundled logo', document.querySelector('svg')?.dataset.siteIconSource === 'local' && !!document.querySelector('svg path'));
+await render({ website: 'http://printer.local', clientId: 'comet-id' });
+check('private addresses display a globe without any image request', !document.querySelector('img') && !document.querySelector('[data-site-icon-source]'));
+await act(async () => root.unmount()); dom.window.close(); delete globalThis.IS_REACT_ACT_ENVIRONMENT;
+globalThis.__cometFailures = (globalThis.__cometFailures ?? 0) + failures;

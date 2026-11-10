@@ -1,0 +1,51 @@
+import { JSDOM } from 'jsdom';
+import React, { act, useRef } from 'react';
+import { createRoot } from 'react-dom/client';
+import { deleteShortcutPaths } from '../src/utils/deleteShortcut.ts';
+import { useAutosizeTextarea } from '../src/utils/useAutosizeTextarea.ts';
+
+let failures = 0;
+const check = (name, ok) => { if (ok) console.log(`  ok   ${name}`); else { failures++; console.log(`  FAIL ${name}`); } };
+console.log('\nfile delete shortcut and source editor sizing');
+const dom = new JSDOM('<!doctype html><html><body><div data-tree-path="/vault/note.md"><button class="tree-item">Note</button></div><div data-tree-path="/vault/other.md"><button class="tree-item">Other</button></div><input id="input"><div contenteditable="true"><span id="editing">text</span></div><button id="unrelated">Settings</button><div id="root"></div></body></html>', { pretendToBeVisual: true, url: 'https://comet-shortcut.test/' });
+globalThis.window = dom.window; globalThis.document = dom.window.document; globalThis.Node = dom.window.Node; globalThis.Element = dom.window.Element; globalThis.HTMLElement = dom.window.HTMLElement; globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+const note = document.querySelector('.tree-item'), other = document.querySelectorAll('.tree-item')[1];
+const run = (target, key = 'Delete', selection = new Set(), anchor = '/vault/note.md', anchorOpened = true, armed = true, options = {}) => {
+  let paths = [];
+  const listener = event => { paths = deleteShortcutPaths(event, selection, anchor, anchorOpened, armed); };
+  target.addEventListener('keydown', listener, { once: true });
+  target.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...options }));
+  return paths;
+};
+check('Delete prompts for the ordinary clicked file', run(note).join() === '/vault/note.md');
+check('Backspace supports a clicked file on keyboards without a Delete key', run(note, 'Backspace').join() === '/vault/note.md');
+check('selected parents suppress selected descendants', run(note, 'Delete', new Set(['/vault/note.md', '/vault/folder', '/vault/folder/child'])).sort().join() === '/vault/folder,/vault/note.md');
+check('the clicked file may remain armed after its overview control unmounts', run(document.body).join() === '/vault/note.md');
+check('an unrelated button or a different focused file cannot delete the last item', !run(document.querySelector('#unrelated')).length && !run(other).length && !run(document.body, 'Delete', new Set(), '/vault/note.md', true, false).length);
+check('text inputs and nested contenteditable elements keep their deletion keys', !run(document.querySelector('#input'), 'Backspace').length && !run(document.querySelector('#editing')).length);
+check('modified, repeated, and unrelated keys do not invoke file deletion', !run(note, 'Delete', new Set(), '/vault/note.md', true, true, { ctrlKey: true }).length && !run(note, 'Delete', new Set(), '/vault/note.md', true, true, { repeat: true }).length && !run(note, 'Escape').length);
+
+let measuredHeight = 1000, width = 500, observed = null, disconnected = 0, scroller = null;
+Object.defineProperty(dom.window.HTMLTextAreaElement.prototype, 'scrollHeight', { configurable: true, get: () => { if (scroller) scroller.scrollTop = 0; return measuredHeight; } });
+Object.defineProperty(dom.window.HTMLTextAreaElement.prototype, 'clientWidth', { configurable: true, get: () => width });
+globalThis.ResizeObserver = class { constructor(callback) { this.callback = callback; observed = this; } observe() {} disconnect() { disconnected++; } };
+function Editor({ value, active = true, font = 16 }) { const ref = useRef(null); useAutosizeTextarea(ref, value, active, font); return React.createElement('div', { className: 'workspace-scroll' }, React.createElement('textarea', { ref, value, readOnly: true })); }
+const root = createRoot(document.querySelector('#root'));
+await act(async () => root.render(React.createElement(Editor, { value: 'long' })));
+check('source height is measured from the content', document.querySelector('textarea').style.height === '1000px');
+scroller = document.querySelector('.workspace-scroll');
+Object.defineProperty(scroller, 'scrollHeight', { value: 2000, configurable: true }); Object.defineProperty(scroller, 'clientHeight', { value: 500, configurable: true });
+scroller.scrollTop = 550; measuredHeight = 1100; await act(async () => root.render(React.createElement(Editor, { value: 'longer' })));
+check('remeasuring preserves the workspace scroll position', scroller.scrollTop === 550);
+scroller.scrollTop = 1500; measuredHeight = 1200; await act(async () => root.render(React.createElement(Editor, { value: 'at bottom' })));
+check('remeasuring keeps a reader at the bottom of a long note', scroller.scrollTop === 1500);
+measuredHeight = 400; await act(async () => root.render(React.createElement(Editor, { value: 'short' })));
+check('deleting content can shrink the source editor', document.querySelector('textarea').style.height === '400px');
+width = 300; measuredHeight = 700; await act(async () => observed.callback());
+check('width changes remeasure wrapped source text', document.querySelector('textarea').style.height === '700px');
+measuredHeight = 800; await act(async () => root.render(React.createElement(Editor, { value: 'short', font: 20 })));
+check('font changes remeasure and clean up the old observer', document.querySelector('textarea').style.height === '800px' && disconnected >= 2);
+await act(async () => root.unmount());
+check('source editor cleanup disconnects its resize observer', disconnected >= 3);
+dom.window.close(); delete globalThis.ResizeObserver; delete globalThis.Element; delete globalThis.IS_REACT_ACT_ENVIRONMENT;
+globalThis.__cometFailures = (globalThis.__cometFailures ?? 0) + failures;

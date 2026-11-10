@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Comet
+Comment=A local-first workspace for notes and files
+# Wayland panels match the application id, so this entry and its icon carry it.
+Exec=comet
+Icon=com.marco.comet
+Terminal=false
+Categories=Utility;
+Keywords=notes;markdown;comet;
+StartupWMClass=com.marco.comet

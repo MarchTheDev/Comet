@@ -1,0 +1,78 @@
+import { JSDOM } from 'jsdom';
+import React, { act, useState } from 'react';
+import { createRoot } from 'react-dom/client';
+import { BrainExplore, TreeExplore } from '../src/ExploreViews.tsx';
+
+let failures = 0;
+function check(name, ok) { if (ok) console.log(`  ok   ${name}`); else { failures++; console.log(`  FAIL ${name}`); } }
+console.log('\ntree and brain interactions');
+const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', { pretendToBeVisual: true, url: 'https://comet-explore.test/' });
+globalThis.window = dom.window; globalThis.document = dom.window.document; globalThis.localStorage = dom.window.localStorage; globalThis.Node = dom.window.Node; globalThis.HTMLElement = dom.window.HTMLElement; globalThis.SVGElement = dom.window.SVGElement; globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+Object.defineProperty(globalThis, 'navigator', { value: dom.window.navigator, configurable: true });
+dom.window.SVGSVGElement.prototype.createSVGPoint = function() { return { x: 0, y: 0, matrixTransform() { return { x: this.x, y: this.y }; } }; };
+dom.window.SVGSVGElement.prototype.getScreenCTM = () => ({ inverse: () => ({}) });
+const root = createRoot(document.getElementById('root'));
+const folder = { name: 'Folder', path: 'comet-sample://vault/Folder', kind: 'folder', children: [{ name: 'Note.md', path: 'comet-sample://vault/Folder/Note.md', kind: 'file', children: [] }] };
+const other = { name: 'Other', path: 'comet-sample://vault/Other', kind: 'folder', children: [] };
+const common = { vault: 'comet-sample://vault', name: 'Workspace', onOpen() {}, onActivate() {}, onClearSelection() {}, selectedPaths: new Set() };
+let started = '', dropped = '';
+function TreeHarness() {
+  const [indicator, setIndicator] = useState(null);
+  return React.createElement(TreeExplore, { ...common, tree: [folder, other], dropIndicator: indicator, dropGroup: indicator?.path ?? '', onDragStart(e, item) { started = item.path; }, onDragOverNode(e, item) { e.preventDefault(); setIndicator({ path: item.path, position: 'into' }); }, onDropNode(e, item) { dropped = item.path; }, onDragOverRoot() {}, onDropRoot() {} });
+}
+const event = (type, options = {}) => new dom.window.MouseEvent(type, { bubbles: true, button: 0, ...options });
+const pointer = (type, x, y) => { const e = event(type, { clientX: x, clientY: y }); Object.defineProperty(e, 'pointerId', { value: 1 }); return e; };
+const fire = async (element, e) => act(async () => element.dispatchEvent(e));
+await act(async () => root.render(React.createElement(TreeHarness)));
+await fire(document.querySelector('.tree-map-root'), event('click'));
+await fire(document.querySelector(`[data-map-path="${folder.path}"]`), event('click'));
+check('tree expands folders and displays their children', !!document.querySelector(`[data-map-path="${folder.children[0].path}"]`));
+await fire(document.querySelector(`[data-map-path="${folder.children[0].path}"]`), event('dragstart'));
+await fire(document.querySelector(`[data-map-path="${other.path}"]`), event('dragover'));
+check('tree nodes expose drag source and grouped folder target', started === folder.children[0].path && !!document.querySelector('.tree-map-branch.drop-group'));
+await fire(document.querySelector(`[data-map-path="${other.path}"]`), event('drop'));
+check('tree drop reaches the destination handler', dropped === other.path);
+await act(async () => root.render(React.createElement(BrainExplore, { ...common, entries: [folder, folder.children[0], other] })));
+const rootNode = document.querySelector('[data-graph-root]');
+const rootBefore = rootNode.getAttribute('transform');
+const nodesBefore = [...document.querySelectorAll('[data-graph-path]')].map(node => node.getAttribute('transform'));
+await fire(rootNode, pointer('pointerdown', 100, 100)); await fire(window, pointer('pointermove', 180, 150)); await fire(window, pointer('pointerup', 180, 150));
+const nodesAfter = [...document.querySelectorAll('[data-graph-path]')].map(node => node.getAttribute('transform'));
+check('dragging the brain root moves it but leaves all visible nodes in place', rootNode.getAttribute('transform') !== rootBefore && JSON.stringify(nodesBefore) === JSON.stringify(nodesAfter));
+const saved = JSON.parse(dom.window.localStorage.getItem(`comet:graph-layout:v1:${encodeURIComponent(common.vault)}`));
+check('only the dragged root is persisted, not its default neighbors', !!saved[common.vault] && !saved[folder.path] && !saved[other.path]);
+const dragNode=document.querySelector(`[data-graph-path="${folder.path}"]`), otherNode=document.querySelector(`[data-graph-path="${other.path}"]`);
+const xy=node=>node.getAttribute('transform').match(/translate\(([-\d.]+) ([-\d.]+)\)/).slice(1).map(Number);
+const [ax,ay]=xy(dragNode),[bx,by]=xy(otherNode), otherBefore=otherNode.getAttribute('transform');
+await fire(dragNode,pointer('pointerdown',100,100));await fire(window,pointer('pointermove',100+bx-ax,100+by-ay));
+await act(async()=>new Promise(r=>setTimeout(r,110)));
+const [rx,ry]=xy(otherNode), pushed=Math.hypot(rx-bx,ry-by);
+check('nearby nodes react smoothly with a bounded temporary repulsion',pushed>1&&pushed<=72.01&&!JSON.parse(localStorage.getItem(`comet:graph-layout:v1:${encodeURIComponent(common.vault)}`))[other.path]);
+await fire(window,pointer('pointerup',100+bx-ax,100+by-ay));await act(async()=>new Promise(r=>setTimeout(r,650)));
+const [nx,ny]=xy(dragNode);
+check('only the dragged node stays at its dropped location; neighbors return without being saved',Math.abs(nx-bx)<.01&&Math.abs(ny-by)<.01&&otherNode.getAttribute('transform')===otherBefore&&!JSON.parse(localStorage.getItem(`comet:graph-layout:v1:${encodeURIComponent(common.vault)}`))[other.path]);
+await fire(dragNode,event('click'));const child=document.querySelector(`[data-graph-path="${folder.children[0].path}"]`);const [cx,cy]=xy(child);
+check('opening a moved folder places newly revealed files beside that folder',!!child&&Math.hypot(cx-nx,cy-ny)<450);
+await fire(dragNode,event('click'));
+await fire(dragNode,pointer('pointerdown',100,100));await fire(window,pointer('pointermove',220,190));await fire(window,pointer('pointerup',220,190));await act(async()=>new Promise(r=>setTimeout(r,450)));
+await fire(dragNode,event('click'));const childAgain=document.querySelector(`[data-graph-path="${folder.children[0].path}"]`);const [fx,fy]=xy(dragNode),[cx2,cy2]=xy(childAgain);
+check('reopening after a folder drag recalculates unsaved children near the new folder position',!!childAgain&&Math.hypot(cx2-fx,cy2-fy)<450&&!JSON.parse(localStorage.getItem(`comet:graph-layout:v1:${encodeURIComponent(common.vault)}`))[folder.children[0].path]);
+check('brain labels use normal glyph spacing rather than stretching the font',!dragNode.querySelector('text:not(.brain-folder-glyph)')?.hasAttribute('textLength'));
+const beforeCancel=dragNode.getAttribute('transform');
+await fire(dragNode,pointer('pointerdown',100,100));await fire(window,pointer('pointermove',150,150));await fire(window,pointer('pointercancel',150,150));
+check('cancelling a brain drag restores the original position',dragNode.getAttribute('transform')===beforeCancel);
+
+
+const many = Array.from({ length: 150 }, (_, i) => ({ name: `Note${i}.md`, path: `comet-sample://vault/workspace-2/Folder${i}/Note${i}.md`, kind: 'file' }));
+await act(async () => root.render(React.createElement(BrainExplore, { ...common, vault: 'comet-sample://vault/workspace-2', entries: many, key: 'dense' })));
+await fire([...document.querySelectorAll('.brain-controls button')].find(button => button.textContent === 'Notes only'), event('click'));
+const points = [...document.querySelectorAll('[data-graph-path]')].map(node => node.getAttribute('transform').match(/translate\(([-\d.]+) ([-\d.]+)\)/).slice(1).map(Number));
+let distance = Infinity; for (let i = 0; i < points.length; i++) for (let j = 0; j < i; j++) distance = Math.min(distance, Math.hypot(points[i][0] - points[j][0], points[i][1] - points[j][1]));
+check('notes-only layout separates 150 default nodes even across hidden folders', points.length === 150 && distance > 72);
+let labelsSeparate = true; for (let i = 0; i < points.length; i++) for (let j = 0; j < i; j++) if (Math.abs(points[i][0] - points[j][0]) < 220 && Math.abs(points[i][1] - points[j][1]) < 120) labelsSeparate = false;
+check('node and label bounds never overlap in a dense graph', labelsSeparate);
+const graph = document.querySelector('.brain-stage svg'), beforeZoom = graph.querySelector('g').getAttribute('transform');
+await fire(graph, new dom.window.WheelEvent('wheel', { bubbles: true, cancelable: true, ctrlKey: true, deltaY: -100, clientX: 200, clientY: 200 }));
+check('Ctrl+wheel zooms the graph', graph.querySelector('g').getAttribute('transform') !== beforeZoom);
+await act(async () => root.unmount()); dom.window.close(); delete globalThis.IS_REACT_ACT_ENVIRONMENT;
+globalThis.__cometFailures = (globalThis.__cometFailures ?? 0) + failures;

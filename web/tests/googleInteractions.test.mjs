@@ -1,0 +1,58 @@
+import { JSDOM } from 'jsdom';
+import React, { act } from 'react';
+import { createRoot } from 'react-dom/client';
+import { CalendarView } from '../src/CalendarView.tsx';
+import { GoogleSettings } from '../src/GoogleSettings.tsx';
+import { dateKey, saveCalendar } from '../src/utils/calendar.ts';
+
+let failures=0; const check=(name,ok)=>{ if(ok) console.log(`  ok   ${name}`); else { failures++; console.log(`  FAIL ${name}`); } };
+console.log('\nretired Google interactions and local calendar (mocked native bridge)');
+const dom=new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>',{pretendToBeVisual:true,url:'https://comet-google.test/'});
+dom.window.HTMLElement.prototype.attachEvent=function(name,listener){this.addEventListener(name.replace(/^on/,''),listener);};
+dom.window.HTMLElement.prototype.detachEvent=function(name,listener){this.removeEventListener(name.replace(/^on/,''),listener);};
+globalThis.window=dom.window;globalThis.document=dom.window.document;globalThis.localStorage=dom.window.localStorage;globalThis.Node=dom.window.Node;globalThis.HTMLElement=dom.window.HTMLElement;globalThis.IS_REACT_ACT_ENVIRONMENT=true;
+Object.defineProperty(globalThis,'navigator',{value:dom.window.navigator,configurable:true});
+const calls=[]; let syncFailure=false, moreOnce=false; const today=new Date(), next=new Date(today.getFullYear(),today.getMonth(),today.getDate()+1);
+let events=[{id:'google1',etag:'"original"',summary:'Meeting',description:'Keep notes',start:{date:dateKey(today)},end:{date:dateKey(next)}}];
+dom.window.__TAURI_INTERNALS__={invoke:async(cmd,args={})=>{calls.push({cmd,args});if(cmd==='google_status')return true;if(cmd==='google_calendar_list')return events;if(cmd==='google_calendar_update'){events=events.map(item=>item.id===args.id?{...item,...args.patch,etag:'"changed"'}:item);return {};}if(cmd==='google_calendar_create'){events=[...events,{id:'created',etag:'"new"',...args.patch}];return {};}if(cmd==='google_calendar_delete'){events=events.filter(item=>item.id!==args.id);return;}if(cmd==='google_sync_list')return [{id:'base1',group:'a'.repeat(32),name:'Synced',modified:'2026-01-01T00:00:00Z',branches:1}];if(cmd==='google_sync_now'){if(syncFailure)throw new Error('interrupted upload');const more=moreOnce;moreOnce=false;return {group:'a'.repeat(32),base:args.base ? 'base2' : 'base1',applied:1,conflicts:1,deleted:0,safetyFolder:more?'/safe-first':'/safe',more};}if(cmd==='google_sync_import')return {path:'/synced/workspace',group:args.group,base:args.id};if(cmd==='google_drive_list')return [{id:'file1',name:'Comet snapshot'}];if(cmd==='google_drive_import')return '/new/workspace';if(cmd==='google_drive_backup')return;}};
+let root=createRoot(document.getElementById('root'));
+const click=async element=>act(async()=>element.dispatchEvent(new dom.window.MouseEvent('click',{bubbles:true,cancelable:true})));
+const button=text=>[...document.querySelectorAll('button')].find(item=>item.textContent.trim()===text);
+saveCalendar('/vault',[{id:'local1',title:'Local meeting',date:dateKey(today),time:'',notes:'kept locally'}]);
+await act(async()=>root.render(React.createElement(CalendarView,{vault:'/vault',name:'Vault',desktop:true})));
+check('calendar preserves local events but does not open previously connected Google Calendar', !!document.querySelector('[aria-label="Edit Local meeting"]') && !document.querySelector('[aria-label="Edit Meeting"]') && calls.length===0);
+await click(document.querySelector('[aria-label="Next month"]'));
+check('browsing the calendar makes no Google calls or changes to remote events',calls.length===0 && events.length===1);
+// The old settings implementation is tested in isolation for historical regression
+// coverage; it is no longer mounted by the app and its native commands are disabled.
+let imported='', starts=0, ends=0;dom.window.confirm=()=>true;
+await act(async()=>root.render(React.createElement(GoogleSettings,{desktop:true,vault:'/vault',isSample:false,onImported:path=>{imported=path;},onSyncStart:async()=>{starts++;return true;},onSyncEnd:async()=>{ends++;}})));
+check('one connection describes both Calendar and Drive and discloses unencrypted revisions', document.querySelector('.google-settings')?.textContent.includes('Google Calendar and Drive') && document.querySelector('.drive-snapshots')?.textContent.includes('not encrypted'));
+check('an unconfigured build explains owner setup without forcing developer fields on users', document.querySelector('.google-setup')?.textContent.includes('project owner') && !document.querySelector('[aria-label="Google OAuth client ID"]') && !document.querySelector('[aria-label="Google OAuth client secret"]'));
+check('current Drive revisions are explicitly labelled manual', document.querySelector('.drive-snapshots')?.textContent.includes('currently manual'));
+await click(button('Start syncing this workspace'));
+const sync=calls.find(call=>call.cmd==='google_sync_now');
+check('sync runs behind the editor safety guard and persists only its returned baseline', starts===1 && ends===1 && sync?.args.vault==='/vault' && sync?.args.group==='' && JSON.parse(localStorage.getItem('comet:google-sync:v1:%2Fvault')).base==='base1');
+check('sync reports conflict copies and original safety backup location', document.querySelector('[role="status"]')?.textContent.includes('/safe') && document.querySelector('[role="status"]')?.textContent.includes('1 conflict'));
+await click(button('Sync now'));check('subsequent sync sends the saved baseline', calls.filter(call=>call.cmd==='google_sync_now')[1]?.args.base==='base1');
+const beforeFailure=localStorage.getItem('comet:google-sync:v1:%2Fvault');syncFailure=true;await click(button('Sync now'));syncFailure=false;
+check('an interrupted upload leaves the previous binding intact and releases the guard',localStorage.getItem('comet:google-sync:v1:%2Fvault')===beforeFailure&&starts===3&&ends===3&&document.querySelector('[role="alert"]')?.textContent.includes('interrupted'));
+moreOnce=true;const beforeHeads=calls.filter(call=>call.cmd==='google_sync_now').length;await click(button('Sync now'));
+check('concurrent Drive heads trigger another merge and report all safety folders',calls.filter(call=>call.cmd==='google_sync_now').length===beforeHeads+2&&document.querySelector('[role="status"]')?.textContent.includes('/safe-first')&&document.querySelector('[role="status"]')?.textContent.includes('/safe'));
+
+await click(button('Import on this device'));check('imported sync workspaces retain their remote binding', imported==='/synced/workspace' && JSON.parse(localStorage.getItem('comet:google-sync:v1:%2Fsynced%2Fworkspace')).base==='base1');
+await click(button('Upload current workspace'));await click(button('Import as new'));
+check('older manual backups still import into a separate destination', calls.some(call=>call.cmd==='google_drive_backup'&&call.args.vault==='/vault') && imported==='/new/workspace');
+let stopped=0;await act(async()=>root.render(React.createElement(GoogleSettings,{desktop:true,vault:'/other',isSample:false,onImported:()=>{},onSyncStart:async()=>{stopped++;return false;}})));const before=calls.filter(call=>call.cmd==='google_sync_now').length;
+await click(button('Start syncing this workspace'));check('a failed save guard prevents native sync',stopped===1 && calls.filter(call=>call.cmd==='google_sync_now').length===before);
+let paused=0;const cloudSync={binding:{remote:'comet-rclone-google',provider:'google',identity:'a'.repeat(64),enabled:true},accounts:[],pause:()=>{paused++;}};
+await act(async()=>root.render(React.createElement(GoogleSettings,{desktop:true,vault:'/other',isSample:false,onImported:()=>{},cloudSync})));
+await click(button('Disconnect'));
+check('disconnecting Calendar and earlier Google does not pause the independent rclone account',paused===0&&calls.some(call=>call.cmd==='google_disconnect'));
+await act(async()=>root.unmount());root=createRoot(document.getElementById('root'));
+cloudSync.binding={...cloudSync.binding,remote:'comet-google',identity:'google'};
+await act(async()=>root.render(React.createElement(GoogleSettings,{desktop:true,vault:'/other',isSample:false,onImported:()=>{},cloudSync})));
+await click(button('Disconnect'));
+check('disconnecting earlier Google still pauses its legacy rclone binding',paused===1);
+await act(async()=>root.unmount());dom.window.close();delete globalThis.IS_REACT_ACT_ENVIRONMENT;delete globalThis.localStorage;
+globalThis.__cometFailures=(globalThis.__cometFailures??0)+failures;

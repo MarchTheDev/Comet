@@ -33,3 +33,61 @@ export function firstDroppedUrl(uriList: string, text: string): string | null {
   }
   return null;
 }
+
+const SYNTHETIC_LINK_FILE = /\.(?:download|crdownload|part|webloc|url|desktop)$/i;
+
+export interface MinimalDropTransfer {
+  files?: ArrayLike<{ name: string; size?: number; type?: string }>;
+  getData: (format: string) => string;
+}
+
+/**
+ * Detect when a user drags a URL / YouTube video from a browser into Comet.
+ * Chromium/WebKitGTK often attach a synthetic `watch.download` / `.webloc` file
+ * in `dataTransfer.files` alongside `text/uri-list`, which previously caused Comet
+ * to import a broken `.download` file instead of a playable link shortcut.
+ */
+export function droppedBrowserLink(dataTransfer: MinimalDropTransfer | null | undefined): string | null {
+  if (!dataTransfer) return null;
+  const safeGet = (type: string) => {
+    try {
+      return dataTransfer.getData(type) || "";
+    } catch {
+      return "";
+    }
+  };
+  const url =
+    firstDroppedUrl(safeGet("text/uri-list") || safeGet("URL"), safeGet("text/plain")) ??
+    firstDroppedUrl(safeGet("text/x-moz-url"), "");
+  if (!url) return null;
+
+  const files = Array.from(dataTransfer.files ?? []);
+  if (files.length === 0) return url;
+
+  const looksLikeBrowserShortcut = files.every(
+    (file) =>
+      SYNTHETIC_LINK_FILE.test(file.name) ||
+      file.size === 0 ||
+      file.type === "text/uri-list" ||
+      file.type === "text/x-moz-url" ||
+      file.type === "application/internet-shortcut",
+  );
+  if (looksLikeBrowserShortcut || Boolean(videoLink(url))) {
+    return url;
+  }
+  return null;
+}
+
+/** Extract a target URL from a browser-dropped `.download` / `.webloc` / `.desktop` / `.url` payload. */
+export function parseDroppedShortcutFile(name: string, text: string): string | null {
+  if (!SYNTHETIC_LINK_FILE.test(name) || !text || text.length > 32_768) return null;
+  const fromIni = parseShortcut(text);
+  if (fromIni) return fromIni;
+  const plistMatch = /<string>\s*(https?:\/\/[^<\s]+)\s*<\/string>/i.exec(text);
+  if (plistMatch) {
+    const safe = safeWebUrl(plistMatch[1]);
+    if (safe) return safe;
+  }
+  const urlMatch = /(?:^|\s|url=)(https?:\/\/[^\s"'<>]+)/i.exec(text);
+  return urlMatch ? safeWebUrl(urlMatch[1]) : null;
+}

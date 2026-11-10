@@ -7,6 +7,7 @@ import { ClearBoardDialog } from "./ClearBoardDialog";
 import { todoId, TODO_CONNECTION_COLOR, TODO_MAX_COORD, type TodoDocument, type TodoTask } from "./utils/todo";
 import { connectionGeometry, type Point } from "./utils/todoGeometry";
 import type { SaveState } from "./utils/saveQueue";
+import { isStandaloneTextInput, UndoHistory, undoRedoKey } from "./utils/undoHistory";
 
 interface Props { board: TodoDocument; name: string; onRename?: () => void; saveState: SaveState; arrowheads?: boolean; onChange: (board: TodoDocument) => boolean; onRetry: () => void }
 type LinkDraft = { from: string; end: Point };
@@ -17,6 +18,9 @@ const scaleOf = (element: HTMLElement) => element.offsetWidth ? element.getBound
 
 export function TodoBoard({ board, name, onRename, saveState, arrowheads = false, onChange, onRetry }: Props) {
   const stage = useRef<HTMLDivElement>(null);
+  const latest = useRef(board);
+  latest.current = board;
+  const historyRef = useRef(new UndoHistory<TodoDocument>(100, 500));
   const pan = useRef<{ pointer: number; x: number; y: number; left: number; top: number } | null>(null);
   const zoomRef = useRef(1);
   const activeDrag = useRef<(() => void) | null>(null);
@@ -82,7 +86,46 @@ export function TodoBoard({ board, name, onRename, saveState, arrowheads = false
     element.addEventListener("wheel", wheel, { passive: false }); return () => element.removeEventListener("wheel", wheel);
   }, []);
 
-  const updateTask = (id: string, patch: Partial<TodoTask>) => onChange({ ...board, tasks: board.tasks.map((task) => task.id === id ? { ...task, ...patch } : task) });
+  const commit = (next: TodoDocument, coalesceKey = "", skipHistory = false) => {
+    const previous = latest.current;
+    if (!onChange(next)) return false;
+    if (!skipHistory && previous !== next) historyRef.current.record(previous, coalesceKey);
+    return true;
+  };
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (clearOpen) return;
+      const action = undoRedoKey(event);
+      if (!action) return;
+      if (isStandaloneTextInput(event.target)) {
+        const el = event.target instanceof Element ? event.target : null;
+        const inControlledBoardField = !!el?.closest(".todo-card, .todo-category-panel");
+        const isEmptyDraft =
+          el instanceof HTMLInputElement &&
+          !!el.closest(".todo-board") &&
+          el.value === "";
+        if (!inControlledBoardField && !isEmptyDraft) return;
+      }
+      if (action === "undo") {
+        const previous = historyRef.current.undo(latest.current);
+        if (!previous) return;
+        if (!onChange(previous)) { historyRef.current.redo(previous); return; }
+        event.preventDefault();
+        event.stopPropagation();
+      } else {
+        const next = historyRef.current.redo(latest.current);
+        if (!next) return;
+        if (!onChange(next)) { historyRef.current.undo(next); return; }
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [clearOpen, onChange]);
+
+  const updateTask = (id: string, patch: Partial<TodoTask>, coalesceKey = "") => commit({ ...latest.current, tasks: latest.current.tasks.map((task) => task.id === id ? { ...task, ...patch } : task) }, coalesceKey);
   const addTask = (event: FormEvent) => {
     event.preventDefault(); const text = draft.trim(); if (!text || board.tasks.length >= 5000) return;
     const element = stage.current;
@@ -95,7 +138,7 @@ export function TodoBoard({ board, name, onRename, saveState, arrowheads = false
       x = clamp(originX + (index % columns) * 360); y = clamp(originY + Math.floor(index / columns) * 250);
       if (!board.tasks.some((task) => x < task.x + CARD_WIDTH + 70 && x + CARD_WIDTH + 70 > task.x && y < task.y + (heights[task.id] ?? 95) + 70 && y + 165 > task.y)) break;
     }
-    if (onChange({ ...board, tasks: [...board.tasks, { id: todoId(), text, done: false, notes: "", x, y, categoryId: null, subtasks: [] }] })) setDraft("");
+    if (commit({ ...board, tasks: [...board.tasks, { id: todoId(), text, done: false, notes: "", x, y, categoryId: null, subtasks: [] }] })) setDraft("");
   };
   const startMove = (event: ReactPointerEvent, task: TodoTask) => {
     if (event.button !== 0) return;
@@ -127,8 +170,8 @@ export function TodoBoard({ board, name, onRename, saveState, arrowheads = false
       if (e.pointerId !== pointer) return;
       const target = document.elementFromPoint(e.clientX, e.clientY)?.closest<HTMLElement>("[data-todo-id]")?.dataset.todoId;
       cleanup();
-      if (target && target !== task.id && board.tasks.some((item) => item.id === target) && !board.connections.some((edge) => edge.from === task.id && edge.to === target)) {
-        onChange({ ...board, connections: [...board.connections, { from: task.id, to: target, color: TODO_CONNECTION_COLOR }] });
+      if (target && target !== task.id && latest.current.tasks.some((item) => item.id === target) && !latest.current.connections.some((edge) => edge.from === task.id && edge.to === target)) {
+        commit({ ...latest.current, connections: [...latest.current.connections, { from: task.id, to: target, color: TODO_CONNECTION_COLOR }] });
       }
     };
     const cancel = (e: PointerEvent) => { if (e.pointerId === pointer) cleanup(); };
@@ -155,12 +198,13 @@ export function TodoBoard({ board, name, onRename, saveState, arrowheads = false
       <div className="todo-zoom" aria-label="Board zoom controls"><button type="button" aria-label="Zoom board out" disabled={zoom <= .35} onClick={() => changeZoom(zoomRef.current / 1.2)}><Minus size={15} /></button><button type="button" className="todo-zoom-reset" aria-label="Reset board zoom" onClick={() => changeZoom(1)}>{Math.round(zoom * 100)}%</button><button type="button" aria-label="Zoom board in" disabled={zoom >= 2} onClick={() => changeZoom(zoomRef.current * 1.2)}><Plus size={15} /></button></div>
     </div>
     {clearOpen && <ClearBoardDialog kind="to-do board" onCancel={() => setClearOpen(false)} onConfirm={() => {
-      if (!onChange({ ...board, tasks: [], categories: [], connections: [], legacyListConnections: [] })) return false;
+      if (!commit({ ...board, tasks: [], categories: [], connections: [], legacyListConnections: [] }, "", true)) return false;
+      historyRef.current.clear();
       activeDrag.current?.(); setDraft(""); setSubDrafts({}); setAddingItem(""); setExpanded(new Set()); setPositions({}); setHeights({});
       setLinkDraft(null); setSelectedLink(""); setDeleteTask(""); setDeleteCategory(""); setMenu(null); setShowCategories(false);
       return true;
     }} />}
-    {showCategories && <div className="todo-category-panel"><div><strong>Categories</strong><small>Give tasks a little structure without fixing them in place.</small></div><div className="todo-category-list">{board.categories.map((category) => <div className="todo-category" key={category.id} style={{ "--list-color": category.color } as CSSProperties}><span className="todo-lane-dot" /><input aria-label="Category name" maxLength={120} value={category.title} onChange={(event) => onChange({ ...board, categories: board.categories.map((item) => item.id === category.id ? { ...item, title: event.target.value } : item) })} /><ColorMenu color={category.color} label={`Color for ${category.title || "category"}`} onChange={(color) => onChange({ ...board, categories: board.categories.map((item) => item.id === category.id ? { ...item, color } : item) })} />{deleteCategory === category.id ? <><button type="button" className="todo-delete-confirm" onClick={() => { if (onChange({ ...board, categories: board.categories.filter((item) => item.id !== category.id), tasks: board.tasks.map((task) => task.categoryId === category.id ? { ...task, categoryId: null } : task), legacyListConnections: board.legacyListConnections.filter((edge) => edge.from !== category.id && edge.to !== category.id) })) setDeleteCategory(""); }}>Remove</button><button type="button" aria-label="Cancel removing category" onClick={() => setDeleteCategory("")}><X size={13} /></button></> : <button type="button" aria-label={`Remove ${category.title || "category"}`} onClick={() => setDeleteCategory(category.id)}><Trash2 size={14} /></button>}</div>)}</div><button type="button" className="secondary-button" disabled={board.categories.length >= 100} onClick={() => onChange({ ...board, categories: [...board.categories, { id: todoId(), title: `Category ${board.categories.length + 1}`, color: "#9c9fe1" }] })}><Plus size={14} /> Add category</button></div>}
+    {showCategories && <div className="todo-category-panel"><div><strong>Categories</strong><small>Give tasks a little structure without fixing them in place.</small></div><div className="todo-category-list">{board.categories.map((category) => <div className="todo-category" key={category.id} style={{ "--list-color": category.color } as CSSProperties}><span className="todo-lane-dot" /><input aria-label="Category name" maxLength={120} value={category.title} onChange={(event) => commit({ ...board, categories: board.categories.map((item) => item.id === category.id ? { ...item, title: event.target.value } : item) }, `cat:${category.id}`)} /><ColorMenu color={category.color} label={`Color for ${category.title || "category"}`} onChange={(color) => commit({ ...board, categories: board.categories.map((item) => item.id === category.id ? { ...item, color } : item) })} />{deleteCategory === category.id ? <><button type="button" className="todo-delete-confirm" onClick={() => { if (commit({ ...board, categories: board.categories.filter((item) => item.id !== category.id), tasks: board.tasks.map((task) => task.categoryId === category.id ? { ...task, categoryId: null } : task), legacyListConnections: board.legacyListConnections.filter((edge) => edge.from !== category.id && edge.to !== category.id) })) setDeleteCategory(""); }}>Remove</button><button type="button" aria-label="Cancel removing category" onClick={() => setDeleteCategory("")}><X size={13} /></button></> : <button type="button" aria-label={`Remove ${category.title || "category"}`} onClick={() => setDeleteCategory(category.id)}><Trash2 size={14} /></button>}</div>)}</div><button type="button" className="secondary-button" disabled={board.categories.length >= 100} onClick={() => commit({ ...board, categories: [...board.categories, { id: todoId(), title: `Category ${board.categories.length + 1}`, color: "#9c9fe1" }] })}><Plus size={14} /> Add category</button></div>}
     <div ref={stage} className={`todo-canvas${panning ? " panning" : ""}${moving ? " moving" : ""}${linkDraft ? " connecting" : ""}`} aria-label="To-do canvas" onPointerDown={(event) => {
       if (event.button !== 0 || (event.target as Element).closest(".todo-card, .todo-link-controls, .todo-link-hit")) return;
       setSelectedLink("");
@@ -173,13 +217,13 @@ export function TodoBoard({ board, name, onRename, saveState, arrowheads = false
           {board.connections.map((edge, index) => { const from = byId.get(edge.from), to = byId.get(edge.to); if (!from || !to) return null; const { path } = connectionGeometry(rectFor(from), rectFor(to)); const key = connectionKey(edge.from, edge.to); return <g key={key} className={selectedLink === key ? "selected" : ""}><path d={path} className="todo-link-selection" aria-hidden="true" /><path d={path} className="todo-link-hit" role="button" tabIndex={0} aria-label={`Select connection from ${from.text} to ${to.text}`} onClick={() => setSelectedLink(key)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setSelectedLink(key); } else if (event.key === "Escape") { setSelectedLink(""); event.currentTarget.blur(); } }} /><path d={path} className="todo-link-line" style={{ stroke: edge.color }} markerEnd={arrowheads ? `url(#task-arrow-${index})` : undefined} /></g>; })}
           {linkDraft && byId.has(linkDraft.from) && <path className="todo-link-preview" d={connectionGeometry(rectFor(byId.get(linkDraft.from)!), { ...linkDraft.end, width: 0, height: 0 }).path} markerEnd={arrowheads ? "url(#task-arrow-preview)" : undefined} />}
         </svg>
-        {board.connections.map((edge) => { const from = byId.get(edge.from), to = byId.get(edge.to), key = connectionKey(edge.from, edge.to); if (!from || !to || selectedLink !== key) return null; const { from: a, to: b } = connectionGeometry(rectFor(from), rectFor(to)); return <div className="todo-link-controls" style={{ left: (a.x + b.x) / 2, top: (a.y + b.y) / 2 }} key={key}><ColorMenu color={edge.color} label={`Color connection from ${from.text} to ${to.text}`} onChange={(color) => onChange({ ...board, connections: board.connections.map((item) => item.from === edge.from && item.to === edge.to ? { ...item, color } : item) })} /><button type="button" className="todo-link-remove" aria-label={`Remove connection from ${from.text} to ${to.text}`} onClick={() => { onChange({ ...board, connections: board.connections.filter((item) => item.from !== edge.from || item.to !== edge.to) }); setSelectedLink(""); }}><X size={14} /></button></div>; })}
+        {board.connections.map((edge) => { const from = byId.get(edge.from), to = byId.get(edge.to), key = connectionKey(edge.from, edge.to); if (!from || !to || selectedLink !== key) return null; const { from: a, to: b } = connectionGeometry(rectFor(from), rectFor(to)); return <div className="todo-link-controls" style={{ left: (a.x + b.x) / 2, top: (a.y + b.y) / 2 }} key={key}><ColorMenu color={edge.color} label={`Color connection from ${from.text} to ${to.text}`} onChange={(color) => commit({ ...board, connections: board.connections.map((item) => item.from === edge.from && item.to === edge.to ? { ...item, color } : item) })} /><button type="button" className="todo-link-remove" aria-label={`Remove connection from ${from.text} to ${to.text}`} onClick={() => { commit({ ...board, connections: board.connections.filter((item) => item.from !== edge.from || item.to !== edge.to) }); setSelectedLink(""); }}><X size={14} /></button></div>; })}
         {board.tasks.map((task) => { const category = board.categories.find((item) => item.id === task.categoryId), point = location(task); return <article className={`todo-card${task.done ? " done" : ""}`} data-todo-id={task.id} key={task.id} style={{ left: point.x, top: point.y, "--list-color": category?.color ?? "var(--accent)" } as CSSProperties} onContextMenu={(event) => openMenu(event, task)}>
           <div className="todo-card-heading" title="Drag to move" onPointerDown={(event) => { if (!(event.target as Element).closest("button,input,select")) startMove(event, task); }}><button type="button" className="todo-card-grip" aria-label={`Drag ${task.text || "to-do"}`} title="Drag to move" onPointerDown={(event) => startMove(event, task)}><GripVertical size={15} /></button><span className="todo-card-category">{category?.title || "TO-DO"}</span><button type="button" aria-label={`Options for ${task.text || "to-do"}`} title="To-do options" onClick={(event) => openMenu(event, task)}><MoreHorizontal size={16} /></button><button type="button" aria-expanded={expanded.has(task.id)} aria-label={`${expanded.has(task.id) ? "Hide" : "Show"} notes for ${task.text || "to-do"}`} onClick={() => setExpanded((previous) => { const next = new Set(previous); if (next.has(task.id)) next.delete(task.id); else next.add(task.id); return next; })}>{expanded.has(task.id) ? <ChevronDown size={15} /> : <ChevronRight size={15} />}</button></div>
-          <div className="todo-card-main"><input type="checkbox" checked={task.done} aria-label={`Complete ${task.text || "to-do"}`} onChange={(event) => updateTask(task.id, { done: event.target.checked })} /><input className="todo-task-text" maxLength={500} value={task.text} aria-label="Task name" onChange={(event) => updateTask(task.id, { text: event.target.value })} /></div>
-          {task.subtasks.length > 0 && <div className="todo-subtasks">{task.subtasks.map((item) => <div className="todo-subtask" key={item.id}><input type="checkbox" aria-label={`Complete item ${item.text || "untitled"}`} checked={item.done} onChange={(event) => updateTask(task.id, { subtasks: task.subtasks.map((sub) => sub.id === item.id ? { ...sub, done: event.target.checked } : sub) })} /><input className={item.done ? "completed" : ""} aria-label="To-do item" maxLength={500} value={item.text} onChange={(event) => updateTask(task.id, { subtasks: task.subtasks.map((sub) => sub.id === item.id ? { ...sub, text: event.target.value } : sub) })} /><button type="button" aria-label={`Remove item ${item.text || "untitled"}`} onClick={() => updateTask(task.id, { subtasks: task.subtasks.filter((sub) => sub.id !== item.id) })}><X size={13} /></button></div>)}</div>}
+          <div className="todo-card-main"><input type="checkbox" checked={task.done} aria-label={`Complete ${task.text || "to-do"}`} onChange={(event) => updateTask(task.id, { done: event.target.checked })} /><input className="todo-task-text" maxLength={500} value={task.text} aria-label="Task name" onChange={(event) => updateTask(task.id, { text: event.target.value }, `task:${task.id}`)} /></div>
+          {task.subtasks.length > 0 && <div className="todo-subtasks">{task.subtasks.map((item) => <div className="todo-subtask" key={item.id}><input type="checkbox" aria-label={`Complete item ${item.text || "untitled"}`} checked={item.done} onChange={(event) => updateTask(task.id, { subtasks: task.subtasks.map((sub) => sub.id === item.id ? { ...sub, done: event.target.checked } : sub) })} /><input className={item.done ? "completed" : ""} aria-label="To-do item" maxLength={500} value={item.text} onChange={(event) => updateTask(task.id, { subtasks: task.subtasks.map((sub) => sub.id === item.id ? { ...sub, text: event.target.value } : sub) }, `sub:${task.id}:${item.id}`)} /><button type="button" aria-label={`Remove item ${item.text || "untitled"}`} onClick={() => updateTask(task.id, { subtasks: task.subtasks.filter((sub) => sub.id !== item.id) })}><X size={13} /></button></div>)}</div>}
           {addingItem === task.id ? <form className="todo-subtask-add" onSubmit={(event) => { event.preventDefault(); const text = (subDrafts[task.id] ?? "").trim(); if (text && task.subtasks.length < 100 && updateTask(task.id, { subtasks: [...task.subtasks, { id: todoId(), text, done: false }] })) setSubDrafts((previous) => ({ ...previous, [task.id]: "" })); }}><input autoFocus aria-label={`New item for ${task.text || "to-do"}`} maxLength={500} placeholder="Add an item…" value={subDrafts[task.id] ?? ""} onChange={(event) => setSubDrafts((previous) => ({ ...previous, [task.id]: event.target.value }))} /><button type="submit" aria-label="Add item" disabled={task.subtasks.length >= 100 || !(subDrafts[task.id] ?? "").trim()}><Plus size={14} /></button><button type="button" aria-label="Close add item" onClick={() => setAddingItem("")}><X size={13} /></button></form> : <button type="button" className="todo-add-item" aria-label="Add item" title="Add item" disabled={task.subtasks.length >= 100} onClick={() => setAddingItem(task.id)}><Plus size={13} /></button>}
-          {expanded.has(task.id) && <div className="todo-card-detail"><label>Notes<textarea maxLength={200000} aria-label={`Notes for ${task.text || "to-do"}`} value={task.notes} onChange={(event) => updateTask(task.id, { notes: event.target.value })} placeholder="Add details, links, or context…" /></label><div className="todo-task-actions"><label>Category <AppSelect label={`Category for ${task.text || "to-do"}`} value={task.categoryId ?? ""} onChange={(value) => updateTask(task.id, { categoryId: value || null })}><option value="">No category</option>{board.categories.map((item) => <option key={item.id} value={item.id}>{item.title || "Untitled category"}</option>)}</AppSelect></label>{deleteTask === task.id ? <><button type="button" className="todo-delete-confirm" onClick={() => { if (onChange({ ...board, tasks: board.tasks.filter((item) => item.id !== task.id), connections: board.connections.filter((edge) => edge.from !== task.id && edge.to !== task.id) })) setDeleteTask(""); }}>Delete</button><button type="button" aria-label="Cancel deleting to-do" onClick={() => setDeleteTask("")}><X size={13} /></button></> : <button type="button" aria-label={`Delete ${task.text || "to-do"}`} onClick={() => setDeleteTask(task.id)}><Trash2 size={14} /></button>}</div></div>}
+          {expanded.has(task.id) && <div className="todo-card-detail"><label>Notes<textarea maxLength={200000} aria-label={`Notes for ${task.text || "to-do"}`} value={task.notes} onChange={(event) => updateTask(task.id, { notes: event.target.value }, `notes:${task.id}`)} placeholder="Add details, links, or context…" /></label><div className="todo-task-actions"><label>Category <AppSelect label={`Category for ${task.text || "to-do"}`} value={task.categoryId ?? ""} onChange={(value) => updateTask(task.id, { categoryId: value || null })}><option value="">No category</option>{board.categories.map((item) => <option key={item.id} value={item.id}>{item.title || "Untitled category"}</option>)}</AppSelect></label>{deleteTask === task.id ? <><button type="button" className="todo-delete-confirm" onClick={() => { if (commit({ ...board, tasks: board.tasks.filter((item) => item.id !== task.id), connections: board.connections.filter((edge) => edge.from !== task.id && edge.to !== task.id) })) setDeleteTask(""); }}>Delete</button><button type="button" aria-label="Cancel deleting to-do" onClick={() => setDeleteTask("")}><X size={13} /></button></> : <button type="button" aria-label={`Delete ${task.text || "to-do"}`} onClick={() => setDeleteTask(task.id)}><Trash2 size={14} /></button>}</div></div>}
           <button type="button" className="todo-connect-dot" aria-label={`Connect ${task.text || "to-do"} to another to-do`} title="Drag to another to-do" onPointerDown={(event) => startLink(event, task)} />
         </article>; })}
       </div></div>

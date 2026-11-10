@@ -49,9 +49,33 @@ export function noteTitle(name: string): string {
   return name.replace(/\.(?:md|markdown)$/i, "");
 }
 
-/** Special Comet document extensions remain on disk, but are not useful labels. */
+/** Special Comet document & web shortcut extensions remain on disk, but are not useful labels. */
 export function displayEntryName(name: string): string {
-  return name.replace(/\.(?:comet-todo|comet-whiteboard)$/i, "");
+  return name.replace(/\.(?:comet-todo|comet-whiteboard|url)$/i, "");
+}
+
+/**
+ * Keep special document/shortcut extensions (`.url`, `.comet-todo`, `.comet-whiteboard`)
+ * intact when renaming titles so editing a saved video/board title never breaks its format,
+ * and keep an existing file's extension when no new extension was typed.
+ */
+export function preserveRenamedExtension(originalName: string, nextInput: string): string {
+  const trimmed = nextInput.trim();
+  if (!trimmed) return trimmed;
+  const specialMatch = /\.(?:comet-todo|comet-whiteboard|url)$/i.exec(originalName);
+  if (specialMatch) {
+    const suffix = specialMatch[0];
+    if (trimmed.toLowerCase().endsWith(suffix.toLowerCase())) return trimmed;
+    return `${trimmed}${suffix}`;
+  }
+  const dot = originalName.lastIndexOf(".");
+  if (dot > 0) {
+    const origExt = originalName.slice(dot);
+    if (!/\.[a-zA-Z0-9]{1,16}$/.test(trimmed)) {
+      return `${trimmed}${origExt}`;
+    }
+  }
+  return trimmed;
 }
 
 export function isPathInside(path: string, parent: string): boolean {

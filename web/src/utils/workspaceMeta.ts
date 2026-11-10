@@ -66,8 +66,13 @@ export function renameMeta(meta: WorkspaceMeta, from: string, to: string): Works
   const items = Object.fromEntries(Object.entries(meta.items).map(([key, value]) => [remap(key), value]));
   const order = Object.fromEntries(Object.entries(meta.order).map(([key, value]) => {
     const parent = remap(key);
-    // A cross-folder move removes the item from its old sibling ordering.
-    return [parent, value.map(remap).filter((child) => normalizePath(parentPath(child)) === parent)];
+    // Keep direct children and in-place renames inside `parent`, while removing cross-folder moves from old folder orders.
+    return [parent, value.flatMap((orig) => {
+      const mapped = remap(orig);
+      if (!isPathInside(mapped, parent) || mapped === parent) return [];
+      const sameParent = remap(normalizePath(parentPath(orig))) === normalizePath(parentPath(mapped));
+      return normalizePath(parentPath(mapped)) === parent || sameParent ? [mapped] : [];
+    })];
   }));
   return { ...meta, items, order };
 }
@@ -94,4 +99,12 @@ export function reorderChildrenGroup(meta: WorkspaceMeta, parent: string, childr
 }
 export function reorderChildren(meta: WorkspaceMeta, parent: string, children: string[], dragged: string, target: string, after: boolean): WorkspaceMeta {
   return reorderChildrenGroup(meta, parent, children, [dragged], target, after);
+}
+export function orderItems<T extends { path: string; name: string; kind: "folder" | "file" }>(items: T[], meta: WorkspaceMeta, parent: string): T[] {
+  const order = meta.order[normalizePath(parent)] ?? [];
+  return [...items].sort((a, b) => {
+    const ai = order.indexOf(normalizePath(a.path)), bi = order.indexOf(normalizePath(b.path));
+    if (ai >= 0 || bi >= 0) return (ai < 0 ? Number.MAX_SAFE_INTEGER : ai) - (bi < 0 ? Number.MAX_SAFE_INTEGER : bi);
+    return a.kind === b.kind ? a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }) : a.kind === "folder" ? -1 : 1;
+  });
 }

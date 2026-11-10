@@ -1,4 +1,4 @@
-import { useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { CalendarDays, ChevronLeft, ChevronRight, Clock3, Download, Pencil, Plus, Trash2, X } from "lucide-react";
 import { calendarDate, calendarId, calendarIcs, dateKey, MAX_CALENDAR_EVENTS, monthDays, parseCalendarDate, readCalendar, saveCalendar, type CalendarEvent } from "./utils/calendar";
 
@@ -20,6 +20,8 @@ export function CalendarView({ vault, name }: { vault: string; name: string }) {
   const [editing, setEditing] = useState(false);
   const [deleting, setDeleting] = useState("");
   const [error, setError] = useState("");
+  const monthPanelRef = useRef<HTMLDivElement>(null);
+  const lastWheelRef = useRef(0);
   const days = useMemo(() => monthDays(month.getFullYear(), month.getMonth()), [month]);
   const grouped = useMemo(() => {
     const result = new Map<string, CalendarEvent[]>();
@@ -42,6 +44,21 @@ export function CalendarView({ vault, name }: { vault: string; name: string }) {
   const nextDisabled = picker === "years" ? yearStart + 11 >= 9999 : picker === "months" ? month.getFullYear() >= 9999 : month.getFullYear() >= 9999 && month.getMonth() === 11;
   const selectMonth = (index: number) => { setMonth(calendarDate(month.getFullYear(), index, 1)); setPicker("days"); };
   const selectYear = (year: number) => { setMonth(calendarDate(year, month.getMonth(), 1)); setPicker("months"); };
+  useEffect(() => {
+    const panel = monthPanelRef.current;
+    if (!panel) return;
+    const wheel = (event: WheelEvent) => {
+      if ((event.target as Element | null)?.closest("input, textarea, select") || event.ctrlKey || event.metaKey || !event.deltaY) return;
+      event.preventDefault();
+      // A trackpad emits many tiny events per gesture; step one month/page per gesture.
+      const now = Date.now();
+      if (now - lastWheelRef.current < 180) return;
+      lastWheelRef.current = now;
+      navigate(event.deltaY > 0 ? 1 : -1);
+    };
+    panel.addEventListener("wheel", wheel, { passive: false });
+    return () => panel.removeEventListener("wheel", wheel);
+  }, [picker]);
   const createEvent = () => { setEditing(false); setDraft(blankEvent(selected)); setDeleting(""); setError(""); };
   const save = (event: FormEvent) => {
     event.preventDefault();
@@ -67,7 +84,7 @@ export function CalendarView({ vault, name }: { vault: string; name: string }) {
     <div className="calendar-heading"><span className="calendar-heading-icon"><CalendarDays size={21} /></span><div><span className="section-eyebrow">MAKE ROOM FOR WHAT MATTERS</span><h1 id="calendar-title">Calendar</h1><p>Local plans for {name}, stored on this device.</p></div><div className="calendar-heading-actions"><button type="button" className="secondary-button" disabled={!events.length || !ready} onClick={exportCalendar} title="Export events as an iCalendar file"><Download size={15} /> Export</button><button type="button" className="primary-button" disabled={!ready || events.length >= MAX_CALENDAR_EVENTS} onClick={createEvent}><Plus size={16} /> New event</button></div></div>
     {!ready && <div className="dialog-error" role="alert">{initial.status === "invalid" ? "This calendar has an unknown or damaged format. Its stored data has not been changed." : "Calendar storage isn't available on this device. Your stored events have not been changed."}</div>}
     <div className="calendar-layout">
-      <div className="calendar-month">
+      <div ref={monthPanelRef} className="calendar-month">
         <div className="calendar-month-header"><h2 className="calendar-date-title" aria-live="polite"><button type="button" aria-label="Choose month" aria-pressed={picker === "months"} onClick={() => setPicker(picker === "months" ? "days" : "months")}>{new Intl.DateTimeFormat(undefined, { month: "long" }).format(month)}</button><button type="button" aria-label="Choose year" aria-pressed={picker === "years"} onClick={() => { setYearStart(1 + Math.floor((month.getFullYear() - 1) / 12) * 12); setPicker(picker === "years" ? "days" : "years"); }}>{month.getFullYear()}</button></h2><div className="calendar-month-actions"><button type="button" className="calendar-today" onClick={() => { pickDay(new Date()); setPicker("days"); }}>Today</button><button type="button" aria-label={`Previous ${picker === "years" ? "years" : picker === "months" ? "year" : "month"}`} disabled={previousDisabled} onClick={() => navigate(-1)}><ChevronLeft size={17} /></button><button type="button" aria-label={`Next ${picker === "years" ? "years" : picker === "months" ? "year" : "month"}`} disabled={nextDisabled} onClick={() => navigate(1)}><ChevronRight size={17} /></button></div></div>
         {picker === "days" ? <div className="calendar-transition" key={`days-${month.getFullYear()}-${month.getMonth()}`}>
           <div className="calendar-weekdays" aria-hidden="true">{weekdays.map((day, index) => <span key={index}>{day}</span>)}</div>

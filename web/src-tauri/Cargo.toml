@@ -1,6 +1,6 @@
 [package]
 name = "comet"
-version = "1.0.0"
+version = "1.0.1"
 description = "Comet - a local first note taking app"
 authors = ["Marco"]
 edition = "2024"

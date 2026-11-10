@@ -1,7 +1,151 @@
 import { Download, ExternalLink, RefreshCw } from "lucide-react";
-import type { UpdateInfo } from "./utils/updates";
-export function UpdatesSettings({ version, update, status, desktop, onCheck, onInstall, onPage }: { version: string; update: UpdateInfo | null; status: string; desktop: boolean; onCheck: () => void; onInstall: () => void; onPage: () => void }) {
-  const agent = typeof navigator !== "undefined" ? navigator.userAgent : "";
-  const windows = /Windows/i.test(agent), linux = /Linux/i.test(agent);
-  return <section className="settings-card updates-settings" aria-labelledby="updates-title"><div className="settings-card-heading"><div><h2 id="updates-title">Updates</h2><p>Comet checks GitHub for published releases. Drafts are never offered.</p></div></div><div className="update-version"><div><strong>Current version</strong><span>{version}</span></div><button type="button" className="secondary-button" onClick={onCheck}><RefreshCw size={15} /> Check for updates</button></div>{update ? <div className="update-available"><strong>Comet {update.version} is available</strong><p>{windows ? "Review the release notes or download the official Windows setup. Comet verifies GitHub's digest and opens the installer; it never replaces itself silently." : linux ? "Review the release notes, then download the AppImage or the package for your distribution from the release page. Nothing is installed automatically." : "Review the release notes or download the release for your platform."}</p><div className="update-buttons">{desktop && windows && update.installer && <button type="button" className="primary-button" onClick={onInstall}><Download size={15} /> Download &amp; run installer</button>}<button type="button" className="secondary-button" onClick={onPage}><ExternalLink size={15} /> Release page</button></div><small>{windows ? "The GitHub download is checked against GitHub's SHA-256 digest, but releases are not independently signed. Portable users should replace their copy manually." : "Releases are not independently signed. Install packages through your distribution's package manager, or run the AppImage you downloaded yourself."}</small></div> : <p className="updates-status" role="status">{status || "You can check for a newer version at any time."}</p>}{update && status && <p className="updates-status" role="status">{status}</p>}</section>;
+import {
+  DEFAULT_UPDATE_PREFERENCES,
+  type UpdateInfo,
+  type UpdateInstallStep,
+  type UpdatePreferences,
+} from "./utils/updates";
+
+export function UpdatesSettings({
+  version,
+  desktop,
+  update,
+  status,
+  installStep = "idle",
+  checking = false,
+  preferences = DEFAULT_UPDATE_PREFERENCES,
+  onPreferencesChange = () => {},
+  onCheck,
+  onInstall,
+  onPage,
+}: {
+  version: string;
+  desktop: boolean;
+  update: UpdateInfo | null;
+  status: string;
+  installStep?: UpdateInstallStep;
+  checking?: boolean;
+  preferences?: UpdatePreferences;
+  onPreferencesChange?: (next: UpdatePreferences) => void;
+  onCheck: () => void;
+  onInstall: () => void;
+  onPage: (url?: string) => void;
+}) {
+  const activeAsset =
+    update?.platformAsset ??
+    (update?.installer ? { ...update.installer, platform: "windows" as const } : null);
+  const canDirectInstall = Boolean(desktop && update && activeAsset);
+  const busy = installStep !== "idle";
+  const installLabel =
+    installStep === "downloading"
+      ? "Downloading…"
+      : installStep === "opening"
+        ? "Opening…"
+        : update
+          ? `Install ${update.version}`
+          : "Install update";
+
+  return (
+    <section className="settings-card updates-card" aria-labelledby="updates-title">
+      <div className="settings-card-heading">
+        <div>
+          <h2 id="updates-title">Updates</h2>
+          <p>Check GitHub releases for new versions of Comet and install them with one click.</p>
+        </div>
+      </div>
+
+      <div className="setting-row update-setting-row">
+        <span className="setting-copy">
+          <strong>Comet {version}</strong>
+          <small role="status">
+            {status ||
+              (update
+                ? `Comet ${update.version} is out and ready to install.`
+                : "You're running the current build of Comet.")}
+          </small>
+        </span>
+        <div className="update-actions">
+          <button
+            className="secondary-button"
+            type="button"
+            disabled={checking || busy}
+            onClick={onCheck}
+          >
+            <RefreshCw size={15} className={checking ? "spin" : undefined} />{" "}
+            {checking ? "Checking…" : "Check now"}
+          </button>
+          {update &&
+            (canDirectInstall ? (
+              <button
+                className="primary-button"
+                type="button"
+                disabled={busy}
+                onClick={onInstall}
+              >
+                <Download size={15} /> {installLabel}
+              </button>
+            ) : (
+              <button
+                className="primary-button"
+                type="button"
+                onClick={() => onPage(update.url)}
+              >
+                <ExternalLink size={15} /> Get {update.version}
+              </button>
+            ))}
+          <button
+            className="secondary-button"
+            type="button"
+            onClick={() => onPage(update?.url)}
+          >
+            <ExternalLink size={15} /> {update ? "Release notes" : "Releases"}
+          </button>
+        </div>
+      </div>
+
+      {update?.notes && (
+        <div className="update-notes">
+          <strong>
+            What's in {update.version}
+            {update.prerelease ? " (pre-release)" : ""}
+          </strong>
+          <p>{update.notes}</p>
+        </div>
+      )}
+
+      <label className="setting-row">
+        <span className="setting-copy">
+          <strong id="update-check-launch-label">Look for a new version when Comet opens</strong>
+          <small>Quietly checks GitHub releases shortly after startup and lets you know in the corner.</small>
+        </span>
+        <input
+          className="setting-toggle"
+          type="checkbox"
+          role="switch"
+          aria-labelledby="update-check-launch-label"
+          checked={preferences.checkOnLaunch}
+          onChange={(event) =>
+            onPreferencesChange({ ...preferences, checkOnLaunch: event.target.checked })
+          }
+        />
+      </label>
+
+      <label className="setting-row">
+        <span className="setting-copy">
+          <strong id="update-prerelease-label">Include pre-releases</strong>
+          <small>Also offer beta or preview builds published on GitHub before stable releases.</small>
+        </span>
+        <input
+          className="setting-toggle"
+          type="checkbox"
+          role="switch"
+          aria-labelledby="update-prerelease-label"
+          checked={preferences.includePrereleases}
+          onChange={(event) =>
+            onPreferencesChange({ ...preferences, includePrereleases: event.target.checked })
+          }
+        />
+      </label>
+    </section>
+  );
 }

@@ -5,7 +5,12 @@ import { ArrowLeft, Check, FolderOpen, Gem, Keyboard, Monitor, Moon, RotateCcw, 
 import { keyboardShortcut, shortcutLabel, SHORTCUT_ACTIONS, type ShortcutAction } from "./utils/shortcuts";
 import { PasswordSettings } from "./PasswordSettings";
 import { UpdatesSettings } from "./UpdatesSettings";
-import type { UpdateInfo } from "./utils/updates";
+import {
+  DEFAULT_UPDATE_PREFERENCES,
+  type UpdateInfo,
+  type UpdateInstallStep,
+  type UpdatePreferences,
+} from "./utils/updates";
 import { DEFAULT_SETTINGS, type Settings, type ThemePreference } from "./utils/settings";
 
 interface SettingsPageProps {
@@ -24,9 +29,13 @@ interface SettingsPageProps {
   version?: string;
   update?: UpdateInfo | null;
   updateStatus?: string;
+  updateInstallStep?: UpdateInstallStep;
+  updateChecking?: boolean;
+  updatePreferences?: UpdatePreferences;
+  onUpdatePreferencesChange?: (next: UpdatePreferences) => void;
   onCheckUpdate?: () => void;
   onInstallUpdate?: () => void;
-  onUpdatePage?: () => void;
+  onUpdatePage?: (url?: string) => void;
 }
 
 const themes: { value: ThemePreference; label: string; description: string; icon: typeof Moon }[] = [
@@ -47,7 +56,7 @@ const themes: { value: ThemePreference; label: string; description: string; icon
   { value: "onyx", label: "Onyx", description: "Deep charcoal", icon: Moon },
 ];
 
-export function SettingsPage({ settings, persisted, isSample, modifier, desktop, trayAvailable, onChange, onBack, onOpenVault, onOpenPasswords = () => {}, section = "general", onSection, version = "", update = null, updateStatus = "", onCheckUpdate = () => {}, onInstallUpdate = () => {}, onUpdatePage = () => {} }: SettingsPageProps) {
+export function SettingsPage({ settings, persisted, isSample, modifier, desktop, trayAvailable, onChange, onBack, onOpenVault, onOpenPasswords = () => {}, section = "general", onSection, version = "", update = null, updateStatus = "", updateInstallStep = "idle", updateChecking = false, updatePreferences = DEFAULT_UPDATE_PREFERENCES, onUpdatePreferencesChange = () => {}, onCheckUpdate = () => {}, onInstallUpdate = () => {}, onUpdatePage = () => {} }: SettingsPageProps) {
   const [recording, setRecording] = useState<ShortcutAction | null>(null);
   const [shortcutError, setShortcutError] = useState("");
   const mac = modifier === "⌘";
@@ -59,7 +68,7 @@ export function SettingsPage({ settings, persisted, isSample, modifier, desktop,
     </div>
 
     {onSection && <div className="settings-tabs" role="tablist" aria-label="Settings sections"><button type="button" role="tab" aria-selected={section === "general"} onClick={() => onSection("general")}>General</button><button type="button" role="tab" aria-selected={section === "passwords"} onClick={() => onSection("passwords")}>Passwords</button><button type="button" role="tab" aria-selected={section === "updates"} onClick={() => onSection("updates")}>Updates{update && <span className="update-dot" />}</button></div>}
-    {section === "passwords" ? <PasswordSettings onOpenVault={onOpenPasswords} /> : section === "updates" ? <UpdatesSettings version={version} update={update} status={updateStatus} desktop={desktop} onCheck={onCheckUpdate} onInstall={onInstallUpdate} onPage={onUpdatePage} /> : <div className="settings-layout">
+    {section === "passwords" ? <PasswordSettings onOpenVault={onOpenPasswords} /> : section === "updates" ? <UpdatesSettings version={version} update={update} status={updateStatus} installStep={updateInstallStep} checking={updateChecking} preferences={updatePreferences} onPreferencesChange={onUpdatePreferencesChange} desktop={desktop} onCheck={onCheckUpdate} onInstall={onInstallUpdate} onPage={onUpdatePage} /> : <div className="settings-layout">
       <div className="settings-main">
         <section className="settings-card" aria-labelledby="appearance-title">
           <div className="settings-card-heading"><div><h2 id="appearance-title">Appearance</h2><p>Set the mood for your workspace.</p></div></div>

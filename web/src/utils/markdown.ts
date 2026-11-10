@@ -28,14 +28,14 @@ export interface ListItem {
 export type Block =
   | { kind: "blank" }
   | { kind: "p"; inlines: Inline[] }
-  | { kind: "h"; level: 1 | 2 | 3; inlines: Inline[] }
+  | { kind: "h"; level: 1 | 2 | 3 | 4; inlines: Inline[] }
   | { kind: "ul"; items: ListItem[] }
   | { kind: "ol"; items: ListItem[] }
   | { kind: "quote"; inlines: Inline[] }
   | { kind: "code"; text: string; language: string }
   | { kind: "rule" };
 
-const HEADING = /^(#{1,3})\s+(.*)$/;
+const HEADING = /^(#{1,4})\s+(.*)$/;
 const BULLET = /^[-*+]\s+(.*)$/;
 const NUMBERED = /^(\d+)[.)]\s+(.*)$/;
 const CHECK = /^\[([ xX])\]\s+(.*)$/;
@@ -104,7 +104,7 @@ export function parseBlocks(text: string): Block[] {
     if (heading) {
       flush();
       quoteAll = false;
-      out.push({ kind: "h", level: heading[1].length as 1 | 2 | 3, inlines: parseInline(heading[2]) });
+      out.push({ kind: "h", level: heading[1].length as 1 | 2 | 3 | 4, inlines: parseInline(heading[2]) });
       continue;
     }
 
@@ -127,13 +127,10 @@ export function parseBlocks(text: string): Block[] {
     if (bullet) {
       flush();
       quoteAll = false;
-      const item: ListItem = { inlines: parseInline(bullet[1]) };
-      const box = CHECK.exec(collapse(item.inlines));
-      if (box) {
-        item.box = true;
-        item.done = box[1].toLowerCase() === "x";
-        item.inlines = parseInline(box[2]);
-      }
+      const box = CHECK.exec(bullet[1]);
+      const item: ListItem = box
+        ? { box: true, done: box[1].toLowerCase() === "x", inlines: parseInline(box[2]) }
+        : { inlines: parseInline(bullet[1]) };
       const last = out[out.length - 1];
       if (last?.kind === "ul") last.items.push(item);
       else out.push({ kind: "ul", items: [item] });
@@ -160,9 +157,26 @@ export function parseBlocks(text: string): Block[] {
   return out;
 }
 
-/** The text of a run of inlines, markers dropped: used to look for a check box. */
-function collapse(inlines: Inline[]): string {
-  return inlines.map((inline) => (inline.kind === "br" ? "\n" : inline.text)).join("");
+/** Toggle the Nth `- [ ]` / `- [x]` task item outside fenced code blocks. */
+export function toggleMarkdownTask(markdown: string, taskIndex: number): string {
+  const lines = markdown.replace(/\r\n?/g, "\n").split("\n");
+  let inFence = false;
+  let seen = 0;
+  return lines.map((line) => {
+    const trimmed = line.trim();
+    if (inFence) {
+      if (/^```\s*$/.test(trimmed)) inFence = false;
+      return line;
+    }
+    if (/^```/.test(trimmed)) {
+      inFence = true;
+      return line;
+    }
+    const match = /^(\s*[-*+]\s+\[)([ xX])(\]\s+.*)$/.exec(line);
+    if (!match) return line;
+    if (seen++ !== taskIndex) return line;
+    return `${match[1]}${match[2].toLowerCase() === "x" ? " " : "x"}${match[3]}`;
+  }).join("\n");
 }
 
 /** One line's worth of Discord-style inline formatting. */
@@ -227,9 +241,45 @@ export function parseInline(text: string): Inline[] {
   return out;
 }
 
-/** Count note words without counting Markdown syntax or link destinations. */
+const NBSP_BLANK_LINE = /^[ \t]*(?:&(?:amp;)*nbsp;|&#160;|&#xa0;|\u00a0)[ \t]*$/i;
+
+/**
+ * Strip blank-line `&nbsp;` / `&amp;nbsp;` artifacts outside fenced code blocks
+ * so Markdown source stays clean and never accumulates entity noise.
+ */
+export function cleanNoteMarkdown(markdown: string): string {
+  if (!markdown || !/(?:nbsp|&#160;|&#xa0;|\u00a0)/i.test(markdown)) return markdown;
+  const lines = markdown.split("\n");
+  let fence: "`" | "~" | null = null;
+  let fenceLen = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const fenceHit = /^\s*(`{3,}|~{3,})/.exec(line);
+    if (fenceHit) {
+      const ch = fenceHit[1][0] as "`" | "~";
+      const len = fenceHit[1].length;
+      if (!fence) {
+        fence = ch;
+        fenceLen = len;
+      } else if (ch === fence && len >= fenceLen && /^\s*(?:`{3,}|~{3,})\s*$/.test(line)) {
+        fence = null;
+        fenceLen = 0;
+      }
+      continue;
+    }
+    if (!fence && NBSP_BLANK_LINE.test(line)) {
+      lines[i] = "";
+    }
+  }
+  return lines.join("\n");
+}
+
+/** Count note words without counting Markdown syntax, HTML entities, or link destinations. */
 export function countWords(markdown: string): number {
-  const text = markdown
+  const text = cleanNoteMarkdown(markdown)
+    .replace(/&(?:amp;)*(?:nbsp|#160|#xa0);/gi, " ")
+    .replace(/\u00a0/g, " ")
+    .replace(/<\/?(?:span|mark|u|br)\b[^>]*>/gi, " ")
     .replace(/!?\[([^\]]*)\]\([^)]+\)/g, "$1")
     .replace(/^\s*[-*+]\s+\[[ xX]\](?=\s|$)/gm, " ")
     .replace(/^\s*\d+[.)]\s+/gm, " ")

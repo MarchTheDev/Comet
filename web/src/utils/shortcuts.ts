@@ -1,4 +1,6 @@
 export const SHORTCUT_ACTIONS = {
+  undo: "Undo",
+  redo: "Redo",
   search: "Search workspace",
   path: "Go to path",
   capture: "Quick capture",
@@ -15,6 +17,7 @@ export const SHORTCUT_ACTIONS = {
 export type ShortcutAction = keyof typeof SHORTCUT_ACTIONS;
 export type Shortcuts = Record<ShortcutAction, string>;
 export const DEFAULT_SHORTCUTS: Shortcuts = {
+  undo: "Mod+Z", redo: "Mod+Shift+Z",
   search: "Mod+K", path: "Mod+L", capture: "Mod+Shift+K", newFile: "Mod+N",
   newFolder: "Mod+Shift+N", sidebar: "Mod+\\", save: "Mod+S",
   pin: "Mod+Shift+P", favorite: "Mod+Shift+F", tags: "Mod+Shift+T",

@@ -49,6 +49,7 @@ const checks = [
   'tests/uploadInteractions.test.mjs',
   'tests/droppedUpload.test.mjs',
   'tests/playerInteractions.test.mjs',
+  'tests/v101Features.test.mjs',
 ];
 try {
   for (const file of checks) {
@@ -63,6 +64,18 @@ try {
       external: ['jsdom', 'react', 'react-dom', 'react-dom/server', 'lucide-react', 'music-metadata', 'fake-indexeddb'],
       jsx: 'automatic',
       loader: { '.txt': 'text' },
+      plugins: [
+        {
+          name: 'vite-worker-stub',
+          setup(b) {
+            b.onResolve({ filter: /\?worker/ }, (args) => ({ path: args.path, namespace: 'vite-worker' }));
+            b.onLoad({ filter: /.*/, namespace: 'vite-worker' }, () => ({
+              contents: 'export default class MockWorker {}',
+              loader: 'js',
+            }));
+          },
+        },
+      ],
       logLevel: 'silent',
     });
     await import(pathToFileURL(path.resolve(out)).href);

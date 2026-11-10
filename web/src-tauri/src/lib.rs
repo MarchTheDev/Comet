@@ -18,6 +18,7 @@ mod rclone_sync;
 #[cfg(test)]
 mod workspace_archive;
 mod artwork;
+mod link_preview;
 mod upload;
 mod password_backup;
 
@@ -489,6 +490,7 @@ pub fn run() {
             list_vault,
             tray_available,
             update::install_update,
+            link_preview::fetch_link_preview,
             artwork::lookup_music_cover,
             artwork::read_cached_music_cover,
             artwork::music_file_fingerprint,

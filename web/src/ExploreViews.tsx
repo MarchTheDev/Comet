@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, 
 import { ChevronDown, ChevronRight, GitBranch, Minus, Network, Plus, RotateCcw } from "lucide-react";
 import { FileIcon } from "./FileIcon";
 import { graphEdges, graphPositionWithoutOverlap, graphRepulsion } from "./utils/graph";
+import { isStandaloneTextInput, UndoHistory, undoRedoKey } from "./utils/undoHistory";
 import { displayEntryName, isMarkdown, isPathInside, normalizePath, noteTitle, parentPath, type Entry, type TreeNode } from "./utils/vault";
 import { readNote } from "./utils/vaultBridge";
 
@@ -89,6 +90,32 @@ export function BrainExplore({ vault, name, entries, onOpen, onActivate, onConte
   // drag may freeze visible defaults for the gesture, but never writes them.
   const persistedPositions = useRef<Record<string, Point> | null>(null);
   if (!persistedPositions.current) persistedPositions.current = readPositions(vault);
+  const positionsRef = useRef(positions);
+  positionsRef.current = positions;
+  const graphHistory = useRef(new UndoHistory<{ persisted: Record<string, Point>; positions: Record<string, Point> }>(60, 0));
+  useEffect(() => { graphHistory.current.clear(); }, [vault]);
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const action = undoRedoKey(event);
+      if (!action || isStandaloneTextInput(event.target)) return;
+      const currentSnap = {
+        persisted: { ...(persistedPositions.current ?? {}) },
+        positions: { ...positionsRef.current },
+      };
+      const target = action === "undo" ? graphHistory.current.undo(currentSnap) : graphHistory.current.redo(currentSnap);
+      if (!target) return;
+      persistedPositions.current = target.persisted;
+      setPositions(target.positions);
+      try {
+        if (Object.keys(target.persisted).length > 0) localStorage.setItem(graphKey(vault), JSON.stringify(target.persisted));
+        else localStorage.removeItem(graphKey(vault));
+      } catch { /* layout is optional */ }
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [vault]);
   const toggleFolder = (path: string) => {
     const key = normalizePath(path);
     if (expandedFolders.has(key)) setPositions((previous) => Object.fromEntries(Object.entries(previous).filter(([item]) => item === key || !isPathInside(item, key) || !!persistedPositions.current?.[item])));
@@ -247,6 +274,10 @@ export function BrainExplore({ vault, name, entries, onOpen, onActivate, onConte
         // Pointer-up can land outside the original node, in which case no
         // click follows. Do not swallow the user's next intentional click.
         window.setTimeout(() => { suppressClick.current = false; }, 0);
+        graphHistory.current.record({
+          persisted: { ...(persistedPositions.current ?? {}) },
+          positions: { ...positions },
+        });
         const saved = { ...persistedPositions.current, [key]: nextPoint }; persistedPositions.current = saved;
         try { localStorage.setItem(graphKey(vault), JSON.stringify(saved)); } catch { /* layout is optional */ }
       } else if (!node && !moved) onClearSelection();
@@ -256,7 +287,7 @@ export function BrainExplore({ vault, name, entries, onOpen, onActivate, onConte
   };
   return <section className="explore-card brain-card" aria-labelledby="brain-title"><div className="explore-heading"><span className="explore-heading-icon"><Network size={20} /></span><div><span className="section-eyebrow">EXPLORE YOUR SPACE</span><h2 id="brain-title">Brain view</h2><p>Click a folder to reveal its contents. Drag nodes or the background to arrange the graph; right-click a node for more actions.</p></div></div>
     <div className="brain-controls"><label><span className="sr-only">Filter graph</span><input aria-label="Filter graph" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Find a node…" /></label><button type="button" aria-pressed={filter === "notes"} onClick={() => setFilter((value) => value === "all" ? "notes" : "all")}>Notes only</button><span className="brain-spacer" /><button type="button" onClick={() => { setResetLayout(true); setLayoutError(""); }}>Reset layout</button><button type="button" aria-label="Reset graph view" title="Reset view" onClick={() => { setZoom(window.innerWidth <= 600 ? 1.3 : 1); setPan({ x: 0, y: 0 }); }}><RotateCcw size={14} /></button><button type="button" aria-label="Zoom graph out" onClick={() => setZoom((value) => Math.max(.6, Math.round((value - .2) * 10) / 10))}><Minus size={15} /></button><span>{Math.round(zoom * 100)}%</span><button type="button" aria-label="Zoom graph in" onClick={() => setZoom((value) => Math.min(2, Math.round((value + .2) * 10) / 10))}><Plus size={15} /></button></div>
-    {resetLayout && <div className="brain-reset-confirm" role="group" aria-label="Reset saved graph layout"><span>Reset all saved node positions? Your files won't change.</span><button type="button" onClick={() => setResetLayout(false)}>Cancel</button><button type="button" onClick={() => { try { localStorage.removeItem(graphKey(vault)); persistedPositions.current = {}; setPositions({}); setExpandedFolders(new Set()); setResetLayout(false); } catch { setLayoutError("Couldn't reset the saved graph positions on this device."); } }}>Reset positions</button>{layoutError && <span role="alert">{layoutError}</span>}</div>}
+    {resetLayout && <div className="brain-reset-confirm" role="group" aria-label="Reset saved graph layout"><span>Reset all saved node positions? Your files won't change.</span><button type="button" onClick={() => setResetLayout(false)}>Cancel</button><button type="button" onClick={() => { try { graphHistory.current.record({ persisted: { ...(persistedPositions.current ?? {}) }, positions: { ...positionsRef.current } }); localStorage.removeItem(graphKey(vault)); persistedPositions.current = {}; setPositions({}); setExpandedFolders(new Set()); setResetLayout(false); } catch { setLayoutError("Couldn't reset the saved graph positions on this device."); } }}>Reset positions</button>{layoutError && <span role="alert">{layoutError}</span>}</div>}
     <div className={`brain-stage${dragging ? " dragging" : ""}`}><svg ref={svg} viewBox="0 0 1200 1040" preserveAspectRatio="xMidYMid meet" role="group" aria-label={`Workspace graph for ${name}`} onPointerDown={(event) => startDrag(event)}>
       <g transform={`translate(${pan.x} ${pan.y}) translate(600 520) scale(${zoom}) translate(-600 -520)`}>
         <g className="brain-edges">{drawn.map((edge) => { const from = positionMap.get(normalizePath(edge.from))!, to = positionMap.get(normalizePath(edge.to))!; return <line key={`${edge.kind}:${edge.from}:${edge.to}`} className={edge.kind} x1={from.x} y1={from.y} x2={to.x} y2={to.y} />; })}</g>

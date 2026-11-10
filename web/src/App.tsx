@@ -9,7 +9,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { EditorContent, useEditor, useEditorState } from "@tiptap/react";
 import {
   AlertCircle, ArrowLeft, ArrowRight, Bold, BookOpen, CalendarDays, CheckCircle2,
-  ChevronDown, ChevronRight, Code2, FileCode2, FilePlus2, FileText,
+  ChevronDown, ChevronRight, Code2, Eye, FilePlus2, FileText,
   FolderOpen, FolderPlus, GitBranch, GripVertical, Network, Image as ImageIcon, Italic, KeyRound, Link2, List,
   ListChecks, LoaderCircle, Maximize2, Minimize2,
   MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pencil, Plus, Quote, Redo2,
@@ -17,11 +17,18 @@ import {
 } from "lucide-react";
 import type { EditorProps } from "@tiptap/pm/view";
 import Image from "@tiptap/extension-image";
-import { TaskItem, TaskList } from "@tiptap/extension-list";
 import StarterKit from "@tiptap/starter-kit";
 import { Markdown } from "@tiptap/markdown";
 import { APP_VERSION } from "virtual:comet-version";
-import { checkUpdates, type UpdateInfo } from "./utils/updates";
+import {
+  checkUpdates,
+  readUpdatePreferences,
+  RELEASES_URL,
+  saveUpdatePreferences,
+  type UpdateInfo,
+  type UpdateInstallStep,
+  type UpdatePreferences,
+} from "./utils/updates";
 import { TodoBoard } from "./TodoBoard";
 import { Whiteboard } from "./Whiteboard";
 import { newWhiteboard, parseWhiteboard, serializeWhiteboard, type WhiteboardDocument } from "./utils/whiteboard";
@@ -35,22 +42,32 @@ import { deleteShortcutPaths } from "./utils/deleteShortcut";
 import { BrainExplore, TreeExplore } from "./ExploreViews";
 import { ColorMenu } from "./ColorMenu";
 import { SettingsPage } from "./SettingsPage";
-import { WorkspacePanel, type WorkspaceLayout } from "./WorkspacePanel";
+import { WorkspacePanel, workspacePlacement, type WorkspaceDropIndicator, type WorkspaceLayout } from "./WorkspacePanel";
 import { FileIcon } from "./FileIcon";
 import { FolderTreePicker, MovePicker } from "./MovePicker";
 import { UploadProgress, type UploadInfo } from "./UploadProgress";
 import { ensureSampleStorageCapacity, streamDroppedFile } from "./utils/droppedUpload";
 import { MediaView } from "./MediaView";
 import { VideoEmbeds } from "./utils/videoEmbeds";
+import { isEmbedDismissed, LinkEmbeds, openExternalWebUrl, setEmbedDismissed } from "./utils/linkEmbeds";
 import { SearchDialog } from "./SearchDialog";
 import { TagDialog } from "./TagDialog";
 import { fileKind, isTextFile } from "./utils/fileTypes";
-import { firstDroppedUrl, serializeShortcut } from "./utils/links";
+import { droppedBrowserLink, firstDroppedUrl, parseDroppedShortcutFile, serializeShortcut, videoLink } from "./utils/links";
+import {
+  cometLinkExtension,
+  findLinkMarkRange,
+  noteBlockExtensions,
+  replaceLinkDisplayText,
+  splitHardBreaksBeforeListToggle,
+  type LinkMarkTarget,
+} from "./utils/noteExtensions";
 import { richTextExtensions } from "./utils/richText";
-import { itemMeta, readWorkspaceMeta, saveWorkspaceMeta, updateItem, renameMeta, removeMeta, reorderChildren, reorderChildrenGroup, type WorkspaceMeta } from "./utils/workspaceMeta";
+import { isStandaloneTextInput, UndoHistory, undoRedoKey } from "./utils/undoHistory";
+import { itemMeta, orderItems as sortWorkspaceItems, readWorkspaceMeta, saveWorkspaceMeta, updateItem, renameMeta, removeMeta, reorderChildren, reorderChildrenGroup, type WorkspaceMeta } from "./utils/workspaceMeta";
 import { identityFor, readWorkspaceIdentities, saveWorkspaceIdentities } from "./utils/workspaceIdentity";
 import { readVaultList, reorderVaults, saveVaultList, vaultLabel } from "./utils/vaultList";
-import { countWords } from "./utils/markdown";
+import { cleanNoteMarkdown, countWords } from "./utils/markdown";
 import { displayWorkspacePath, planWorkspacePath, type PathPlan } from "./utils/pathNavigation";
 import { selectRange, selectionRoots } from "./utils/selection";
 import { keyboardShortcut, shortcutLabel } from "./utils/shortcuts";
@@ -67,7 +84,7 @@ import {
   isPathInside,
   joinPath,
   normalizePath,
-  noteTitle, displayEntryName,
+  noteTitle, displayEntryName, preserveRenamedExtension,
   parentPath,
   relativePath,
   remapPath,
@@ -94,7 +111,7 @@ import {
 } from "./utils/vaultBridge";
 
 type ViewMode = "write" | "source" | "read";
-type WorkspaceView = "note" | "file" | "todo" | "whiteboard" | "all" | "folder" | "pinned" | "favorites" | "tree" | "brain" | "calendar" | "passwords" | "tools" | "settings";
+type WorkspaceView = "note" | "file" | "todo" | "whiteboard" | "all" | "folders" | "folder" | "pinned" | "favorites" | "tree" | "brain" | "calendar" | "passwords" | "tools" | "settings";
 type NavigationPoint = { vault: string; view: WorkspaceView; path: string; tool?: ToolId | null };
 type NavigationHistory = { items: NavigationPoint[]; index: number };
 type CaptureType = "text" | "link" | "image" | "file";
@@ -129,6 +146,9 @@ function App() {
   const [settingsSection, setSettingsSection] = useState<"general" | "updates" | "passwords">("general");
   const [availableUpdate, setAvailableUpdate] = useState<UpdateInfo | null>(null);
   const [updateNotice, setUpdateNotice] = useState(false), [updateStatus, setUpdateStatus] = useState("");
+  const [updateChecking, setUpdateChecking] = useState(false);
+  const [updateInstallStep, setUpdateInstallStep] = useState<UpdateInstallStep>("idle");
+  const [updatePreferences, setUpdatePreferences] = useState<UpdatePreferences>(() => readUpdatePreferences());
   const [trayAvailable, setTrayAvailable] = useState(false);
   const [sampleStart] = useState(initialSample);
   const [lastSession] = useState(() => desktopAvailable && settings.reopenWorkspace ? readSession() : null);
@@ -225,6 +245,19 @@ function App() {
   const [desktopInfoOpen, setDesktopInfoOpen] = useState(false);
   const [contextMenu, setContextMenu] = useState<ContextMenu | null>(null);
   const contextMenuRef = useRef<HTMLDivElement>(null);
+  const [linkContextMenu, setLinkContextMenu] = useState<{
+    x: number;
+    y: number;
+    target: LinkMarkTarget;
+    scope: string;
+    dismissed: boolean;
+  } | null>(null);
+  const linkContextMenuRef = useRef<HTMLDivElement>(null);
+  const [hyperlinkDialog, setHyperlinkDialog] = useState<{
+    target: LinkMarkTarget;
+    labelDraft: string;
+  } | null>(null);
+  const [toolbarStuck, setToolbarStuck] = useState(false);
   useLayoutEffect(() => {
     const menu = contextMenuRef.current; if (!menu || !contextMenu) return;
     const scale = Number(document.documentElement.style.zoom) || 1;
@@ -232,6 +265,13 @@ function App() {
     menu.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - rect.width - 8)) / scale}px`;
     menu.style.top = `${Math.max(8, Math.min(rect.top, window.innerHeight - rect.height - 8)) / scale}px`;
   }, [contextMenu]);
+  useLayoutEffect(() => {
+    const menu = linkContextMenuRef.current; if (!menu || !linkContextMenu) return;
+    const scale = Number(document.documentElement.style.zoom) || 1;
+    const rect = menu.getBoundingClientRect();
+    menu.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - rect.width - 8)) / scale}px`;
+    menu.style.top = `${Math.max(8, Math.min(rect.top, window.innerHeight - rect.height - 8)) / scale}px`;
+  }, [linkContextMenu]);
   const [notice, setNotice] = useState("");
   const [dropIndicator, setDropIndicator] = useState<DropIndicator | null>(null);
   const dropIndicatorRef = useRef<DropIndicator | null>(null);
@@ -267,14 +307,7 @@ function App() {
   const queueSaveRef = useRef<(path: string, value: string) => void>(() => {});
   const selectNoteRef = useRef<(path: string) => void>(() => {});
 
-  const orderItems = useCallback(<T extends Entry>(items: T[], parent: string) => {
-    const order = metadata.order[normalizePath(parent)] ?? [];
-    return [...items].sort((a, b) => {
-      const ai = order.indexOf(normalizePath(a.path)), bi = order.indexOf(normalizePath(b.path));
-      if (ai >= 0 || bi >= 0) return (ai < 0 ? Number.MAX_SAFE_INTEGER : ai) - (bi < 0 ? Number.MAX_SAFE_INTEGER : bi);
-      return a.kind === b.kind ? a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }) : a.kind === "folder" ? -1 : 1;
-    });
-  }, [metadata.order]);
+  const orderItems = useCallback(<T extends Entry>(items: T[], parent: string) => sortWorkspaceItems(items, metadata, parent), [metadata]);
   const tree = useMemo(() => {
     const sort = (items: TreeNode[], parent: string): TreeNode[] => orderItems(items, parent).map((item) => ({ ...item, children: sort(item.children, item.path) }));
     return sort(buildTree(entries, vaultPath), vaultPath);
@@ -295,7 +328,37 @@ function App() {
   const folderParent = parentPath(folderPath);
   const folderParentIsRoot = normalizePath(folderParent) === normalizePath(vaultPath);
   const workspaceDestination = workspaceView === "folder" ? folderPath : (workspaceView === "note" || workspaceView === "file" || workspaceView === "todo" || workspaceView === "whiteboard") && selectedPath ? parentPath(selectedPath) || vaultPath : vaultPath;
-  const workspaceEntries = workspaceView === "folder" ? folderEntries : workspaceView === "pinned" ? entries.filter((entry) => itemMeta(metadata, entry.path).pinned) : workspaceView === "favorites" ? entries.filter((entry) => itemMeta(metadata, entry.path).favorite) : orderItems(entries, vaultPath);
+  const workspaceEntries =
+    workspaceView === "folder"
+      ? folderEntries
+      : workspaceView === "folders"
+        ? orderItems(entries.filter((entry) => entry.kind === "folder"), vaultPath)
+        : workspaceView === "pinned"
+          ? orderItems(entries.filter((entry) => itemMeta(metadata, entry.path).pinned), vaultPath)
+          : workspaceView === "favorites"
+            ? orderItems(entries.filter((entry) => itemMeta(metadata, entry.path).favorite), vaultPath)
+            : orderItems(entries, vaultPath);
+
+  type AppHistoryEntry = { undo: () => Promise<void> | void; redo: () => Promise<void> | void };
+  const appUndoRef = useRef<AppHistoryEntry[]>([]);
+  const appRedoRef = useRef<AppHistoryEntry[]>([]);
+  const undoingAppRef = useRef(false);
+  const skipMetaUndoRef = useRef(0);
+  const sourceHistoryRef = useRef(new UndoHistory<string>(100, 500));
+  const recordAppAction = useCallback((entry: AppHistoryEntry) => {
+    if (undoingAppRef.current) return;
+    appRedoRef.current = [];
+    appUndoRef.current.push(entry);
+    if (appUndoRef.current.length > 80) appUndoRef.current.splice(0, appUndoRef.current.length - 80);
+  }, []);
+  const applyMetaSnapshot = useCallback((targetVault: string, snap: WorkspaceMeta) => {
+    metaCache.current[targetVault] = snap;
+    if (vaultRef.current === targetVault) {
+      metaRef.current = snap;
+      setMetadata(snap);
+    }
+    saveWorkspaceMeta(targetVault, snap);
+  }, []);
 
   useEffect(() => {
     if (!desktopAvailable) return;
@@ -310,15 +373,26 @@ function App() {
     metaCache.current[vaultPath] = next;
     metaRef.current = next;
     setMetadata(next);
+    appUndoRef.current = [];
+    appRedoRef.current = [];
   }, [vaultPath]);
+  useEffect(() => { sourceHistoryRef.current.clear(); }, [selectedPath]);
   useEffect(() => { try { localStorage.setItem("comet:workspace-layout", layout); localStorage.setItem("comet:workspace-icon-size", String(iconSize)); } catch {} }, [layout, iconSize]);
   const commitMeta = useCallback((change: (current: WorkspaceMeta) => WorkspaceMeta) => {
-    const next = change(metaRef.current);
+    const prev = metaRef.current;
+    const targetVault = vaultRef.current;
+    const next = change(prev);
     metaRef.current = next;
-    metaCache.current[vaultRef.current] = next;
+    metaCache.current[targetVault] = next;
     setMetadata(next);
-    if (!saveWorkspaceMeta(vaultRef.current, next)) setNotice("Organization changes will last for this session only.");
-  }, []);
+    if (!saveWorkspaceMeta(targetVault, next)) setNotice("Organization changes will last for this session only.");
+    if (!undoingAppRef.current && skipMetaUndoRef.current === 0 && JSON.stringify(prev) !== JSON.stringify(next)) {
+      recordAppAction({
+        undo: () => applyMetaSnapshot(targetVault, prev),
+        redo: () => applyMetaSnapshot(targetVault, next),
+      });
+    }
+  }, [applyMetaSnapshot, recordAppAction]);
   const resetNavigation = useCallback((point: NavigationPoint) => {
     const next = { items: [point], index: 0 }; historyRef.current = next; setHistory(next);
   }, []);
@@ -423,11 +497,23 @@ function App() {
   }).configure({ allowBase64: true }), []);
 
   const extensions = useMemo(() => [
-    StarterKit.configure({ link: { openOnClick: false } }),
-    TaskList,
-    TaskItem.configure({ nested: true }),
+    StarterKit.configure({
+      paragraph: false,
+      codeBlock: false,
+      bulletList: false,
+      orderedList: false,
+      link: false,
+    }),
+    cometLinkExtension,
+    ...noteBlockExtensions,
     ...richTextExtensions,
-    VideoEmbeds,
+    VideoEmbeds.configure({
+      getScope: () => selectedRef.current || "__note__",
+    }),
+    LinkEmbeds.configure({
+      getScope: () => selectedRef.current || "__note__",
+      onOpenUrl: (href) => openExternalWebUrl(href),
+    }),
     localImage,
     Markdown,
   ], [localImage]);
@@ -440,37 +526,90 @@ function App() {
         "aria-readonly": String(viewMode !== "write"),
         spellcheck: String(settings.spellcheck),
       },
-      handleClick: (_view, _position, event) => {
-        const link = event.target instanceof Element ? event.target.closest("a") : null;
-        if (!link) return false;
-        event.preventDefault();
-        if (modeRef.current !== "read") return false;
-        const href = link.getAttribute("href") || "";
-        const notePath = resolveVaultAsset(vaultRef.current, selectedRef.current, href);
-        if (notePath && isMarkdown(notePath)) {
-          selectNoteRef.current(notePath);
-        } else {
-          try {
-            const url = new URL(href);
-            if (!["https:", "http:", "mailto:"].includes(url.protocol)) return true;
-            if (desktopAvailable) void openUrl(url.href).catch(() => setNotice("Couldn't open that link."));
-            else window.open(url.href, "_blank", "noopener,noreferrer");
-          } catch {
-            setNotice("This link can't be opened from the current note.");
-          }
-        }
-        return true;
-      },
   }), [settings.spellcheck, viewMode]);
+
+  const handleNoteRichClick = useCallback((event: MouseEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    const targetEl = event.target instanceof Element ? event.target : null;
+    if (!targetEl || targetEl.closest(".comet-link-embed, .inline-video")) return;
+    const link = targetEl.closest("a");
+    if (!link) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const selection = window.getSelection?.();
+    if (selection && !selection.isCollapsed) return;
+    const href = link.getAttribute("href") || "";
+    const notePath = resolveVaultAsset(vaultRef.current, selectedRef.current, href);
+    if (notePath && isMarkdown(notePath)) {
+      selectNoteRef.current(notePath);
+      return;
+    }
+    try {
+      const url = new URL(href);
+      if (url.protocol === "mailto:") {
+        if (desktopAvailable) void openUrl(url.href).catch(() => setNotice("Couldn't open that link."));
+        else window.location.href = url.href;
+        return;
+      }
+      if (url.protocol === "https:" || url.protocol === "http:") {
+        openExternalWebUrl(url.href);
+        return;
+      }
+    } catch {
+      setNotice("This link can't be opened from the current note.");
+    }
+  }, []);
+
+  const handleNoteRichContextMenu = useCallback((event: MouseEvent<HTMLDivElement>) => {
+    const targetEl = event.target instanceof Element ? event.target : null;
+    if (!targetEl || targetEl.closest(".comet-link-embed, .inline-video")) return;
+    const anchor = targetEl.closest("a");
+    const ed = editorRef.current;
+    if (!anchor || !ed || ed.isDestroyed) return;
+    let linkTarget: LinkMarkTarget | null = null;
+    try {
+      const domPos = ed.view.posAtDOM(anchor, 0);
+      linkTarget = findLinkMarkRange(ed.state.doc, domPos);
+    } catch {
+      linkTarget = null;
+    }
+    if (!linkTarget) {
+      const coords = ed.view.posAtCoords({ left: event.clientX, top: event.clientY });
+      if (coords) linkTarget = findLinkMarkRange(ed.state.doc, coords.pos);
+    }
+    if (!linkTarget) {
+      const href = anchor.getAttribute("href") ?? "";
+      if (!href) return;
+      ed.state.doc.descendants((node, pos) => {
+        if (linkTarget || !node.isText) return;
+        if (node.marks.some((m) => m.type.name === "link" && String(m.attrs.href) === href) && node.text === anchor.textContent) {
+          linkTarget = findLinkMarkRange(ed.state.doc, pos + 1);
+        }
+      });
+    }
+    if (!linkTarget) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setContextMenu(null);
+    const scale = Number(document.documentElement.style.zoom) || 1;
+    const scope = selectedRef.current || "__note__";
+    setLinkContextMenu({
+      x: Math.max(8, Math.min(event.clientX, window.innerWidth - 240 * scale)) / scale,
+      y: Math.max(8, Math.min(event.clientY, window.innerHeight - 140 * scale)) / scale,
+      target: linkTarget,
+      scope,
+      dismissed: isEmbedDismissed(scope, linkTarget.href),
+    });
+  }, []);
 
   const editor = useEditor({
     extensions,
-    content: initialEditorContent.current,
+    content: cleanNoteMarkdown(initialEditorContent.current),
     contentType: "markdown",
     editorProps,
     onUpdate: ({ editor: currentEditor }) => {
       if (loadingRef.current || !selectedRef.current || modeRef.current !== "write" || !isMarkdown(selectedRef.current)) return;
-      const next = currentEditor.getMarkdown();
+      const next = cleanNoteMarkdown(currentEditor.getMarkdown());
       contentRef.current = next;
       setContent(next);
       queueSaveRef.current(selectedRef.current, next);
@@ -634,7 +773,7 @@ function App() {
 
   const changeMode = useCallback((mode: ViewMode) => {
     if (modeRef.current === "source" && mode !== "source") {
-      editorRef.current?.commands.setContent(contentRef.current, { contentType: "markdown", emitUpdate: false });
+      editorRef.current?.commands.setContent(cleanNoteMarkdown(contentRef.current), { contentType: "markdown", emitUpdate: false });
     }
     modeRef.current = mode;
     setViewMode(mode);
@@ -749,7 +888,7 @@ function App() {
     }
   };
 
-  const showOverview = useCallback(async (view: "all" | "pinned" | "favorites" | "tree" | "brain" | "calendar" | "passwords" | "tools", record = true, tool: ToolId | null = null): Promise<boolean> => {
+  const showOverview = useCallback(async (view: "all" | "folders" | "pinned" | "favorites" | "tree" | "brain" | "calendar" | "passwords" | "tools", record = true, tool: ToolId | null = null): Promise<boolean> => {
     const request = ++loadRequest.current;
     try {
       await flushAll();
@@ -915,50 +1054,84 @@ function App() {
   };
 
   const openRename = (node: TreeNode) => {
-    setEntryName(node.name);
+    const initial =
+      node.kind === "folder"
+        ? node.name
+        : isMarkdown(node.name)
+          ? noteTitle(node.name)
+          : displayEntryName(node.name);
+    setEntryName(initial);
     setDialogError("");
     setDialogBusy(false);
     setContextMenu(null);
     setRenameNode(node);
   };
 
+  const remapOpenPaths = useCallback(async (from: string, to: string, metaOverride?: WorkspaceMeta) => {
+    let selectedToReload = "";
+    if (selectedRef.current && isPathInside(selectedRef.current, from)) {
+      const nextPath = remapPath(selectedRef.current, from, to);
+      selectedRef.current = nextPath;
+      setSelectedPath(nextPath);
+      if (workspaceView === "note" || workspaceView === "file" || workspaceView === "todo" || workspaceView === "whiteboard") {
+        selectedToReload = nextPath;
+        loadingRef.current = true;
+        setLoading(true);
+      }
+      if (isSamplePath(vaultRef.current)) saveSampleSelection(nextPath);
+      else persistSession(vaultRef.current, nextPath);
+    }
+    setFolderPath((previous) => previous ? remapPath(previous, from, to) : previous);
+    setSelection((previous) => new Set([...previous].map((path) => remapPath(path, from, to))));
+    selectionAnchor.current = remapPath(selectionAnchor.current, from, to);
+    remapNavigation(from, to);
+    skipMetaUndoRef.current += 1;
+    try {
+      commitMeta((current) => metaOverride ?? renameMeta(current, from, to));
+    } finally {
+      skipMetaUndoRef.current -= 1;
+    }
+    setExpanded((previous) => new Set([...previous].map((path) => remapPath(path, from, to))));
+    await refresh(vaultRef.current);
+    if (selectedToReload) await selectNote(selectedToReload);
+  }, [commitMeta, persistSession, refresh, remapNavigation, selectNote, workspaceView]);
+
   const submitRename = async (event: FormEvent) => {
     event.preventDefault();
     if (!renameNode || dialogBusy) return;
     const kind = renameNode.kind === "folder" ? "folder" : "file";
-    const { name, error } = validEntryName(entryName, kind);
+    const candidateName = kind === "file" ? preserveRenamedExtension(renameNode.name, entryName) : entryName;
+    const { name, error } = validEntryName(candidateName, kind);
     if (error) { setDialogError(error); return; }
-    const destination = joinPath(parentPath(renameNode.path), name);
-    if (destination === renameNode.path) { setRenameNode(null); return; }
+    const fromPath = renameNode.path;
+    const destination = joinPath(parentPath(fromPath), name);
+    if (destination === fromPath) { setRenameNode(null); return; }
+    const vault = vaultRef.current;
+    const prevMeta = metaRef.current;
     setDialogBusy(true);
     setDialogError("");
     try {
       await flushAll();
-      await renameEntry(vaultRef.current, renameNode.path, destination);
-      let selectedToReload = "";
-      if (selectedRef.current && isPathInside(selectedRef.current, renameNode.path)) {
-        const nextPath = remapPath(selectedRef.current, renameNode.path, destination);
-        selectedRef.current = nextPath;
-        setSelectedPath(nextPath);
-        if (workspaceView === "note" || workspaceView === "file" || workspaceView === "todo" || workspaceView === "whiteboard") {
-          selectedToReload = nextPath;
-          loadingRef.current = true;
-          setLoading(true);
-        }
-        if (isSamplePath(vaultRef.current)) saveSampleSelection(nextPath);
-        else persistSession(vaultRef.current, nextPath);
-      }
-      setFolderPath((previous) => previous ? remapPath(previous, renameNode.path, destination) : previous);
-      setSelection((previous) => new Set([...previous].map((path) => remapPath(path, renameNode.path, destination))));
-      selectionAnchor.current = remapPath(selectionAnchor.current, renameNode.path, destination);
-      remapNavigation(renameNode.path, destination);
-      commitMeta((current) => renameMeta(current, renameNode.path, destination));
-      setExpanded((previous) => new Set([...previous].map((path) => remapPath(path, renameNode.path, destination))));
+      await renameEntry(vault, fromPath, destination);
+      await remapOpenPaths(fromPath, destination);
+      const afterMeta = metaRef.current;
+      recordAppAction({
+        undo: async () => {
+          if (vaultRef.current !== vault) return;
+          await flushAll();
+          await renameEntry(vault, destination, fromPath);
+          await remapOpenPaths(destination, fromPath, prevMeta);
+        },
+        redo: async () => {
+          if (vaultRef.current !== vault) return;
+          await flushAll();
+          await renameEntry(vault, fromPath, destination);
+          await remapOpenPaths(fromPath, destination, afterMeta);
+        },
+      });
       setSearchQuery("");
-      await refresh(vaultRef.current);
       setRenameNode(null);
       setNotice(`Renamed to “${name}”.`);
-      if (selectedToReload) await selectNote(selectedToReload);
     } catch (error) {
       setDialogError(errorMessage(error));
     } finally {
@@ -1212,11 +1385,27 @@ function App() {
     const timer = window.setTimeout(() => setNotice(""), 7000);
     return () => window.clearTimeout(timer);
   }, [notice]);
+
   useEffect(() => {
-    if (!updateNotice) return;
-    const timer = window.setTimeout(() => setUpdateNotice(false), 8000);
-    return () => window.clearTimeout(timer);
-  }, [updateNotice]);
+    if (!desktopAvailable) return;
+    let active = true;
+    let unlistenStep: (() => void) | null = null;
+    void listen<string>("comet-update-step", (event) => {
+      if (!active) return;
+      if (event.payload === "downloading" || event.payload === "opening") {
+        setUpdateInstallStep(event.payload);
+      }
+    })
+      .then((stop) => {
+        if (!active) stop();
+        else unlistenStep = stop;
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+      unlistenStep?.();
+    };
+  }, []);
 
   useEffect(() => {
     if (!desktopAvailable) return;
@@ -1272,7 +1461,7 @@ function App() {
     return () => { active = false; unlisten.forEach((stop) => stop()); };
   }, [flushAll]);
 
-  const modalOpen = Boolean(quitPending || bulkDelete || workspaceCustomize || createDialog || pathCreateDialog || renameNode || deleteNode || linkOpen || captureOpen || desktopInfoOpen || searchOpen || tagDialogOpen || moveDialog);
+  const modalOpen = Boolean(quitPending || bulkDelete || workspaceCustomize || createDialog || pathCreateDialog || renameNode || deleteNode || linkOpen || hyperlinkDialog || captureOpen || desktopInfoOpen || searchOpen || tagDialogOpen || moveDialog);
   useEffect(() => {
     if (!modalOpen) return;
     const dialog = document.querySelector<HTMLElement>('[role="dialog"][aria-modal="true"]');
@@ -1352,7 +1541,24 @@ function App() {
       vaultDropRef.current = value; setVaultDrop(value);
     };
     const cleanup = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", finish); window.removeEventListener("pointercancel", cancel); vaultDropRef.current = null; setVaultDrop(null); };
-    const finish = (next: PointerEvent) => { if (next.pointerId !== pointer) return; const target = vaultDropRef.current; cleanup(); if (moving && target) setVaults((previous) => { const reordered = reorderVaults(previous, source, target.path, target.after); saveVaultList(reordered); return reordered; }); };
+    const finish = (next: PointerEvent) => {
+      if (next.pointerId !== pointer) return;
+      const target = vaultDropRef.current;
+      cleanup();
+      if (moving && target) {
+        setVaults((previous) => {
+          const reordered = reorderVaults(previous, source, target.path, target.after);
+          if (JSON.stringify(previous) !== JSON.stringify(reordered)) {
+            recordAppAction({
+              undo: () => { setVaults(previous); saveVaultList(previous); },
+              redo: () => { setVaults(reordered); saveVaultList(reordered); },
+            });
+          }
+          saveVaultList(reordered);
+          return reordered;
+        });
+      }
+    };
     const cancel = (next: PointerEvent) => { if (next.pointerId === pointer) cleanup(); };
     window.addEventListener("pointermove", move); window.addEventListener("pointerup", finish); window.addEventListener("pointercancel", cancel);
   };
@@ -1401,10 +1607,12 @@ function App() {
     return updateItem(current, path, { tags: tags.includes(id) ? tags.filter((tag) => tag !== id) : [...tags, id] });
   });
 
-  const moveItem = useCallback(async (source: string, folder: string, reportError?: (message: string) => void) => {
+  const moveItem = useCallback(async (source: string, folder: string, reportError?: (message: string) => void, recordUndo = true) => {
     if (!isPathInside(source, vaultRef.current) || !isPathInside(folder, vaultRef.current)) return null;
     const request = ++loadRequest.current;
     const vault = vaultRef.current;
+    const originalParent = parentPath(source) || vault;
+    const prevMeta = metaRef.current;
     try {
       await flushAll();
       if (request !== loadRequest.current || vaultRef.current !== vault) return null;
@@ -1415,7 +1623,29 @@ function App() {
         saveWorkspaceMeta(vault, updated);
         return null;
       }
-      commitMeta((current) => renameMeta(current, source, next));
+      skipMetaUndoRef.current += 1;
+      try {
+        commitMeta((current) => renameMeta(current, source, next));
+      } finally {
+        skipMetaUndoRef.current -= 1;
+      }
+      const afterMeta = metaRef.current;
+      if (recordUndo && normalizePath(next) !== normalizePath(source)) {
+        recordAppAction({
+          undo: async () => {
+            if (vaultRef.current !== vault) return;
+            await flushAll();
+            const restored = await moveEntry(vault, next, originalParent);
+            await remapOpenPaths(next, restored, prevMeta);
+          },
+          redo: async () => {
+            if (vaultRef.current !== vault) return;
+            await flushAll();
+            const movedAgain = await moveEntry(vault, source, folder);
+            await remapOpenPaths(source, movedAgain, afterMeta);
+          },
+        });
+      }
       setExpanded((previous) => new Set([...previous].map((path) => remapPath(path, source, next))));
       setFolderPath((previous) => remapPath(previous, source, next));
       setSelection((previous) => new Set([...previous].map((path) => remapPath(path, source, next))));
@@ -1435,7 +1665,7 @@ function App() {
       setNotice(`Moved to ${folder === vaultRef.current ? "workspace" : fileName(folder)}. Links in other notes are unchanged.`);
       return next;
     } catch (error) { const message = errorMessage(error); if (reportError) reportError(message); else setNotice(`Couldn't move: ${message}`); return null; }
-  }, [commitMeta, flushAll, persistSession, refresh, remapNavigation]);
+  }, [commitMeta, flushAll, persistSession, recordAppAction, refresh, remapNavigation, remapOpenPaths]);
 
   const importPaths = useCallback(async (paths: string[], folder: string) => {
     const vault = vaultRef.current;
@@ -1477,6 +1707,24 @@ function App() {
         if (vaultRef.current !== vault) { errors.push("The workspace changed; remaining files were left in place."); break; }
         updateUpload(id, { current: file.name, phase: "reading", loaded: undefined, bytes: undefined });
         try {
+          if (file.size <= 32_768 && /\.(?:download|crdownload|part|webloc|desktop|url)$/i.test(file.name)) {
+            const probeBuf = await readFile(file, false).catch(() => null);
+            if (probeBuf instanceof ArrayBuffer) {
+              const probeText = new TextDecoder("utf-8", { fatal: false }).decode(probeBuf);
+              const shortcutUrl = parseDroppedShortcutFile(file.name, probeText);
+              if (shortcutUrl) {
+                const yt = videoLink(shortcutUrl);
+                const host = new URL(shortcutUrl).hostname.replace(/[^a-zA-Z0-9.-]/g, "-").slice(0, 55) || "Web link";
+                const baseLabel = yt?.kind === "youtube" ? `YouTube - ${yt.id}` : host;
+                const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+                const suffix = globalThis.crypto?.randomUUID?.().slice(0, 6) ?? Math.random().toString(36).slice(2, 8);
+                await createNote(vault, joinPath(folder, `${baseLabel} - ${stamp}-${suffix}.url`), serializeShortcut(shortcutUrl));
+                imported++;
+                updateUpload(id, { completed: imported });
+                continue;
+              }
+            }
+          }
           const checked = validEntryName(file.name, "file");
           if (checked.error) throw new Error(checked.error);
           const path = joinPath(folder, checked.name);
@@ -1517,10 +1765,16 @@ function App() {
       const body = serializeShortcut(url);
       await flushAll();
       if (vaultRef.current !== vault) return;
+      const yt = videoLink(url);
       const host = new URL(url).hostname.replace(/[^a-zA-Z0-9.-]/g, "-").slice(0, 55) || "Web link";
+      const baseLabel = yt?.kind === "youtube" ? `YouTube - ${yt.id}` : host;
       const stamp = new Date().toISOString().replace(/[:.]/g, "-");
       const suffix = globalThis.crypto?.randomUUID?.().slice(0, 8) ?? Math.random().toString(36).slice(2, 10);
-      await createNote(vault, joinPath(folder, `${host} - ${stamp}-${suffix}.url`), body);
+      const cleanCandidate = joinPath(folder, `${baseLabel}.url`);
+      const targetPath = yt?.kind === "youtube" && !entries.some((e) => normalizePath(e.path) === normalizePath(cleanCandidate))
+        ? cleanCandidate
+        : joinPath(folder, `${baseLabel} - ${stamp}-${suffix}.url`);
+      await createNote(vault, targetPath, body);
       await refresh(vault);
       if (vaultRef.current === vault) setExpanded((previous) => new Set([...previous, folder]));
       setNotice("Web link added as a shortcut. The video itself was not downloaded.");
@@ -1539,13 +1793,40 @@ function App() {
   const moveItems = async (paths: string[], folder: string): Promise<string[] | null> => {
     const roots = selectionRoots(paths), vault = vaultRef.current;
     if (roots.some((path) => isPathInside(folder, path))) { setNotice("A folder cannot be moved into itself or its descendants."); return null; }
+    const prevMeta = metaRef.current;
+    const movedPairs: Array<{ from: string; to: string; origParent: string }> = [];
     let moved = 0; const destinations: string[] = [];
     for (const path of roots) {
       if (normalizePath(parentPath(path)) === normalizePath(folder)) { destinations.push(path); continue; }
+      const origParent = parentPath(path) || vault;
       let reason = "The workspace changed or the operation was interrupted.";
-      const destination = await moveItem(path, folder, (message) => { reason = message; });
+      const destination = await moveItem(path, folder, (message) => { reason = message; }, false);
       if (!destination || vaultRef.current !== vault) { setNotice(`${moved} item${moved === 1 ? "" : "s"} moved. Couldn't move ${fileName(path)}: ${reason} Remaining items were left in place.`); return null; }
+      movedPairs.push({ from: path, to: destination, origParent });
       destinations.push(destination); moved++;
+    }
+    if (movedPairs.length > 0) {
+      const afterMeta = metaRef.current;
+      recordAppAction({
+        undo: async () => {
+          if (vaultRef.current !== vault) return;
+          await flushAll();
+          for (const pair of [...movedPairs].reverse()) {
+            const restored = await moveEntry(vault, pair.to, pair.origParent);
+            await remapOpenPaths(pair.to, restored);
+          }
+          applyMetaSnapshot(vault, prevMeta);
+        },
+        redo: async () => {
+          if (vaultRef.current !== vault) return;
+          await flushAll();
+          for (const pair of movedPairs) {
+            const movedAgain = await moveEntry(vault, pair.from, folder);
+            await remapOpenPaths(pair.from, movedAgain);
+          }
+          applyMetaSnapshot(vault, afterMeta);
+        },
+      });
     }
     if (roots.length > 1 && moved) setNotice(`Moved ${moved} items to ${folder === vault ? "workspace" : fileName(folder)}.`);
     return destinations;
@@ -1568,8 +1849,10 @@ function App() {
     event.preventDefault(); event.stopPropagation();
     showDropIndicator(null);
     const { source, paths } = draggedEntries(event); dragSourceRef.current = "";
-    if (source) { void moveItems(paths, folder); }
-    else if (event.dataTransfer.files.length) void importBrowserFiles([...event.dataTransfer.files], folder);
+    if (source) { void moveItems(paths, folder); return; }
+    const browserUrl = droppedBrowserLink(event.dataTransfer);
+    if (browserUrl) { void importLink(browserUrl, folder); return; }
+    if (event.dataTransfer.files.length) void importBrowserFiles([...event.dataTransfer.files], folder);
     else { const url = firstDroppedUrl(event.dataTransfer.getData("text/uri-list"), event.dataTransfer.getData("text/plain")); if (url) void importLink(url, folder); }
   };
   const treePlacement = (source: string, item: Entry, bounds: DOMRect, y: number, surface: "sidebar" | "map" = "sidebar"): DropIndicator | null => {
@@ -1615,6 +1898,8 @@ function App() {
     showDropIndicator(null); dragSourceRef.current = "";
     if (!source) {
       const folder = item.kind === "folder" ? item.path : parentPath(item.path);
+      const browserUrl = droppedBrowserLink(event.dataTransfer);
+      if (browserUrl) { void importLink(browserUrl, folder); return; }
       if (event.dataTransfer.files.length) void importBrowserFiles([...event.dataTransfer.files], folder);
       else { const url = firstDroppedUrl(event.dataTransfer.getData("text/uri-list"), event.dataTransfer.getData("text/plain")); if (url) void importLink(url, folder); }
       return;
@@ -1622,7 +1907,45 @@ function App() {
     if (!indicator && source !== item.path) setNotice("Drop on a folder to move an item, or on a sibling to reorder it.");
     applyTreeDrop(source, item, indicator, paths);
   };
-  const startPointerDrag = (event: React.PointerEvent, source: TreeNode) => {
+  const applyWorkspaceDrop = (source: string, item: Entry, indicator: WorkspaceDropIndicator | null, paths = [source]) => {
+    if (!indicator || !source || source === item.path || paths.includes(item.path)) return;
+    if (indicator.position === "into") { void moveItems(paths, item.path); return; }
+    if (workspaceView === "folder") {
+      applyTreeDrop(source, item, { ...indicator, surface: "workspace", source }, paths);
+      return;
+    }
+    const orderedAll = orderItems(entries, vaultPath).map((entry) => entry.path);
+    commitMeta((current) => reorderChildrenGroup(current, vaultPath, orderedAll, paths, item.path, indicator.position === "after"));
+  };
+  const dragOverWorkspaceEntry = (event: DragEvent, item: Entry, currentLayout: WorkspaceLayout) => {
+    event.preventDefault(); event.stopPropagation();
+    const sources = dragSourceRef.current ? dragPaths(dragSourceRef.current) : [];
+    if (!sources.length) {
+      const folder = item.kind === "folder" ? item.path : workspaceDestination;
+      event.dataTransfer.dropEffect = "copy";
+      showDropIndicator({ path: folder, position: "into", surface: "workspace" });
+      return;
+    }
+    const placement = workspacePlacement(sources, item, event.currentTarget.getBoundingClientRect(), event.clientX, event.clientY, currentLayout);
+    event.dataTransfer.dropEffect = placement ? "move" : "none";
+    showDropIndicator(placement ? { ...placement, surface: "workspace", source: dragSourceRef.current } : null);
+  };
+  const dropOnWorkspaceEntry = (event: DragEvent, item: Entry, currentLayout: WorkspaceLayout) => {
+    event.preventDefault(); event.stopPropagation();
+    const { source, paths } = draggedEntries(event);
+    const placement = source ? workspacePlacement(paths, item, event.currentTarget.getBoundingClientRect(), event.clientX, event.clientY, currentLayout) : null;
+    showDropIndicator(null); dragSourceRef.current = "";
+    if (!source) {
+      const folder = item.kind === "folder" ? item.path : workspaceDestination;
+      const browserUrl = droppedBrowserLink(event.dataTransfer);
+      if (browserUrl) { void importLink(browserUrl, folder); return; }
+      if (event.dataTransfer.files.length) void importBrowserFiles([...event.dataTransfer.files], folder);
+      else { const url = firstDroppedUrl(event.dataTransfer.getData("text/uri-list"), event.dataTransfer.getData("text/plain")); if (url) void importLink(url, folder); }
+      return;
+    }
+    applyWorkspaceDrop(source, item, placement, paths);
+  };
+  const startPointerDrag = (event: React.PointerEvent, source: Entry) => {
     if (event.button !== 0) return;
     event.preventDefault(); event.stopPropagation();
     const startX = event.clientX, startY = event.clientY, pointer = event.pointerId, paths = dragPaths(source.path);
@@ -1634,6 +1957,14 @@ function App() {
       if (!moving && Math.hypot(next.clientX - startX, next.clientY - startY) < 5) return;
       moving = true; next.preventDefault();
       const hit = document.elementFromPoint(next.clientX, next.clientY);
+      const wsRow = hit?.closest<HTMLElement>("[data-workspace-path]");
+      const wsItem = wsRow && entries.find((entry) => entry.path === wsRow.dataset.workspacePath);
+      if (wsRow && wsItem) {
+        const wsLayout = (wsRow.closest<HTMLElement>("[data-workspace-layout]")?.dataset.workspaceLayout as WorkspaceLayout | undefined) ?? layout;
+        const placement = workspacePlacement(paths, wsItem, wsRow.getBoundingClientRect(), next.clientX, next.clientY, wsLayout);
+        showDropIndicator(placement ? { ...placement, surface: "workspace", source: source.path } : null);
+        return;
+      }
       const row = hit?.closest<HTMLElement>("[data-tree-path]");
       const item = row && entries.find((entry) => entry.path === row.dataset.treePath);
       const mapRoot = hit?.closest<HTMLElement>("[data-map-root]");
@@ -1645,7 +1976,8 @@ function App() {
       const indicator = dropIndicatorRef.current;
       const item = indicator && entries.find((entry) => entry.path === indicator.path);
       showDropIndicator(null);
-      if (moving && indicator?.path === vaultRef.current && indicator.position === "into") { void moveItems(paths, vaultRef.current); }
+      if (moving && indicator?.surface === "workspace" && item) { applyWorkspaceDrop(source.path, item, indicator, paths); }
+      else if (moving && indicator?.path === vaultRef.current && indicator.position === "into") { void moveItems(paths, vaultRef.current); }
       else if (moving && item && indicator) applyTreeDrop(source.path, item, indicator, paths);
     };
     const cancel = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", finish); window.removeEventListener("pointercancel", cancel); showDropIndicator(null); };
@@ -1695,21 +2027,53 @@ function App() {
     catch (error) { setNotice(`Couldn't open file: ${errorMessage(error)}`); }
   };
 
+  const runSourceUndoRedo = (direction: "undo" | "redo"): boolean => {
+    const next = direction === "undo"
+      ? sourceHistoryRef.current.undo(contentRef.current)
+      : sourceHistoryRef.current.redo(contentRef.current);
+    if (next === undefined) return false;
+    contentRef.current = next;
+    setContent(next);
+    if (selectedRef.current) queueSave(selectedRef.current, next);
+    return true;
+  };
+  const runAppUndoRedo = async (direction: "undo" | "redo"): Promise<boolean> => {
+    if (undoingAppRef.current) return false;
+    const stack = direction === "undo" ? appUndoRef.current : appRedoRef.current;
+    const inverse = direction === "undo" ? appRedoRef.current : appUndoRef.current;
+    const step = stack.pop();
+    if (!step) return false;
+    undoingAppRef.current = true;
+    try {
+      await (direction === "undo" ? step.undo() : step.redo());
+      inverse.push(step);
+      if (inverse.length > 80) inverse.splice(0, inverse.length - 80);
+      return true;
+    } catch (error) {
+      stack.push(step);
+      setNotice(`Couldn't ${direction}: ${errorMessage(error)}`);
+      return false;
+    } finally {
+      undoingAppRef.current = false;
+    }
+  };
+
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         if (!modalOpen && selectionRef.current.size) { const empty = new Set<string>(); selectionRef.current = empty; selectionAnchor.current = ""; selectionAnchorOpened.current = false; setSelection(empty); }
         setContextMenu(null);
+        setLinkContextMenu(null);
         if (!dialogBusy) {
           setCreateDialog(null); setPathCreateDialog(null); setRenameNode(null); setDeleteNode(null); setBulkDelete(null);
-          setLinkOpen(false); setCaptureOpen(false); setDesktopInfoOpen(false); setSearchOpen(false);
+          setLinkOpen(false); setHyperlinkDialog(null); setCaptureOpen(false); setDesktopInfoOpen(false); setSearchOpen(false);
           setTagDialogOpen(false); setMoveDialog(null); setVaultMenuOpen(false); setWorkspaceCustomize(false);
         }
         return;
       }
       const target = event.target instanceof Element ? event.target : null;
       if (modalOpen || document.querySelector('[aria-modal="true"]') || restoring || event.repeat || target?.closest(".shortcut-edit.recording")) return;
-      const overviewSelection = selectionRef.current.size > 0 && ["all", "folder", "pinned", "favorites", "tree", "brain"].includes(workspaceView);
+      const overviewSelection = selectionRef.current.size > 0 && ["all", "folders", "folder", "pinned", "favorites", "tree", "brain"].includes(workspaceView);
       const armed = deleteShortcutArmed.current && (target !== document.body || currentLocation === selectionAnchor.current || overviewSelection);
       const paths = deleteShortcutPaths(event, selectionRef.current, selectionAnchor.current, selectionAnchorOpened.current, armed);
       const items = paths.map((path) => entries.find((entry) => entry.path === path)).filter((entry): entry is Entry => Boolean(entry));
@@ -1720,6 +2084,31 @@ function App() {
       }
       const pressed = keyboardShortcut(event, modifier === "⌘");
       const action = (Object.entries(settings.shortcuts) as [keyof Settings["shortcuts"], string][]).find(([, value]) => value === pressed)?.[0];
+      const undoRedo = action === "undo" || action === "redo" ? action : undoRedoKey(event);
+      if (undoRedo) {
+        if (target?.closest(".ProseMirror")) return;
+        if (target?.closest(".source-editor")) {
+          if (runSourceUndoRedo(undoRedo)) event.preventDefault();
+          return;
+        }
+        if (isStandaloneTextInput(target)) return;
+        if (workspaceView === "note" && viewMode === "source" && runSourceUndoRedo(undoRedo)) {
+          event.preventDefault();
+          return;
+        }
+        if (workspaceView === "note" && viewMode === "write" && editor && (undoRedo === "undo" ? editor.can().undo() : editor.can().redo())) {
+          event.preventDefault();
+          if (undoRedo === "undo") editor.chain().focus().undo().run();
+          else editor.chain().focus().redo().run();
+          return;
+        }
+        const stack = undoRedo === "undo" ? appUndoRef.current : appRedoRef.current;
+        if (stack.length > 0) {
+          event.preventDefault();
+          void runAppUndoRedo(undoRedo);
+        }
+        return;
+      }
       if (!action) return;
       event.preventDefault();
       if (action === "search") setSearchOpen(true);
@@ -1739,18 +2128,93 @@ function App() {
     return () => { window.removeEventListener("keydown", onKey); window.removeEventListener("pagehide", onPageHide); };
   });
 
-  const runUpdateCheck = async (notify = false) => {
-    setUpdateStatus("Checking GitHub…");
-    try { const result = await checkUpdates(APP_VERSION, AbortSignal.timeout(12_000)); setAvailableUpdate(result); setUpdateStatus(result ? "" : "You're up to date."); if (result && notify) setUpdateNotice(true); }
-    catch { setUpdateStatus("Couldn't check for updates. Check your connection and try again."); }
+  const updatePreferencesRef = useRef(updatePreferences);
+  updatePreferencesRef.current = updatePreferences;
+
+  const changeUpdatePreferences = (next: UpdatePreferences) => {
+    setUpdatePreferences(next);
+    saveUpdatePreferences(next);
   };
+
+  const runUpdateCheck = useCallback(async (notify = false, prefsOverride?: UpdatePreferences) => {
+    const prefs = prefsOverride ?? updatePreferencesRef.current;
+    setUpdateChecking(true);
+    if (!notify) setUpdateStatus("Checking GitHub releases…");
+    try {
+      const controller = new AbortController();
+      const timer = window.setTimeout(() => controller.abort(), 12_000);
+      let result: UpdateInfo | null = null;
+      try {
+        result = await checkUpdates(APP_VERSION, {
+          includePrereleases: prefs.includePrereleases,
+          signal: controller.signal,
+        });
+      } finally {
+        window.clearTimeout(timer);
+      }
+      setAvailableUpdate(result);
+      if (result) {
+        setUpdateStatus(`Comet ${result.version} is out. This is ${APP_VERSION}.`);
+        if (notify) setUpdateNotice(true);
+      } else if (!notify) {
+        setUpdateStatus(`No newer release was found. This is Comet ${APP_VERSION}.`);
+      }
+    } catch {
+      if (!notify) {
+        setUpdateStatus("Couldn't check for updates. Check your connection and try again.");
+      }
+    } finally {
+      setUpdateChecking(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!updatePreferencesRef.current.checkOnLaunch) return;
+    const timer = window.setTimeout(() => {
+      void runUpdateCheck(true);
+    }, 1800);
+    return () => window.clearTimeout(timer);
+  }, [runUpdateCheck]);
+
   const installUpdate = async () => {
-    if (!availableUpdate?.installer || !desktopAvailable) return;
+    if (!availableUpdate || !desktopAvailable) return;
+    const asset =
+      availableUpdate.platformAsset ??
+      (availableUpdate.installer
+        ? { ...availableUpdate.installer, platform: "windows" as const }
+        : null);
+    if (!asset) {
+      openUpdatePage(availableUpdate.url);
+      return;
+    }
+    setUpdateInstallStep("downloading");
     setUpdateStatus("Saving your work…");
-    try { await flushAll(); setUpdateStatus("Downloading and verifying the Windows installer…"); await invoke("install_update", { version: availableUpdate.version, digest: availableUpdate.installer.digest }); setUpdateStatus("The installer has opened. Follow its instructions to finish updating."); }
-    catch (reason) { setUpdateStatus(`Couldn't start the update: ${errorMessage(reason)}. You can open the release page instead.`); }
+    try {
+      await flushAll();
+      setUpdateStatus(`Downloading and verifying ${asset.name}…`);
+      await invoke("install_update", {
+        version: availableUpdate.version,
+        digest: asset.digest,
+        assetName: asset.name,
+        tag: availableUpdate.tag,
+      });
+      setUpdateNotice(false);
+      setUpdateStatus(
+        "The installer has opened. Follow its prompts to finish updating Comet.",
+      );
+    } catch (reason) {
+      setUpdateStatus(
+        `Couldn't start the update: ${errorMessage(reason)}. Opening the release page lets you download manually.`,
+      );
+    } finally {
+      setUpdateInstallStep("idle");
+    }
   };
-  const openUpdatePage = () => { if (!availableUpdate) return; if (desktopAvailable) void openUrl(availableUpdate.page); else window.open(availableUpdate.page, "_blank", "noopener,noreferrer"); };
+  const openUpdatePage = (targetUrl?: string) => {
+    const href = targetUrl || availableUpdate?.url || availableUpdate?.page || RELEASES_URL;
+    if (desktopAvailable) void openUrl(href).catch(() => setNotice("Couldn't open the releases page."));
+    else window.open(href, "_blank", "noopener,noreferrer");
+  };
 
   const updateTodo = (board: TodoDocument) => {
     if (workspaceView !== "todo" || selectedRef.current !== selectedPath || fileKind(selectedPath) !== "todo") return false;
@@ -1771,7 +2235,7 @@ function App() {
   const saveLabel = saveState === "error" ? "Save failed" : saveState === "saving" ? "Saving…" : saveState === "unsaved" ? "Unsaved changes" : "Saved";
 
   return (
-    <div className={`comet-root mountain-visible${focusMode ? " focus-mode" : ""}${selection.size ? " has-selection" : ""}`} style={{ "--editor-font-size": `${settings.editorFontSize}px` } as CSSProperties} onPointerDownCapture={(event) => { if (!(event.target as Element).closest(".tree-item, .workspace-entry-open, .tree-map-node[data-tree-path], .brain-node[data-graph-path]")) deleteShortcutArmed.current = false; }} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); showDropIndicator(null); dragSourceRef.current = ""; }} onDragEnd={() => { showDropIndicator(null); dragSourceRef.current = ""; }} onClick={(event) => { if (contextMenu) setContextMenu(null); if (vaultMenuOpen && !(event.target as Element).closest(".workspace-switcher")) setVaultMenuOpen(false); }}>
+    <div className={`comet-root mountain-visible${focusMode ? " focus-mode" : ""}${selection.size ? " has-selection" : ""}`} style={{ "--editor-font-size": `${settings.editorFontSize}px` } as CSSProperties} onPointerDownCapture={(event) => { if (!(event.target as Element).closest(".tree-item, .workspace-entry-open, .tree-map-node[data-tree-path], .brain-node[data-graph-path]")) deleteShortcutArmed.current = false; }} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); showDropIndicator(null); dragSourceRef.current = ""; }} onDragEnd={() => { showDropIndicator(null); dragSourceRef.current = ""; }} onClick={(event) => { if (contextMenu) setContextMenu(null); if (linkContextMenu) setLinkContextMenu(null); if (vaultMenuOpen && !(event.target as Element).closest(".workspace-switcher")) setVaultMenuOpen(false); }}>
       <div className="app-shell">
         <button className={`sidebar-scrim${explorerOpen ? " is-open" : ""}`} type="button" aria-label="Close sidebar" aria-hidden={!explorerOpen} tabIndex={explorerOpen ? 0 : -1} onClick={() => setExplorerOpen(false)} />
         <aside className={`sidebar${explorerOpen ? "" : " is-closed"}`} aria-label="Workspace navigation" aria-hidden={!explorerOpen} inert={!explorerOpen} style={{ "--sidebar-width": `${sidebarWidth}px` } as CSSProperties}>
@@ -1814,7 +2278,15 @@ function App() {
             <button className="nav-item" type="button" onClick={() => openTags()}><Tag size={17} /><span>Manage tags</span><ChevronRight size={14} className="settings-nav-arrow" /></button>
           </nav>
           <div className="sidebar-section-heading">
-            <span>YOUR FILES</span>
+            <button
+              type="button"
+              className={`sidebar-section-link${workspaceView === "folders" ? " active" : ""}`}
+              aria-current={workspaceView === "folders" ? "page" : undefined}
+              title="Show all folders"
+              onClick={() => void showOverview("folders")}
+            >
+              <span>YOUR FILES</span>
+            </button>
             <div className="section-actions"><button type="button" className="icon-button section-add" onClick={() => openCreate("folder", vaultPath)} aria-label="New folder" title="New folder"><FolderPlus size={16} /></button><button type="button" className="icon-button section-add" onClick={(event) => openNewMenu(event, vaultPath)} aria-label="Add file or upload" title="New file, folder, or upload"><Plus size={18} /></button></div>
           </div>
           <div className={`tree-scroll${dropIndicator?.surface === "sidebar" && dropGroup === vaultPath ? " drop-target" : ""}`} data-drop-folder={vaultPath} onClick={(event) => { if (event.target === event.currentTarget || (event.target as Element).classList.contains("tree-list") || (event.target as Element).classList.contains("tree-message")) clearSelection(); }} onContextMenu={(event) => { if (event.target === event.currentTarget || (event.target as Element).classList.contains("tree-list")) openNewMenu(event, vaultPath); }} onDragOver={(event) => { event.preventDefault(); showDropIndicator({ path: vaultPath, position: "into", surface: "sidebar" }); }} onDrop={(event) => dropToFolder(event, vaultPath)}>
@@ -1822,7 +2294,7 @@ function App() {
             <div className="tree-list">{tree.map((node) => <TreeNodeView key={node.path} node={node} depth={0} selectedPath={workspaceView === "note" || workspaceView === "file" || workspaceView === "todo" || workspaceView === "whiteboard" ? selectedPath : workspaceView === "folder" ? folderPath : ""} expanded={expanded} metadata={metadata} onToggle={toggleFolder} onActivate={(event, item) => activateSelection(event, item, visibleTreePaths)} selectedPaths={selection} onContext={handleTreeContext} onDragStart={dragStart} onDragOver={dragOverTree} onDrop={dropOnTree} onPointerDrag={startPointerDrag} dropIndicator={dropIndicator} dropGroup={dropIndicator?.surface === "sidebar" ? dropGroup : ""} />)}</div>
           </div>
           <div className="sidebar-bottom">
-            <button className={workspaceView === "settings" ? "nav-item settings-nav active" : "nav-item settings-nav"} type="button" aria-current={workspaceView === "settings" ? "page" : undefined} onClick={() => { setSettingsSection("general"); void showSettings(); }}><Settings2 size={17} /><span>Settings</span><ChevronRight size={14} className="settings-nav-arrow" /></button>
+            <button className={workspaceView === "settings" ? "nav-item settings-nav active" : "nav-item settings-nav"} type="button" aria-current={workspaceView === "settings" ? "page" : undefined} onClick={() => { setSettingsSection(availableUpdate ? "updates" : "general"); void showSettings(); }}><Settings2 size={17} /><span>Settings</span>{availableUpdate && <span className="update-dot" aria-label="Update available" />}<ChevronRight size={14} className="settings-nav-arrow" /></button>
             <div className="sidebar-footer"><span>{isSample ? (sampleVault.isPersisted() ? "Sample · saved here" : "Sample · temporary") : "Local workspace"}</span><span>v{APP_VERSION}</span></div>
           </div>
         </aside>
@@ -1862,8 +2334,8 @@ function App() {
             </div>
           </header>
 
-          <div ref={workspaceScrollRef} className={`workspace-scroll without-cover${dropIndicator?.surface === "workspace" && dropIndicator.path === workspaceDestination && dropIndicator.position === "into" ? " drop-target" : ""}`} data-drop-folder={workspaceDestination} onClick={(event) => { const target = event.target as Element; if (!target.closest("button, a, input, select, textarea, [contenteditable=true], .workspace-entry, .brain-node, .todo-card, .todo-link-hit, .note-card, .media-card")) clearSelection(); }} onDragOver={(event) => { event.preventDefault(); showDropIndicator({ path: workspaceDestination, position: "into", surface: "workspace" }); }} onDrop={(event) => dropToFolder(event, workspaceDestination)} onContextMenu={(event) => { if (event.target === event.currentTarget) openNewMenu(event, workspaceDestination); }}>
-            {workspaceView === "tree" ? <TreeExplore key={vaultPath} vault={vaultPath} name={vaultName} tree={tree} onOpen={openEntry} onContext={entryContext} selectedPaths={selection} onActivate={activateSelection} onClearSelection={clearSelection} dropIndicator={dropIndicator?.surface === "map" ? dropIndicator : null} dropGroup={dropIndicator?.surface === "map" ? dropGroup : ""} onDragStart={dragStart} onDragOverNode={(event, item) => dragOverTree(event, item, "map")} onDropNode={(event, item) => dropOnTree(event, item, "map")} onDragOverRoot={(event) => { event.preventDefault(); event.stopPropagation(); const root = (event.target as Element).closest<HTMLElement>("[data-map-path]"); if (root?.dataset.mapPath === vaultPath && (!dragSourceRef.current || normalizePath(parentPath(dragSourceRef.current)) !== normalizePath(vaultPath))) showDropIndicator({ path: vaultPath, position: "into", surface: "map", source: dragSourceRef.current }); else showDropIndicator(null); }} onDropRoot={(event) => { const root = (event.target as Element).closest<HTMLElement>("[data-map-path]"); if (root?.dataset.mapPath === vaultPath) dropToFolder(event, vaultPath); else { event.preventDefault(); event.stopPropagation(); showDropIndicator(null); } }} /> : workspaceView === "brain" ? <BrainExplore key={vaultPath} vault={vaultPath} name={vaultName} entries={entries} onOpen={openEntry} onContext={entryContext} selectedPaths={selection} onActivate={activateSelection} onClearSelection={clearSelection} /> : workspaceView === "calendar" ? <CalendarView key={vaultPath} vault={vaultPath} name={vaultName} /> : workspaceView === "passwords" ? <PasswordsView onManage={() => { setSettingsSection("passwords"); void showSettings(); }} /> : workspaceView === "tools" ? <ToolsView active={activeTool} onToolChange={(tool) => { setActiveTool(tool); recordNavigation("tools", "", tool); }} /> : workspaceView === "settings" ? <SettingsPage settings={settings} persisted={settingsPersisted} isSample={isSample} modifier={modifier} desktop={desktopAvailable} trayAvailable={trayAvailable} section={settingsSection} onSection={setSettingsSection} version={APP_VERSION} update={availableUpdate} updateStatus={updateStatus} onCheckUpdate={() => void runUpdateCheck()} onInstallUpdate={() => void installUpdate()} onUpdatePage={openUpdatePage} onChange={updateSettings} onBack={() => history.index > 0 ? void navigateHistory(-1) : void showOverview("all")} onOpenVault={() => void openVault()} onOpenPasswords={() => void showOverview("passwords")} /> : workspaceView === "whiteboard" && selectedPath && parseWhiteboard(content) ? <div className="todo-workspace"><div className="media-top-actions"><button className="icon-button" type="button" aria-label={`More options for ${selectedName}`} onClick={(event) => handleTreeContext(event, { name: selectedName, path: selectedPath, kind: "file", children: [] })}><MoreHorizontal size={19} /></button></div><Whiteboard key={selectedPath} path={selectedPath} board={parseWhiteboard(content)!} name={selectedName.replace(/\.comet-whiteboard$/i, "")} saveState={saveState} onChange={updateWhiteboard} onRename={() => openRename({ name: selectedName, path: selectedPath, kind: "file", children: [] })} onRetry={() => void flushAll().catch(() => setNotice("Still couldn't save. Please check the folder and try again."))} /></div> : workspaceView === "todo" && selectedPath && parseTodo(content) ? <div className="todo-workspace"><div className="media-top-actions"><button className={`icon-button ${itemMeta(metadata, selectedPath).pinned ? "active" : ""}`} type="button" aria-label={itemMeta(metadata, selectedPath).pinned ? "Unpin board" : "Pin board"} onClick={() => toggleProperty(selectedPath, "pinned")}><Pin size={17} /></button><button className={`icon-button ${itemMeta(metadata, selectedPath).favorite ? "active" : ""}`} type="button" aria-label={itemMeta(metadata, selectedPath).favorite ? "Remove board from favorites" : "Add board to favorites"} onClick={() => toggleProperty(selectedPath, "favorite")}><Star size={17} /></button><button className="icon-button" type="button" aria-label="Edit board tags" onClick={() => openTags(selectedPath)}><Tag size={17} /></button><button className="icon-button" type="button" aria-label={`More options for ${selectedName}`} onClick={(event) => handleTreeContext(event, { name: selectedName, path: selectedPath, kind: "file", children: [] })}><MoreHorizontal size={19} /></button></div><TodoBoard key={selectedPath} board={parseTodo(content)!} arrowheads={settings.todoArrowheads} name={selectedName.replace(/\.comet-todo$/i, "")} onRename={() => openRename({ name: selectedName, path: selectedPath, kind: "file", children: [] })} saveState={saveState} onChange={updateTodo} onRetry={() => void flushAll().catch(() => setNotice("Still couldn't save. Please check the folder and try again."))} /></div> : workspaceView === "note" && selectedPath ? <section className="note-card" aria-label={`File: ${selectedName}`}>
+          <div ref={workspaceScrollRef} className={`workspace-scroll without-cover${dropIndicator?.surface === "workspace" && dropIndicator.path === workspaceDestination && dropIndicator.position === "into" ? " drop-target" : ""}`} data-drop-folder={workspaceDestination} onScroll={(event) => { const stuck = event.currentTarget.scrollTop > 64; setToolbarStuck((prev) => (prev === stuck ? prev : stuck)); if (linkContextMenu) setLinkContextMenu(null); }} onClick={(event) => { const target = event.target as Element; if (!target.closest("button, a, input, select, textarea, [contenteditable=true], .workspace-entry, .brain-node, .todo-card, .todo-link-hit, .note-card, .media-card")) clearSelection(); }} onDragOver={(event) => { event.preventDefault(); showDropIndicator({ path: workspaceDestination, position: "into", surface: "workspace" }); }} onDrop={(event) => dropToFolder(event, workspaceDestination)} onContextMenu={(event) => { if (event.target === event.currentTarget) openNewMenu(event, workspaceDestination); }}>
+            {workspaceView === "tree" ? <TreeExplore key={vaultPath} vault={vaultPath} name={vaultName} tree={tree} onOpen={openEntry} onContext={entryContext} selectedPaths={selection} onActivate={activateSelection} onClearSelection={clearSelection} dropIndicator={dropIndicator?.surface === "map" ? dropIndicator : null} dropGroup={dropIndicator?.surface === "map" ? dropGroup : ""} onDragStart={dragStart} onDragOverNode={(event, item) => dragOverTree(event, item, "map")} onDropNode={(event, item) => dropOnTree(event, item, "map")} onDragOverRoot={(event) => { event.preventDefault(); event.stopPropagation(); const root = (event.target as Element).closest<HTMLElement>("[data-map-path]"); if (root?.dataset.mapPath === vaultPath && (!dragSourceRef.current || normalizePath(parentPath(dragSourceRef.current)) !== normalizePath(vaultPath))) showDropIndicator({ path: vaultPath, position: "into", surface: "map", source: dragSourceRef.current }); else showDropIndicator(null); }} onDropRoot={(event) => { const root = (event.target as Element).closest<HTMLElement>("[data-map-path]"); if (root?.dataset.mapPath === vaultPath) dropToFolder(event, vaultPath); else { event.preventDefault(); event.stopPropagation(); showDropIndicator(null); } }} /> : workspaceView === "brain" ? <BrainExplore key={vaultPath} vault={vaultPath} name={vaultName} entries={entries} onOpen={openEntry} onContext={entryContext} selectedPaths={selection} onActivate={activateSelection} onClearSelection={clearSelection} /> : workspaceView === "calendar" ? <CalendarView key={vaultPath} vault={vaultPath} name={vaultName} /> : workspaceView === "passwords" ? <PasswordsView onManage={() => { setSettingsSection("passwords"); void showSettings(); }} /> : workspaceView === "tools" ? <ToolsView active={activeTool} onToolChange={(tool) => { setActiveTool(tool); recordNavigation("tools", "", tool); }} /> : workspaceView === "settings" ? <SettingsPage settings={settings} persisted={settingsPersisted} isSample={isSample} modifier={modifier} desktop={desktopAvailable} trayAvailable={trayAvailable} section={settingsSection} onSection={setSettingsSection} version={APP_VERSION} update={availableUpdate} updateStatus={updateStatus} updateInstallStep={updateInstallStep} updateChecking={updateChecking} updatePreferences={updatePreferences} onUpdatePreferencesChange={(next) => { changeUpdatePreferences(next); if (next.includePrereleases !== updatePreferences.includePrereleases) void runUpdateCheck(false, next); }} onCheckUpdate={() => void runUpdateCheck()} onInstallUpdate={() => void installUpdate()} onUpdatePage={openUpdatePage} onChange={updateSettings} onBack={() => history.index > 0 ? void navigateHistory(-1) : void showOverview("all")} onOpenVault={() => void openVault()} onOpenPasswords={() => void showOverview("passwords")} /> : workspaceView === "whiteboard" && selectedPath && parseWhiteboard(content) ? <div className="todo-workspace"><div className="media-top-actions"><button className="icon-button" type="button" aria-label={`More options for ${selectedName}`} onClick={(event) => handleTreeContext(event, { name: selectedName, path: selectedPath, kind: "file", children: [] })}><MoreHorizontal size={19} /></button></div><Whiteboard key={selectedPath} path={selectedPath} board={parseWhiteboard(content)!} name={selectedName.replace(/\.comet-whiteboard$/i, "")} saveState={saveState} onChange={updateWhiteboard} onRename={() => openRename({ name: selectedName, path: selectedPath, kind: "file", children: [] })} onRetry={() => void flushAll().catch(() => setNotice("Still couldn't save. Please check the folder and try again."))} /></div> : workspaceView === "todo" && selectedPath && parseTodo(content) ? <div className="todo-workspace"><div className="media-top-actions"><button className={`icon-button ${itemMeta(metadata, selectedPath).pinned ? "active" : ""}`} type="button" aria-label={itemMeta(metadata, selectedPath).pinned ? "Unpin board" : "Pin board"} onClick={() => toggleProperty(selectedPath, "pinned")}><Pin size={17} /></button><button className={`icon-button ${itemMeta(metadata, selectedPath).favorite ? "active" : ""}`} type="button" aria-label={itemMeta(metadata, selectedPath).favorite ? "Remove board from favorites" : "Add board to favorites"} onClick={() => toggleProperty(selectedPath, "favorite")}><Star size={17} /></button><button className="icon-button" type="button" aria-label="Edit board tags" onClick={() => openTags(selectedPath)}><Tag size={17} /></button><button className="icon-button" type="button" aria-label={`More options for ${selectedName}`} onClick={(event) => handleTreeContext(event, { name: selectedName, path: selectedPath, kind: "file", children: [] })}><MoreHorizontal size={19} /></button></div><TodoBoard key={selectedPath} board={parseTodo(content)!} arrowheads={settings.todoArrowheads} name={selectedName.replace(/\.comet-todo$/i, "")} onRename={() => openRename({ name: selectedName, path: selectedPath, kind: "file", children: [] })} saveState={saveState} onChange={updateTodo} onRetry={() => void flushAll().catch(() => setNotice("Still couldn't save. Please check the folder and try again."))} /></div> : workspaceView === "note" && selectedPath ? <section className="note-card" aria-label={`File: ${selectedName}`}>
               <div className="document-header">
                 <div className="document-heading">
                   <div className="document-icon"><FileText size={20} /></div>
@@ -1881,8 +2353,7 @@ function App() {
                   <button className="icon-button document-more" type="button" aria-label={`More options for ${selectedName}`} title="Note options" onClick={(event) => handleTreeContext(event, { name: selectedName, path: selectedPath, kind: "file", children: [] })}><MoreHorizontal size={19} /></button>
                 </div>
               </div>
-              <div className="format-toolbar" aria-label="Formatting toolbar">
-                {viewMode === "write" && isMarkdown(selectedPath) ? <>
+              {viewMode === "write" && isMarkdown(selectedPath) && <div className={`format-toolbar${toolbarStuck ? " is-stuck" : ""}`} aria-label="Formatting toolbar">
                   <label className="toolbar-select" title="Paragraph style"><span className="sr-only">Paragraph style</span><AppSelect label="Paragraph style" value={formatting?.headingLevel ?? 0} onChange={(value) => { const level = Number(value); if (!level) editor?.chain().focus().setParagraph().run(); else editor?.chain().focus().setHeading({ level: level as 1 | 2 | 3 }).run(); }}><option value="0">Text</option><option value="1">Heading 1</option><option value="2">Heading 2</option><option value="3">Heading 3</option></AppSelect></label>
                   <label className="toolbar-select size-select" title="Text size"><span className="sr-only">Text size</span><AppSelect label="Text size" value={formatting?.fontSize ?? ""} onChange={(value) => value ? editor?.chain().focus().setFontSize(value).run() : editor?.chain().focus().unsetFontSize().run()}><option value="">Size</option>{[12, 14, 16, 18, 20, 24, 32, 40, 48].map((size) => <option key={size} value={`${size}px`}>{size}px</option>)}</AppSelect></label>
                   <span className="format-divider" />
@@ -1894,23 +2365,23 @@ function App() {
                   <ColorMenu label="Text color" color={/^#[0-9a-f]{6}$/i.test(formatting?.textColor || "") ? formatting!.textColor : "#e6a17f"} preserveSelection trigger={<span className="toolbar-color-letter" style={{ "--current-color": formatting?.textColor || "#e6a17f" } as CSSProperties}>A</span>} onChange={(color) => editor?.chain().setColor(color).run()} onReset={() => editor?.chain().unsetColor().run()} />
                   <ToolButton label="Add link" icon={Link2} active={formatting?.link} disabled={!editor || loading} onClick={openLink} />
                   <span className="format-divider" />
-                  <ToolButton label="Bullet list" icon={List} active={formatting?.bulletList} disabled={!editor || loading} onClick={() => editor?.chain().focus().toggleBulletList().run()} />
-                  <ToolButton label="Numbered list" icon={ListOrdered} active={formatting?.orderedList} disabled={!editor || loading} onClick={() => editor?.chain().focus().toggleOrderedList().run()} />
-                  <ToolButton label="Task list" icon={ListChecks} active={formatting?.taskList} disabled={!editor || loading} onClick={() => editor?.chain().focus().toggleTaskList().run()} />
+                  <ToolButton label="Bullet list" icon={List} active={formatting?.bulletList} disabled={!editor || loading} onClick={() => { if (!editor) return; splitHardBreaksBeforeListToggle(editor, "bulletList"); editor.chain().focus().toggleBulletList().run(); }} />
+                  <ToolButton label="Numbered list" icon={ListOrdered} active={formatting?.orderedList} disabled={!editor || loading} onClick={() => { if (!editor) return; splitHardBreaksBeforeListToggle(editor, "orderedList"); editor.chain().focus().toggleOrderedList().run(); }} />
+                  <ToolButton label="Task list" icon={ListChecks} active={formatting?.taskList} disabled={!editor || loading} onClick={() => { if (!editor) return; splitHardBreaksBeforeListToggle(editor, "taskList"); editor.chain().focus().toggleTaskList().run(); }} />
                   <ToolButton label="Quote" icon={Quote} active={formatting?.quote} disabled={!editor || loading} onClick={() => editor?.chain().focus().toggleBlockquote().run()} />
                   <ToolButton label="Inline code" icon={Code2} disabled={!editor || loading} onClick={() => editor?.chain().focus().toggleCode().run()} />
                   <span className="format-divider" />
                   <ToolButton label="Undo" icon={Undo2} disabled={!formatting?.undo || loading} onClick={() => editor?.chain().focus().undo().run()} />
                   <ToolButton label="Redo" icon={Redo2} disabled={!formatting?.redo || loading} onClick={() => editor?.chain().focus().redo().run()} />
-                </> : <span className="mode-hint">{viewMode === "source" ? <><FileCode2 size={15} /> Editing the {isMarkdown(selectedPath) ? "plain Markdown" : "UTF-8 text"} file</> : <><BookOpen size={15} /> Reading view · select Write to make changes</>}</span>}
-              </div>
+              </div>}
               <div className="document-body">
                 {loading ? <div className="document-loading"><LoaderCircle size={18} className="spin" /> Opening your note…</div> : viewMode === "source" ? <textarea ref={sourceRef} readOnly={quitPending} className="source-editor" aria-label={isMarkdown(selectedPath) ? "Markdown source" : "Text editor"} spellCheck={settings.spellcheck} value={content} placeholder={isMarkdown(selectedPath) ? "Start writing in Markdown…" : "Start writing…"} onChange={(event) => {
                   const next = event.target.value;
+                  sourceHistoryRef.current.record(contentRef.current, `src:${selectedRef.current}`);
                   contentRef.current = next;
                   setContent(next);
                   queueSave(selectedRef.current, next);
-                }} /> : <div className={viewMode === "read" ? "rich-editor is-reading" : "rich-editor"}>
+                }} /> : <div className={viewMode === "read" ? "rich-editor is-reading" : "rich-editor"} onClick={handleNoteRichClick} onContextMenu={handleNoteRichContextMenu}>
                   <EditorContent editor={editor} />
                   {!content && viewMode === "write" && <button className="editor-placeholder" type="button" onClick={() => editor?.commands.focus()}>Start writing, or make a little space for an idea…</button>}
                   {!content && viewMode === "read" && <p className="empty-note">This note is empty. Switch to Write to get started.</p>}
@@ -1919,16 +2390,55 @@ function App() {
               <div className="document-footer"><div><span>{words} {words === 1 ? "word" : "words"}</span><span className="footer-dot" /> <span>{isMarkdown(selectedPath) ? "Markdown" : "Plain text"}</span></div><span>{isSample ? (sampleVault.isPersisted() ? (desktopAvailable ? "Sample saved in this app" : "Sample saved in this browser") : "Temporary sample") : "Saved locally"}</span></div>
             </section> : workspaceView === "file" && selectedPath ? <div className="media-workspace">
               <div className="media-top-actions"><button className={`icon-button ${itemMeta(metadata, selectedPath).pinned ? "active" : ""}`} type="button" aria-label={itemMeta(metadata, selectedPath).pinned ? "Unpin file" : "Pin file"} onClick={() => toggleProperty(selectedPath, "pinned")}><Pin size={17} /></button><button className={`icon-button ${itemMeta(metadata, selectedPath).favorite ? "active" : ""}`} type="button" aria-label={itemMeta(metadata, selectedPath).favorite ? "Remove from favorites" : "Add to favorites"} onClick={() => toggleProperty(selectedPath, "favorite")}><Star size={17} /></button><button className="icon-button" type="button" aria-label="Edit file tags" onClick={() => openTags(selectedPath)}><Tag size={17} /></button><button className="icon-button" type="button" aria-label={`More options for ${selectedName}`} onClick={(event) => handleTreeContext(event, { name: selectedName, path: selectedPath, kind: "file", children: [] })}><MoreHorizontal size={19} /></button></div>
-              <MediaView key={selectedPath} path={selectedPath} vault={vaultPath} url={mediaUrl} content={content} sample={isSample} autoCoverArt={settings.autoCoverArt} onRename={() => openRename({ name: selectedName, path: selectedPath, kind: "file", children: [] })} onOpenExternal={() => void openExternal()} onEditAsText={() => void openUnknownAsText()} onOpenWeb={(url) => { if (desktopAvailable) void openUrl(url).catch(() => setNotice("Couldn't open that link.")); else window.open(url, "_blank", "noopener,noreferrer"); }} />
+              <MediaView key={selectedPath} path={selectedPath} vault={vaultPath} url={mediaUrl} content={content} sample={isSample} autoCoverArt={settings.autoCoverArt} onRename={() => openRename({ name: selectedName, path: selectedPath, kind: "file", children: [] })} onOpenExternal={() => void openExternal()} onEditAsText={() => void openUnknownAsText()} onOpenWeb={openExternalWebUrl} />
             </div> : <>
               {workspaceView === "folder" && <button className="folder-parent workspace-parent" type="button" onClick={() => folderParentIsRoot ? void showOverview("all") : void showFolder(folderParent)}><ArrowRight size={14} /> {folderParentIsRoot ? "All files" : fileName(folderParent)}</button>}
-              <WorkspacePanel title={workspaceView === "folder" ? fileName(folderPath) : workspaceView === "pinned" ? "Pinned" : workspaceView === "favorites" ? "Favorites" : "All files"} description={workspaceView === "folder" ? "Everything in this folder, together." : workspaceView === "pinned" ? "The things you want close at hand." : workspaceView === "favorites" ? "A little collection of your favorites." : "All your files and folders, in one place."} entries={workspaceEntries} vault={vaultPath} destination={workspaceDestination} metadata={metadata} layout={layout} iconSize={iconSize} onLayout={setLayout} onIconSize={setIconSize} onOpen={(event, entry) => activateSelection(event, entry, workspaceEntries.map((item) => item.path))} selectedPaths={selection} onMenu={entryContext} onBackgroundMenu={openNewMenu} onCreate={openNewMenu} onDragStart={dragStart} onDragOver={(event, folder) => { event.preventDefault(); event.stopPropagation(); showDropIndicator({ path: folder, position: "into", surface: "workspace" }); }} dropFolder={dropIndicator?.surface === "workspace" && dropIndicator.position === "into" ? dropIndicator.path : ""} onDrop={dropToFolder} />
+              <WorkspacePanel title={workspaceView === "folder" ? fileName(folderPath) : workspaceView === "folders" ? "Folders" : workspaceView === "pinned" ? "Pinned" : workspaceView === "favorites" ? "Favorites" : "All files"} description={workspaceView === "folder" ? "Everything in this folder, together." : workspaceView === "folders" ? "All your folders, in one place." : workspaceView === "pinned" ? "The things you want close at hand." : workspaceView === "favorites" ? "A little collection of your favorites." : "All your files and folders, in one place."} entries={workspaceEntries} vault={vaultPath} destination={workspaceDestination} metadata={metadata} layout={layout} iconSize={iconSize} onLayout={setLayout} onIconSize={setIconSize} onOpen={(event, entry) => activateSelection(event, entry, workspaceEntries.map((item) => item.path))} selectedPaths={selection} onMenu={entryContext} onBackgroundMenu={openNewMenu} onCreate={openNewMenu} onDragStart={dragStart} onDragOver={(event, folder) => { event.preventDefault(); event.stopPropagation(); showDropIndicator({ path: folder, position: "into", surface: "workspace" }); }} dropFolder={dropIndicator?.surface === "workspace" && dropIndicator.position === "into" ? dropIndicator.path : ""} dropIndicator={dropIndicator?.surface === "workspace" ? dropIndicator : null} onDragOverEntry={dragOverWorkspaceEntry} onDropEntry={dropOnWorkspaceEntry} onDrop={dropToFolder} />
             </>}
           </div>
         </main>
       </div>
 
-      {updateNotice && availableUpdate && <div className="update-notice" role="status"><div><strong>Comet {availableUpdate.version} is available</strong><span>A new version is ready to review.</span></div><button type="button" className="secondary-button" onClick={() => setUpdateNotice(false)}>Later</button><button type="button" className="primary-button" onClick={() => { setUpdateNotice(false); setSettingsSection("updates"); void showSettings(); }}>Update</button></div>}
+      {updateNotice && availableUpdate && (
+        <div className="update-notice" role="status">
+          <div>
+            <strong>Comet {availableUpdate.version} is out</strong>
+            <span>This is Comet {APP_VERSION}. Ready to update whenever you are.</span>
+          </div>
+          <button type="button" className="secondary-button" onClick={() => setUpdateNotice(false)}>
+            Later
+          </button>
+          <button type="button" className="secondary-button" onClick={() => openUpdatePage(availableUpdate.url)}>
+            Release notes
+          </button>
+          {desktopAvailable && (availableUpdate.platformAsset || availableUpdate.installer) ? (
+            <button
+              type="button"
+              className="primary-button"
+              disabled={updateInstallStep !== "idle"}
+              onClick={() => void installUpdate()}
+            >
+              {updateInstallStep === "downloading"
+                ? "Downloading…"
+                : updateInstallStep === "opening"
+                  ? "Opening…"
+                  : `Install ${availableUpdate.version}`}
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="primary-button"
+              onClick={() => {
+                setUpdateNotice(false);
+                setSettingsSection("updates");
+                void showSettings();
+              }}
+            >
+              Go to settings
+            </button>
+          )}
+        </div>
+      )}
 
       <UploadProgress uploads={uploads} onDismiss={(id) => setUploads((previous) => previous.filter((item) => item.id !== id))} />
       {notice && <div className="toast" role="status"><AlertCircle size={17} /> <span>{notice}</span><button type="button" onClick={() => setNotice("")} aria-label="Dismiss message"><X size={16} /></button></div>}
@@ -1956,6 +2466,151 @@ function App() {
         </>}
       </div>}
 
+      {linkContextMenu && (
+        <div
+          ref={linkContextMenuRef}
+          className="context-menu link-context-menu"
+          role="menu"
+          aria-label="Link options"
+          style={{ left: linkContextMenu.x, top: linkContextMenu.y }}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <div className="context-heading" title={linkContextMenu.target.href}>
+            {linkContextMenu.target.href}
+          </div>
+          <button
+            role="menuitem"
+            type="button"
+            onClick={() => {
+              const { scope, target } = linkContextMenu;
+              setLinkContextMenu(null);
+              setEmbedDismissed(scope, target.href, false);
+            }}
+          >
+            <Eye size={16} /> Show embed
+          </button>
+          <button
+            role="menuitem"
+            type="button"
+            onClick={() => {
+              const { target } = linkContextMenu;
+              setLinkContextMenu(null);
+              setDialogError("");
+              setHyperlinkDialog({
+                target,
+                labelDraft: target.text.trim() === target.href.trim() ? "" : target.text,
+              });
+            }}
+          >
+            <Link2 size={16} /> {linkContextMenu.target.text.trim() === linkContextMenu.target.href.trim() ? "Turn into hyperlink…" : "Edit hyperlink text…"}
+          </button>
+          {linkContextMenu.target.text.trim() !== linkContextMenu.target.href.trim() && (
+            <button
+              role="menuitem"
+              type="button"
+              onClick={() => {
+                const { target } = linkContextMenu;
+                setLinkContextMenu(null);
+                const ed = editorRef.current;
+                if (ed && !ed.isDestroyed && replaceLinkDisplayText(ed, target, target.href)) {
+                  if (modeRef.current !== "write") {
+                    const next = cleanNoteMarkdown(ed.getMarkdown());
+                    contentRef.current = next;
+                    setContent(next);
+                    queueSave(selectedRef.current, next);
+                  }
+                }
+              }}
+            >
+              <Undo2 size={16} /> Back to normal link
+            </button>
+          )}
+        </div>
+      )}
+
+      {hyperlinkDialog && (
+        <div className="modal-backdrop" onMouseDown={() => setHyperlinkDialog(null)}>
+          <form
+            className="modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="hyperlink-dialog-title"
+            onMouseDown={(event) => event.stopPropagation()}
+            onSubmit={(event) => {
+              event.preventDefault();
+              const label = hyperlinkDialog.labelDraft.trim();
+              if (!label) {
+                setDialogError("Enter the text you want displayed for this link.");
+                return;
+              }
+              const ed = editorRef.current;
+              if (ed && !ed.isDestroyed && replaceLinkDisplayText(ed, hyperlinkDialog.target, label)) {
+                if (modeRef.current !== "write") {
+                  const next = cleanNoteMarkdown(ed.getMarkdown());
+                  contentRef.current = next;
+                  setContent(next);
+                  queueSave(selectedRef.current, next);
+                }
+              }
+              setDialogError("");
+              setHyperlinkDialog(null);
+            }}
+          >
+            <div className="modal-icon">
+              <Link2 size={20} />
+            </div>
+            <button
+              className="modal-close icon-button"
+              type="button"
+              onClick={() => setHyperlinkDialog(null)}
+              aria-label="Close dialog"
+            >
+              <X size={18} />
+            </button>
+            <h2 id="hyperlink-dialog-title">Turn into hyperlink</h2>
+            <p>
+              Choose the text displayed in your note for{" "}
+              <strong style={{ wordBreak: "break-all" }}>{hyperlinkDialog.target.href}</strong>.
+            </p>
+            <label className="modal-label" htmlFor="hyperlink-display-text">
+              Display text
+            </label>
+            <input
+              id="hyperlink-display-text"
+              autoFocus
+              value={hyperlinkDialog.labelDraft}
+              onChange={(event) => {
+                setHyperlinkDialog((prev) =>
+                  prev ? { ...prev, labelDraft: event.target.value } : null,
+                );
+                setDialogError("");
+              }}
+              placeholder="e.g. Rclone Crypt"
+              autoComplete="off"
+            />
+            <span className="input-hint">
+              Saved in Markdown as [{hyperlinkDialog.labelDraft.trim() || "text"}]({hyperlinkDialog.target.href})
+            </span>
+            {dialogError && (
+              <div className="dialog-error" role="alert">
+                <AlertCircle size={15} /> {dialogError}
+              </div>
+            )}
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => setHyperlinkDialog(null)}
+              >
+                Cancel
+              </button>
+              <button type="submit" className="primary-button">
+                Save hyperlink
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
       {searchOpen && <SearchDialog query={searchQuery} results={searchResults} searching={searching} entries={entries} tags={metadata.tags} onQuery={setSearchQuery} onOpen={(entry) => { setSearchOpen(false); openEntry(entry); }} onClose={() => setSearchOpen(false)} />}
       {tagDialogOpen && <TagDialog metadata={metadata} target={tagTarget} onClose={() => setTagDialogOpen(false)} onCreate={createTag} onToggle={toggleTag} onDelete={deleteTag} onSearch={(name) => { setTagDialogOpen(false); setSearchQuery(`#${name}`); setSearchOpen(true); }} />}
       {moveDialog && <MovePicker item={moveDialog} tree={tree} vault={vaultPath} name={vaultName} destination={moveFolder} onDestination={setMoveFolder} onClose={() => setMoveDialog(null)} onMove={() => void moveItem(moveDialog.path, moveFolder)} />}
@@ -2009,7 +2664,7 @@ function App() {
           <div className="modal-icon"><Pencil size={20} /></div><button className="modal-close icon-button" type="button" onClick={() => setRenameNode(null)} aria-label="Close dialog" disabled={dialogBusy}><X size={18} /></button>
           <h2 id="rename-title">Rename {renameNode.kind === "folder" ? "folder" : "file"}</h2><p>Choose a new name for <strong>{renameNode.name}</strong>. Links in other notes won't be updated automatically.</p>
           <label className="modal-label" htmlFor="rename-name">Name</label><input id="rename-name" autoFocus value={entryName} onChange={(event) => { setEntryName(event.target.value); setDialogError(""); }} autoComplete="off" />
-          {renameNode.kind === "file" && <span className="input-hint">Include the extension you want to keep.</span>}
+          {renameNode.kind === "file" && <span className="input-hint">{/\.(?:url|comet-todo|comet-whiteboard)$/i.test(renameNode.name) ? "The shortcut or board format is kept automatically." : "Your file extension is kept automatically unless you include a new one."}</span>}
           {dialogError && <div className="dialog-error" role="alert"><AlertCircle size={15} /> {dialogError}</div>}
           <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setRenameNode(null)} disabled={dialogBusy}>Cancel</button><button type="submit" className="primary-button" disabled={dialogBusy}>{dialogBusy ? "Renaming…" : "Rename"}</button></div>
         </form>
@@ -2054,7 +2709,7 @@ function App() {
           <textarea id="capture-content" autoFocus value={captureText} onChange={(event) => { setCaptureText(event.target.value); setDialogError(""); }} placeholder={captureType === "link" ? "https://example.com" : captureType === "image" ? "A few words about this image…" : "What would you like to remember?"} /></>}
           {captureType === "file" && <>
             <input ref={captureInputRef} type="file" multiple hidden onChange={(event) => { const files = [...(event.currentTarget.files ?? [])]; event.currentTarget.value = ""; if (files.length) { setCaptureFiles(files); setCapturePaths([]); setDialogError(""); } }} />
-            <button type="button" className={`capture-dropzone${captureDragOver ? " drag-over" : ""}`} onClick={() => void chooseCaptureFiles()} onDragEnter={(event) => { event.preventDefault(); event.stopPropagation(); setCaptureDragOver(true); }} onDragOver={(event) => { event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = "copy"; setCaptureDragOver(true); }} onDragLeave={(event) => { event.preventDefault(); event.stopPropagation(); if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setCaptureDragOver(false); }} onDrop={(event) => { event.preventDefault(); event.stopPropagation(); setCaptureDragOver(false); const files = [...event.dataTransfer.files]; if (files.length) { setCaptureFiles(files); setCapturePaths([]); setDialogError(""); } else setDialogError("Drop files here, or choose files using the button."); }}>
+            <button type="button" className={`capture-dropzone${captureDragOver ? " drag-over" : ""}`} onClick={() => void chooseCaptureFiles()} onDragEnter={(event) => { event.preventDefault(); event.stopPropagation(); setCaptureDragOver(true); }} onDragOver={(event) => { event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = "copy"; setCaptureDragOver(true); }} onDragLeave={(event) => { event.preventDefault(); event.stopPropagation(); if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) setCaptureDragOver(false); }} onDrop={(event) => { event.preventDefault(); event.stopPropagation(); setCaptureDragOver(false); const browserUrl = droppedBrowserLink(event.dataTransfer); if (browserUrl) { setCaptureType("link"); setCaptureText(browserUrl); setCaptureFiles([]); setCapturePaths([]); setDialogError(""); return; } const files = [...event.dataTransfer.files]; if (files.length) { setCaptureFiles(files); setCapturePaths([]); setDialogError(""); } else setDialogError("Drop files here, or choose files using the button."); }}>
               <span className="capture-drop-icon"><Upload size={21} /></span><strong>Drop files here or click to browse</strong><small>{isSample ? "Browser storage space varies by device" : "Browse or drop files of any size"}</small>
             </button>
             {(captureFiles.length > 0 || capturePaths.length > 0) && <div className="capture-file-selection"><strong>{captureFiles.length || capturePaths.length} {(captureFiles.length || capturePaths.length) === 1 ? "file" : "files"} selected</strong><button type="button" onClick={() => { setCaptureFiles([]); setCapturePaths([]); }}>Clear</button><ul>{(captureFiles.length ? captureFiles.map((file) => file.name) : capturePaths.map(fileName)).map((name, index) => <li key={`${index}:${name}`} title={name}>{name}</li>)}</ul></div>}

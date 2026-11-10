@@ -46,7 +46,7 @@ report() {
 report "the desktop entry" 'applications/[Cc]omet\.desktop$' no
 report "the X11 wrapper" 'usr/bin/comet-x11$' yes
 report "the X11 menu entry" 'applications/comet-x11\.desktop$' no
-report "the application-id menu entry" 'applications/com\.marco\.comet\.desktop$' no
+report "the application-id menu entry" 'applications/com\.comet\.desktop$' no
 
 if [ "$failed" -ne 0 ]; then
   exit 1

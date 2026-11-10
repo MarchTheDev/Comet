@@ -280,7 +280,7 @@ jobs:
           cp packaging/linux/comet.desktop "$portable/comet.desktop"
           cp packaging/linux/comet-x11 "$portable/comet-x11"
           cp packaging/linux/comet-x11.desktop "$portable/comet-x11.desktop"
-          cp packaging/linux/com.marco.comet.desktop "$portable/com.marco.comet.desktop"
+          cp packaging/linux/com.comet.desktop "$portable/com.comet.desktop"
           cp web/src-tauri/icons/128x128.png "$portable/comet.png"
           cp LICENSE "$portable/LICENSE"
           # A tarball cannot declare dependencies, so it says what it needs
@@ -309,8 +309,8 @@ jobs:
           cp packaging/linux/comet-x11 "$appdir/usr/bin/comet-x11"
           cp web/src-tauri/icons/128x128.png "$appdir/comet.png"
           cp web/src-tauri/icons/128x128.png "$appdir/usr/share/icons/hicolor/128x128/apps/comet.png"
-          cp web/src-tauri/icons/128x128.png "$appdir/usr/share/icons/hicolor/128x128/apps/com.marco.comet.png"
-          cp packaging/linux/com.marco.comet.desktop "$appdir/usr/share/applications/com.marco.comet.desktop"
+          cp web/src-tauri/icons/128x128.png "$appdir/usr/share/icons/hicolor/128x128/apps/com.comet.png"
+          cp packaging/linux/com.comet.desktop "$appdir/usr/share/applications/com.comet.desktop"
           cp packaging/linux/appimage/AppRun "$appdir/AppRun"
           cp packaging/linux/appimage/README.txt "$appdir/README-appimage.txt"
           cp LICENSE "$appdir/usr/share/licenses/comet/LICENSE"
@@ -376,7 +376,7 @@ jobs:
             || { echo "::error title=The portable tarball::the X11 wrapper is missing or cannot be run"; exit 1; }
           printf '%s\n' "$listing" | grep -qE '/comet-x11\.desktop$' \
             || { echo "::error title=The portable tarball::the X11 menu entry is missing"; exit 1; }
-          printf '%s\n' "$listing" | grep -qE '/com\.marco\.comet\.desktop$' \
+          printf '%s\n' "$listing" | grep -qE '/com\.comet\.desktop$' \
             || { echo "::error title=The portable tarball::the application-id menu entry is missing"; exit 1; }
           # The only channel that cannot declare its dependencies has to carry
           # the note about them instead.
@@ -619,7 +619,7 @@ jobs:
           cp packaging/linux/comet.desktop "$work/comet.desktop"
           cp packaging/linux/comet-x11 "$work/comet-x11"
           cp packaging/linux/comet-x11.desktop "$work/comet-x11.desktop"
-          cp packaging/linux/com.marco.comet.desktop "$work/com.marco.comet.desktop"
+          cp packaging/linux/com.comet.desktop "$work/com.comet.desktop"
           cp web/src-tauri/icons/128x128.png "$work/comet.png"
           # The package installs the licence text, so it has to be beside the
           # PKGBUILD for makepkg to find it in the sources.
@@ -642,7 +642,7 @@ jobs:
           printf '%s\n' "$listing" | grep -E 'usr/bin/comet$' | grep -q rwx
           printf '%s\n' "$listing" | grep -E 'usr/bin/comet-x11$' | grep -q rwx
           printf '%s\n' "$listing" | grep -qE 'applications/comet\.desktop$'
-          printf '%s\n' "$listing" | grep -qE 'applications/com\.marco\.comet\.desktop$'
+          printf '%s\n' "$listing" | grep -qE 'applications/com\.comet\.desktop$'
           bash packaging/linux/check-deps.sh "The Arch package" pacman "$package" \
             gst-plugins-base gst-plugins-good gst-plugin-pipewire
 

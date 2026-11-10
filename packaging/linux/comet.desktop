@@ -7,4 +7,4 @@ Icon=comet
 Terminal=false
 Categories=Utility;
 Keywords=notes;markdown;comet;
-StartupWMClass=com.marco.comet
+StartupWMClass=com.comet

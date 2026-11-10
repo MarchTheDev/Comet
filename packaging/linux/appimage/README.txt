@@ -8,7 +8,7 @@ Make the file executable and run it:
 
 Nothing is installed and nothing is written beside the image. Your notes stay in
 the workspace folder you choose; settings and organization are kept in Comet's
-application profile (~/.local/share/com.marco.comet).
+application profile (~/.local/share/com.comet).
 
 The AppImage is thin on purpose: it carries the binary, the menu entries and the
 icon, and asks the host for the libraries it needs. Install WebKitGTK 4.1 and a

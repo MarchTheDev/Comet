@@ -1,5 +1,4 @@
 import { AppSelect } from "./AppSelect";
-import effLicense from "./licenses/eff-wordlist.txt?raw";
 import { useEffect, useRef, useState } from "react";
 import { disable as disableAutostart, enable as enableAutostart, isEnabled as isAutostartEnabled } from "@tauri-apps/plugin-autostart";
 import { ArrowLeft, Check, FolderOpen, Gem, Keyboard, Monitor, Moon, RotateCcw, Sun } from "lucide-react";
@@ -130,7 +129,6 @@ export function SettingsPage({ settings, persisted, isSample, modifier, desktop,
           }}>{recording === action ? "Press keys…" : shortcutLabel(settings.shortcuts[action], mac)}</button></dd></div>)}</dl>
           {shortcutError && <div className="dialog-error" role="alert">{shortcutError}</div>}
         </div>
-        <details className="settings-aside-card tool-license"><summary>Open-source notices</summary><pre>{effLicense}</pre></details>
         <button className="reset-settings" type="button" onClick={() => onChange({ ...DEFAULT_SETTINGS })}><RotateCcw size={15} /> Reset preferences</button>
       </aside>
     </div>}

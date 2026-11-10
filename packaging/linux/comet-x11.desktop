@@ -10,4 +10,4 @@ Icon=comet
 Terminal=false
 Categories=Utility;
 Keywords=notes;markdown;comet;x11;xwayland;
-StartupWMClass=com.marco.comet
+StartupWMClass=com.comet

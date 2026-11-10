@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 use tauri::Manager;
 
 const EMBEDDED: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/comet-rclone"));
-const CONFIG_SERVICE: &str = "com.marco.comet.rclone";
+const CONFIG_SERVICE: &str = "com.comet.rclone";
 const CONFIG_ACCOUNT: &str = "encrypted-config-key";
 const RC_USER: &str = "comet";
 const ERROR: &str = "Cloud connection failed. Check your connection or reconnect the provider; local files are safe and will be retried.";

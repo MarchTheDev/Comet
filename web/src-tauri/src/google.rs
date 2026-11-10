@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_dialog::DialogExt;
 
-const SERVICE: &str = "com.marco.comet.google";
+const SERVICE: &str = "com.comet.google";
 static CONNECTING: AtomicBool = AtomicBool::new(false);
 
 #[derive(Serialize, Deserialize)]

@@ -3,7 +3,7 @@ Comet, portable (Linux)
 
 Nothing is installed. Run ./comet from this folder. Your notes stay in the
 workspace folder you choose; settings and organization are kept in Comet's
-application profile (~/.local/share/com.marco.comet), not beside this file.
+application profile (~/.local/share/com.comet), not beside this file.
 Removing this folder removes the program, not your files or profile.
 
 On a Wayland session where the window will not draw, run ./comet-x11 instead,

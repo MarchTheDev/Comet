@@ -1,9 +1,10 @@
 # Comet icon
 
-`comet.svg` is the editable mountain-and-comet icon; `comet.png` is a
-ready-to-use PNG. The same source is used for the browser favicon and all
-Tauri desktop icon sizes, including the icon embedded in the standalone Windows
-executable. Windows setup artwork lives in `packaging/windows/`.
+`comet.svg` is the editable mountain-and-comet icon and `comet.png` is the
+ready-to-use PNG: a rounded dark tile with the mark on it, which is what
+Windows and macOS icon grids expect. The same source is used for the browser
+favicon, the README and all Tauri desktop icon sizes, including the icon
+embedded in the standalone Windows executable. Windows setup artwork lives in `packaging/windows/`.
 
 To regenerate the desktop icons after editing the SVG:
 

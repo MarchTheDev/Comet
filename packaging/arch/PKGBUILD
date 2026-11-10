@@ -11,7 +11,7 @@
 # To do it by hand:
 #   1. npm ci && npx tauri build --no-bundle      (in web/)
 #   2. copy web/src-tauri/target/release/comet here, with comet.desktop,
-#      comet-x11, comet-x11.desktop, com.marco.comet.desktop, comet.png (from
+#      comet-x11, comet-x11.desktop, com.comet.desktop, comet.png (from
 #      web/src-tauri/icons/128x128.png) and LICENSE (from the top of the
 #      repository)
 #   3. makepkg -f
@@ -29,7 +29,7 @@ depends=('webkit2gtk-4.1' 'gtk3' 'libappindicator-gtk3' 'librsvg' 'openssl'
          'libsoup3' 'gst-plugins-base' 'gst-plugins-good' 'gst-plugin-pipewire')
 optdepends=('gnome-keyring: store the password-vault key' 'kwallet: store the password-vault key on KDE')
 options=('!strip')
-source=('comet' 'comet.desktop' 'comet-x11' 'comet-x11.desktop' 'com.marco.comet.desktop' 'comet.png' 'LICENSE')
+source=('comet' 'comet.desktop' 'comet-x11' 'comet-x11.desktop' 'com.comet.desktop' 'comet.png' 'LICENSE')
 sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP')
 
 package() {
@@ -38,9 +38,9 @@ package() {
   install -Dm644 "$srcdir/comet.desktop" "$pkgdir/usr/share/applications/comet.desktop"
   install -Dm644 "$srcdir/comet-x11.desktop" "$pkgdir/usr/share/applications/comet-x11.desktop"
   # Wayland panels ask for the application id, not the binary name.
-  install -Dm644 "$srcdir/com.marco.comet.desktop" "$pkgdir/usr/share/applications/com.marco.comet.desktop"
+  install -Dm644 "$srcdir/com.comet.desktop" "$pkgdir/usr/share/applications/com.comet.desktop"
   install -Dm644 "$srcdir/comet.png" "$pkgdir/usr/share/icons/hicolor/128x128/apps/comet.png"
-  install -Dm644 "$srcdir/comet.png" "$pkgdir/usr/share/icons/hicolor/128x128/apps/com.marco.comet.png"
+  install -Dm644 "$srcdir/comet.png" "$pkgdir/usr/share/icons/hicolor/128x128/apps/com.comet.png"
   # The licence text itself, so the package says what the program is under
   # without this file carrying thirty-five kilobytes of it.
   install -Dm644 "$srcdir/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"

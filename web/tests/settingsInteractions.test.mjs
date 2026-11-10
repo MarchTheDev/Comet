@@ -15,6 +15,7 @@ Object.defineProperty(globalThis, 'navigator', { value: dom.window.navigator, co
 let current = DEFAULT_SETTINGS;
 function Harness() { const [settings, setSettings] = useState(DEFAULT_SETTINGS); const [section, setSection] = useState("general"); return React.createElement(SettingsPage, { settings, section, onSection: setSection, persisted: true, isSample: true, modifier: 'Ctrl', desktop: false, trayAvailable: false, onBack() {}, onOpenVault() {}, onChange(patch) { setSettings(previous => { current = { ...previous, ...patch }; return current; }); } }); }
 const root = createRoot(document.getElementById('root')); await act(async () => root.render(React.createElement(Harness)));
+check('Settings does not show the open-source notices panel', !document.body.textContent.includes('Open-source notices'));
 check('Settings exposes General, Passwords and Updates, with cloud paused', [...document.querySelectorAll('[role=tab]')].map(item => item.textContent.trim()).join(',') === 'General,Passwords,Updates');
 const slider = document.querySelector('[aria-label="App scale"]');
 await act(async () => { slider.focus(); slider.dispatchEvent(new dom.window.MouseEvent('pointerdown', { bubbles: true, button: 0 })); });

@@ -3667,3 +3667,103 @@ input[type="checkbox"]:not(.setting-toggle):disabled {
 }
 
 
+/* ---------------------------------------------------------------------------
+   Board cards: connector dot, wrapping text, scrolling, and links
+   --------------------------------------------------------------------------- */
+
+/* The connector dot follows the pointer round its card (utils/connectorDot.ts
+   places it). Without a pointer over the card it rests where it always was, so
+   it is still there for the keyboard and for touch. */
+.todo-connect-dot.is-following { opacity: 1; transition: opacity .15s, transform .15s; }
+.todo-connect-dot[data-side="top"], .todo-connect-dot[data-side="bottom"] { cursor: crosshair; }
+
+/* A whiteboard to-do wraps to its card and grows downwards. The text being
+   edited and the text being shown share one grid cell, so the taller of the
+   two sets the row's height and the edit box never needs measuring. */
+.whiteboard-todo-row { align-items: flex-start; }
+.whiteboard-item-content .whiteboard-todo-row input[type="checkbox"] { align-self: flex-start; margin-top: calc(4px * var(--interface-text-scale, 1)); }
+.whiteboard-todo-row .whiteboard-todo-remove { align-self: flex-start; }
+.whiteboard-todo-field { display: grid; flex: 1; min-width: 0; }
+.whiteboard-todo-field > * { grid-area: 1 / 1; min-width: 0; }
+.whiteboard-todo-shown,
+.whiteboard-todo-field > .whiteboard-todo-input {
+  box-sizing: border-box;
+  width: 100%;
+  margin: 0;
+  padding: 2px 3px;
+  font: inherit;
+  font-size: calc(12px * var(--interface-text-scale, 1));
+  line-height: 1.4;
+  letter-spacing: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+.whiteboard-todo-shown { position: relative; z-index: 1; color: var(--text); cursor: text; }
+.whiteboard-todo-shown.is-empty { color: var(--text-muted); opacity: .75; }
+.whiteboard-todo-field.is-done .whiteboard-todo-shown { color: var(--text-muted); text-decoration: line-through; }
+.whiteboard-todo-field > .whiteboard-todo-input {
+  display: block;
+  flex: none;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  resize: none;
+  opacity: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.whiteboard-todo-field.is-editing > .whiteboard-todo-input { opacity: 1; }
+/* While editing, the shown text only holds the space open. */
+.whiteboard-todo-field.is-editing > .whiteboard-todo-shown { visibility: hidden; pointer-events: none; }
+.whiteboard-todo-shown a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.whiteboard-todo-shown a:hover { color: var(--accent-ink); text-decoration-color: currentColor; }
+.whiteboard-todo-shown a:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 3px; }
+.whiteboard-todo-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 6px; }
+.whiteboard-todo-actions .whiteboard-todo-add { align-self: auto; }
+
+/* Text boxes and to-do lists scroll inside the card the way a Links card
+   does: text wraps to the card, a scroll bar appears once it no longer fits,
+   and scrolling to the end does not carry on into the canvas. */
+.whiteboard-rich-editor,
+.whiteboard-todo-list,
+.whiteboard-link-list {
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scroll-thumb) transparent;
+}
+.whiteboard-todo-list { padding-right: 2px; }
+.whiteboard-rich-editor > div,
+.comet-editor-prose.whiteboard-prose { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+.comet-editor-prose.whiteboard-prose :is(p, li, h1, h2, h3, h4, blockquote, a) { overflow-wrap: anywhere; }
+.comet-editor-prose.whiteboard-prose :is(pre, code) { white-space: pre-wrap; overflow-wrap: anywhere; }
+.comet-editor-prose.whiteboard-prose :is(img, video, iframe, table) { max-width: 100%; }
+/* A link preview is laid out for a full-width note; in a card it has to give way. */
+.whiteboard-prose .comet-link-embed { max-width: 100%; min-width: 0; }
+.whiteboard-prose .comet-link-embed :is(.comet-link-embed-main, .comet-link-embed-title, .comet-link-embed-desc, .comet-link-embed-host) { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+
+/* Add / edit link dialog. */
+.link-dialog-field + .link-dialog-field { margin-top: 14px; }
+.link-dialog .modal-actions .text-button { cursor: pointer; }
+
+/* .todo boards: the text fields in a card used to get the squared-off focus
+   outline every input has by default. They now match a whiteboard to-do: no
+   outline, and the row being edited is softly highlighted instead. */
+.todo-card .todo-task-text:focus-visible,
+.todo-subtask input:not([type="checkbox"]):focus-visible,
+.todo-subtask-add input:focus-visible { outline: none; }
+.todo-card-main, .todo-subtask { padding: 2px 3px; border-radius: 6px; }
+.todo-card-main { margin: 6px -3px -2px; }
+.todo-subtasks { margin-left: 21px; margin-right: -3px; }
+.todo-card-main:hover, .todo-card-main:focus-within,
+.todo-subtask:hover, .todo-subtask:focus-within { background: color-mix(in srgb, var(--panel-soft) 72%, transparent); }
+.todo-card-detail textarea:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }

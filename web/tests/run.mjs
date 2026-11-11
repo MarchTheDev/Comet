@@ -46,6 +46,7 @@ const checks = [
   'tests/rcloneInteractions.test.mjs',
   'tests/rcloneGoogleInteractions.test.mjs',
   'tests/whiteboardInteractions.test.mjs',
+  'tests/boardCards.test.mjs',
   'tests/uploadInteractions.test.mjs',
   'tests/droppedUpload.test.mjs',
   'tests/playerInteractions.test.mjs',

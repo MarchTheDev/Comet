@@ -8,6 +8,7 @@ import { todoId, TODO_CONNECTION_COLOR, TODO_MAX_COORD, type TodoDocument, type 
 import { connectionGeometry, type Point } from "./utils/todoGeometry";
 import type { SaveState } from "./utils/saveQueue";
 import { isStandaloneTextInput, UndoHistory, undoRedoKey } from "./utils/undoHistory";
+import { trackConnectorDots } from "./utils/connectorDot";
 
 interface Props { board: TodoDocument; name: string; onRename?: () => void; saveState: SaveState; arrowheads?: boolean; onChange: (board: TodoDocument) => boolean; onRetry: () => void }
 type LinkDraft = { from: string; end: Point };
@@ -85,6 +86,8 @@ export function TodoBoard({ board, name, onRename, saveState, arrowheads = false
     };
     element.addEventListener("wheel", wheel, { passive: false }); return () => element.removeEventListener("wheel", wheel);
   }, []);
+  // The connector dot follows the pointer round whichever card it is over.
+  useEffect(() => { const element = stage.current; return element ? trackConnectorDots(element, ".todo-card") : undefined; }, []);
 
   const commit = (next: TodoDocument, coalesceKey = "", skipHistory = false) => {
     const previous = latest.current;
@@ -163,7 +166,8 @@ export function TodoBoard({ board, name, onRename, saveState, arrowheads = false
     event.preventDefault(); event.stopPropagation(); window.getSelection()?.removeAllRanges(); activeDrag.current?.();
     const pointer = event.pointerId, surface = stage.current;
     const point = (e: PointerEvent): Point => { const rect = surface.getBoundingClientRect(), scale = scaleOf(surface); return { x: clamp(((e.clientX - rect.left) / scale + surface.scrollLeft) / zoomRef.current), y: clamp(((e.clientY - rect.top) / scale + surface.scrollTop) / zoomRef.current) }; };
-    setLinkDraft({ from: task.id, end: { x: task.x + CARD_WIDTH + 12, y: task.y + 46 } });
+    // The dot can be anywhere round the card, so the line starts under the pointer.
+    setLinkDraft({ from: task.id, end: point(event.nativeEvent) });
     const move = (e: PointerEvent) => { if (e.pointerId === pointer) setLinkDraft({ from: task.id, end: point(e) }); };
     const cleanup = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", end); window.removeEventListener("pointercancel", cancel); activeDrag.current = null; setLinkDraft(null); };
     const end = (e: PointerEvent) => {

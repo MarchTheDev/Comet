@@ -139,7 +139,8 @@ export function newWhiteboardItem(
     color: "#9c9fe1",
     image,
     width: type === "link" ? 330 : 240,
-    height: type === "link" ? 230 : 150,
+    // A to-do card no longer grows as items are added, so it starts with room for a few.
+    height: type === "link" ? 230 : type === "todo" ? 200 : 150,
     shape,
     filled: false,
     title: "",

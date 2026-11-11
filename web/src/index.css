@@ -3668,7 +3668,8 @@ input[type="checkbox"]:not(.setting-toggle):disabled {
 
 
 /* ---------------------------------------------------------------------------
-   Board cards: connector dot, wrapping text, scrolling, and links
+   Comet 1.0.2: board cards. Connector dot that follows the pointer,
+   wrapping text, scrolling inside the card, and links
    --------------------------------------------------------------------------- */
 
 /* The connector dot follows the pointer round its card (utils/connectorDot.ts

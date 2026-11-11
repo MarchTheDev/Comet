@@ -68,13 +68,15 @@ const pkgbuild = readFileSync('../packaging/arch/PKGBUILD', 'utf8');
 const css = readFileSync('src/index.css', 'utf8');
 const appSource = readFileSync('src/App.tsx', 'utf8');
 
+// Checked against the VERSION file rather than a number written here, so the
+// next release only has to change the version, not this check as well.
 check(
-  'version manifests are synchronized to 1.0.1',
-  versionText === '1.0.1' &&
-    webPkg.version === '1.0.1' &&
-    tauriConf.version === '1.0.1' &&
-    /^version = "1\.0\.1"/m.test(cargoToml) &&
-    /^pkgver=1\.0\.1$/m.test(pkgbuild),
+  `version manifests are synchronized to ${versionText}`,
+  /^\d+\.\d+\.\d+$/.test(versionText) &&
+    webPkg.version === versionText &&
+    tauriConf.version === versionText &&
+    cargoToml.match(/^version = "([^"]*)"/m)?.[1] === versionText &&
+    pkgbuild.match(/^pkgver=(.*)$/m)?.[1] === versionText,
 );
 check(
   'variable font allows synthesized oblique italics and explicit italic prose rules',

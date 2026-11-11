@@ -19,6 +19,7 @@ mod rclone_sync;
 mod workspace_archive;
 mod artwork;
 mod link_preview;
+mod rss;
 mod upload;
 mod password_backup;
 
@@ -491,6 +492,10 @@ pub fn run() {
             tray_available,
             update::install_update,
             link_preview::fetch_link_preview,
+            rss::fetch_rss_feed,
+            rss::fetch_rss_article,
+            rss::fetch_rss_image,
+            rss::export_rss_opml,
             artwork::lookup_music_cover,
             artwork::read_cached_music_cover,
             artwork::music_file_fingerprint,

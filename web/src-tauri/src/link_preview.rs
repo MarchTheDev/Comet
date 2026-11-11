@@ -130,7 +130,7 @@ pub async fn fetch_link_preview(url: String) -> Result<LinkPreviewData, String> 
     Ok(extract_metadata(&html, &final_url, &host_label))
 }
 
-fn validate_public_url(raw: &str) -> Result<url::Url, String> {
+pub(crate) fn validate_public_url(raw: &str) -> Result<url::Url, String> {
     if raw.len() > 2048 {
         return Err("Link is too long.".into());
     }
@@ -141,7 +141,7 @@ fn validate_public_url(raw: &str) -> Result<url::Url, String> {
     Ok(parsed)
 }
 
-fn is_public_url_candidate(parsed: &url::Url) -> bool {
+pub(crate) fn is_public_url_candidate(parsed: &url::Url) -> bool {
     if !matches!(parsed.scheme(), "http" | "https") {
         return false;
     }
@@ -168,7 +168,7 @@ fn is_public_url_candidate(parsed: &url::Url) -> bool {
     true
 }
 
-fn ensure_public_dns(host: &str, port: u16) -> Result<(), String> {
+pub(crate) fn ensure_public_dns(host: &str, port: u16) -> Result<(), String> {
     let unbracketed = host.trim_start_matches('[').trim_end_matches(']');
     if let Ok(ip) = unbracketed.parse::<IpAddr>() {
         return if is_global_ip(ip) {
@@ -311,7 +311,7 @@ fn is_hex_color(value: &str) -> bool {
         && trimmed.bytes().skip(1).all(|b| b.is_ascii_hexdigit())
 }
 
-fn iter_tags<'a>(html: &'a str, tag_name: &str) -> Vec<&'a str> {
+pub(crate) fn iter_tags<'a>(html: &'a str, tag_name: &str) -> Vec<&'a str> {
     let mut out = Vec::new();
     let bytes = html.as_bytes();
     let needle_len = tag_name.len() + 1;
@@ -350,7 +350,7 @@ fn find_tag_end(slice: &str) -> Option<usize> {
     None
 }
 
-fn get_attr(tag: &str, attr_name: &str) -> Option<String> {
+pub(crate) fn get_attr(tag: &str, attr_name: &str) -> Option<String> {
     let inner = tag.trim_start_matches('<').trim_end_matches('>').trim_end_matches('/');
     let mut rest = inner;
     // Skip tag name
@@ -406,7 +406,7 @@ fn extract_title_tag(html: &str) -> String {
     clean_text(&decode_entities(&html[content_start..content_start + end_rel]), 180)
 }
 
-fn decode_entities(input: &str) -> String {
+pub(crate) fn decode_entities(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     let mut chars = input.chars().peekable();
     while let Some(ch) = chars.next() {

@@ -50,6 +50,7 @@ const checks = [
   'tests/droppedUpload.test.mjs',
   'tests/playerInteractions.test.mjs',
   'tests/v101Features.test.mjs',
+  'tests/rss.test.mjs',
 ];
 try {
   for (const file of checks) {

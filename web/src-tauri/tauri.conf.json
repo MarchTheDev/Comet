@@ -13,8 +13,8 @@
     "windows": [
       {
         "title": "Comet",
-        "width": 1280,
-        "height": 820,
+        "width": 1480,
+        "height": 860,
         "minWidth": 720,
         "minHeight": 480,
         "resizable": true,

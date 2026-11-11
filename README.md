@@ -32,8 +32,11 @@ straight into the folder.
 **Read:** Images, a keyboard-driven audio and video player, PDFs, and EPUB
 books in a built-in reader.
 
-**Calendar:** Acalendar for each workspace with events, notes and `.ics`
+**Calendar:** A calendar for each workspace with events, notes and `.ics`
 export, kept on this device.
+
+**RSS:** Custom RSS, Atom and JSON feeds with custom names and icons, full-post
+reading with images and tables, and OPML import/export.
 
 **Tools:** Calculator, password generator, date calculator, percent and tax
 calculator, and unit converter, all offline.
@@ -66,8 +69,8 @@ GStreamer packages needed for sound.
 ## Where your files live
 
 Your notes and files stay in the workspace folder you choose — Comet never
-moves them into a database. Tags, pins, favorites, calendar events, layout
-positions and shortcuts are kept in Comet's local profile
+moves them into a database. Tags, pins, favorites, calendar events, RSS feeds,
+layout positions and shortcuts are kept in Comet's local profile
 (`%LOCALAPPDATA%\com.comet` on Windows, `~/.local/share/com.comet` on
 Linux), not in the files. The password vault is encrypted in that profile, and
 a backup is only as safe as the password you give it.
@@ -83,14 +86,17 @@ web/
     TodoBoard.tsx          to-do boards
     Whiteboard.tsx         whiteboards
     CalendarView.tsx       the local calendar
+    RssView.tsx            custom RSS feeds and built-in article reader
     ToolsView.tsx          calculator, converters, date tools
     PasswordsView.tsx      the encrypted password vault
-    utils/                 markdown, search, storage and small helpers
+    utils/                 markdown, search, RSS parsing, storage and helpers
   src-tauri/
     src/lib.rs             filesystem commands, window and tray
     src/upload.rs          streamed file imports
+    src/rss.rs             RSS, full-article fetching and OPML export
+    src/link_preview.rs    link metadata and public URL checks
     src/password_backup.rs encrypted vault backups
-    src/update.rs          the Windows installer handoff
+    src/update.rs          the Windows and Linux update handoff
     tauri.conf.json        window, bundle and Linux packaging
   tests/                   front-end checks run by CI
 packaging/

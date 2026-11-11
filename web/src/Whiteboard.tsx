@@ -47,6 +47,7 @@ import {
 import { AppSelect } from "./AppSelect";
 import { ClearBoardDialog } from "./ClearBoardDialog";
 import { ColorMenu } from "./ColorMenu";
+import { LinkDialog } from "./LinkDialog";
 import {
   extractLinksFromText,
   LinkEmbedCard,
@@ -54,6 +55,8 @@ import {
   normalizeEmbedUrl,
   openExternalWebUrl,
 } from "./utils/linkEmbeds";
+import { trackConnectorDots } from "./utils/connectorDot";
+import { inlineLinkAt, insertInlineLink, removeInlineLink } from "./utils/inlineLinks";
 import { droppedBrowserLink } from "./utils/links";
 import { cleanNoteMarkdown } from "./utils/markdown";
 import {
@@ -79,6 +82,7 @@ import {
   type WhiteboardShape,
   type WhiteboardStroke,
 } from "./utils/whiteboard";
+import { WhiteboardTodoText } from "./WhiteboardTodoText";
 
 const clamp = (value: number) => Math.max(0, Math.min(TODO_MAX_COORD, Math.round(value)));
 const clampRange = (value: number, min: number, max: number) =>
@@ -143,6 +147,20 @@ export function resizeWhiteboardItem(
   }
 
   return { x, y, width, height };
+}
+
+/**
+ * How far one turn of the wheel should move the canvas sideways, in pixels.
+ * A mouse reports the turn on the vertical axis; a trackpad may already report
+ * it sideways. Wheels that count in lines or pages are converted.
+ */
+export function sidewaysWheelDistance(
+  event: Pick<WheelEvent, "deltaX" | "deltaY" | "deltaMode">,
+  pageWidth: number,
+): number {
+  const raw = Math.abs(event.deltaY) >= Math.abs(event.deltaX) ? event.deltaY : event.deltaX;
+  if (!Number.isFinite(raw)) return 0;
+  return raw * (event.deltaMode === 1 ? 40 : event.deltaMode === 2 ? Math.max(1, pageWidth * 0.9) : 1);
 }
 
 export interface WhiteboardViewport {
@@ -248,6 +266,9 @@ function WhiteboardRichText({
   const initialTextRef = useRef(cleanNoteMarkdown(text));
   const lastSerializedRef = useRef(initialTextRef.current);
   const [, setFormatTick] = useState(0);
+  const [linkDraft, setLinkDraft] = useState<{ url: string; editing: boolean; showText: boolean } | null>(
+    null,
+  );
 
   useEffect(() => {
     const mount = hostRef.current;
@@ -330,6 +351,22 @@ function WhiteboardRichText({
     fn(instance);
   };
 
+  const openLinkDialog = () => {
+    const instance = editorRef.current;
+    if (!instance || instance.isDestroyed) return;
+    const editing = instance.isActive("link");
+    setLinkDraft({
+      url: editing ? String(instance.getAttributes("link").href ?? "") : "",
+      editing,
+      // With nothing selected there are no words to link yet, so ask for them.
+      showText: !editing && instance.state.selection.empty,
+    });
+  };
+  const closeLinkDialog = () => {
+    setLinkDraft(null);
+    runCmd((i) => i.commands.focus(undefined, { scrollIntoView: false }));
+  };
+
   return (
     <div
       className="whiteboard-rich-wrap"
@@ -396,6 +433,16 @@ function WhiteboardRichText({
           onClick={() => runCmd((i) => i.chain().focus().toggleStrike().run())}
         >
           <Strikethrough size={13} />
+        </button>
+        <button
+          type="button"
+          className={ed?.isActive("link") ? "active" : ""}
+          title={ed?.isActive("link") ? "Edit link" : "Add link"}
+          aria-label={ed?.isActive("link") ? "Edit link" : "Add link"}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={openLinkDialog}
+        >
+          <Link2 size={13} />
         </button>
         <span className="whiteboard-toolbar-sep" />
         <button
@@ -492,6 +539,42 @@ function WhiteboardRichText({
           }
         }}
       />
+      {linkDraft && (
+        <LinkDialog
+          initialUrl={linkDraft.url}
+          showText={linkDraft.showText}
+          editing={linkDraft.editing}
+          onCancel={closeLinkDialog}
+          onRemove={
+            linkDraft.editing
+              ? () => {
+                  setLinkDraft(null);
+                  runCmd((i) => i.chain().focus().extendMarkRange("link").unsetLink().run());
+                }
+              : undefined
+          }
+          onSubmit={({ text: label, href }) => {
+            const insertNew = linkDraft.showText;
+            setLinkDraft(null);
+            runCmd((i) => {
+              if (insertNew) {
+                i.chain()
+                  .focus()
+                  .insertContent({
+                    type: "text",
+                    text: label || href,
+                    marks: [{ type: "link", attrs: { href } }],
+                  })
+                  // Whatever is typed next is ordinary text, not more of the link.
+                  .unsetMark("link")
+                  .run();
+              } else {
+                i.chain().focus().extendMarkRange("link").setLink({ href }).run();
+              }
+            });
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -901,7 +984,22 @@ export function Whiteboard({
   const [deleting, setDeleting] = useState("");
   const [error, setError] = useState("");
   const [pendingCardFocusId, setPendingCardFocusId] = useState<string | null>(null);
-  const [pendingTodoFocus, setPendingTodoFocus] = useState<{ itemId: string; entryId: string | null } | null>(null);
+  const [pendingTodoFocus, setPendingTodoFocus] = useState<{
+    itemId: string;
+    entryId: string | null;
+    caret?: number;
+  } | null>(null);
+  const [todoLink, setTodoLink] = useState<{
+    itemId: string;
+    /** "" is the card's first to-do; null puts the link in a new to-do. */
+    entryId: string | null;
+    start: number;
+    end: number;
+    text: string;
+    url: string;
+    editing: boolean;
+    removable: boolean;
+  } | null>(null);
   const [clearOpen, setClearOpen] = useState(false);
   const [shapeOpen, setShapeOpen] = useState(false);
   const [shapeTool, setShapeTool] = useState<WhiteboardShape | null>(null);
@@ -927,10 +1025,13 @@ export function Whiteboard({
     const card = stage.current?.querySelector<HTMLElement>(
       `[data-whiteboard-id="${escapeAttr(pendingTodoFocus.itemId)}"]`,
     );
-    const input = pendingTodoFocus.entryId
-      ? card?.querySelector<HTMLInputElement>(`input[data-todo-entry="${escapeAttr(pendingTodoFocus.entryId)}"]`)
-      : card?.querySelector<HTMLInputElement>('input[aria-label="To-do text"]');
+    const input = card?.querySelector<HTMLTextAreaElement>(
+      `.whiteboard-todo-input[data-todo-entry="${escapeAttr(pendingTodoFocus.entryId ?? "")}"]`,
+    );
     input?.focus();
+    if (input && pendingTodoFocus.caret !== undefined) {
+      input.setSelectionRange(pendingTodoFocus.caret, pendingTodoFocus.caret);
+    }
     setPendingTodoFocus(null);
   }, [board.items, pendingTodoFocus]);
   useEffect(() => {
@@ -952,13 +1053,87 @@ export function Whiteboard({
   useEffect(() => {
     const element = stage.current;
     if (!element) return;
+    // Alt + wheel slides the canvas sideways. A wheel moves in coarse steps, so
+    // each one is eased over a few frames the way ordinary scrolling is.
+    let glideTo: number | null = null;
+    let glideFrame = 0;
+    // On Windows, letting go of Alt on its own hands the keyboard to the window
+    // menu. After Alt was only held to scroll, that release should do nothing.
+    let altPanned = false;
+    const altReleased = (event: KeyboardEvent) => {
+      if (event.key !== "Alt") return;
+      if (altPanned) event.preventDefault();
+      altPanned = false;
+    };
+    const stopGlide = () => {
+      if (glideFrame) window.cancelAnimationFrame(glideFrame);
+      glideFrame = 0;
+      glideTo = null;
+    };
+    const glide = () => {
+      glideFrame = 0;
+      if (glideTo === null) return;
+      const before = element.scrollLeft;
+      const remaining = glideTo - before;
+      if (Math.abs(remaining) <= 1) {
+        element.scrollLeft = glideTo;
+        glideTo = null;
+        return;
+      }
+      element.scrollLeft = before + Math.sign(remaining) * Math.max(1, Math.abs(remaining) * 0.3);
+      // Nothing moved: the canvas is already against its edge.
+      if (element.scrollLeft === before) {
+        glideTo = null;
+        return;
+      }
+      glideFrame = window.requestAnimationFrame(glide);
+    };
     const wheel = (event: WheelEvent) => {
-      if (!event.ctrlKey && !event.metaKey) return;
+      if (event.ctrlKey || event.metaKey) {
+        event.preventDefault();
+        setZoom(Math.max(0.4, Math.min(2, zoomRef.current * (event.deltaY < 0 ? 1.12 : 1 / 1.12))));
+        return;
+      }
+      if (!event.altKey) return;
+      const distance = sidewaysWheelDistance(event, element.clientWidth);
+      if (!distance) return;
+      // Also keeps a text box or list under the pointer from scrolling instead.
       event.preventDefault();
-      setZoom(Math.max(0.4, Math.min(2, zoomRef.current * (event.deltaY < 0 ? 1.12 : 1 / 1.12))));
+      altPanned = true;
+      const furthest = Math.max(0, element.scrollWidth - element.clientWidth);
+      const target = Math.max(0, Math.min(furthest, (glideTo ?? element.scrollLeft) + distance));
+      // A trackpad already sends a stream of small steps; easing those only adds lag.
+      const instant =
+        Math.abs(distance) < 40 ||
+        typeof window.requestAnimationFrame !== "function" ||
+        !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+      if (instant) {
+        stopGlide();
+        element.scrollLeft = target;
+        return;
+      }
+      glideTo = target;
+      if (!glideFrame) glideFrame = window.requestAnimationFrame(glide);
     };
     element.addEventListener("wheel", wheel, { passive: false });
-    return () => element.removeEventListener("wheel", wheel);
+    // Grabbing the canvas takes over from a glide that is still settling.
+    element.addEventListener("pointerdown", stopGlide);
+    window.addEventListener("keyup", altReleased);
+    return () => {
+      stopGlide();
+      element.removeEventListener("wheel", wheel);
+      element.removeEventListener("pointerdown", stopGlide);
+      window.removeEventListener("keyup", altReleased);
+    };
+  }, []);
+  useEffect(() => {
+    const element = stage.current;
+    if (!element) return;
+    return trackConnectorDots(element, ".whiteboard-item", {
+      // A shape's controls float just above it, where a dot on the top edge would cover them.
+      sides: (card) =>
+        card.classList.contains("whiteboard-shape") ? ["right", "bottom", "left"] : undefined,
+    });
   }, []);
 
   const commit = (next: WhiteboardDocument, coalesceKey = "", skipHistory = false) => {
@@ -1116,10 +1291,9 @@ export function Whiteboard({
     const nextTodos = [...currentTodos];
     const insertAt = clampRange(afterIndex, 0, nextTodos.length);
     nextTodos.splice(insertAt, 0, entry);
-    const totalRows = nextTodos.length + 1;
-    const minNeededHeight = Math.min(420, 92 + totalRows * 36);
-    const nextHeight = Math.max(item.height, minNeededHeight);
-    if (update(item.id, { todos: nextTodos, height: nextHeight })) {
+    // The card keeps the size it was given; a list that outgrows it scrolls,
+    // the same way a Links card does.
+    if (update(item.id, { todos: nextTodos })) {
       setPendingTodoFocus({ itemId: item.id, entryId: entry.id });
     }
   };
@@ -1146,6 +1320,96 @@ export function Whiteboard({
     if (update(item.id, { todos: nextTodos }) && focusPreviousIndex !== undefined) {
       const prevEntry = focusPreviousIndex > 0 ? currentTodos[focusPreviousIndex - 1] : null;
       setPendingTodoFocus({ itemId: item.id, entryId: prevEntry ? prevEntry.id : null });
+    }
+  };
+
+  const todoText = (item: WhiteboardItem, entryId: string) =>
+    entryId ? item.todos?.find((entry) => entry.id === entryId)?.text : item.text;
+
+  // The button keeps focus where it was, so the to-do being edited (and what is
+  // selected in it) is still known here.
+  const openTodoLink = (itemId: string) => {
+    const item = latest.current.items.find((other) => other.id === itemId);
+    if (!item) return;
+    const focused = document.activeElement;
+    if (
+      focused instanceof HTMLTextAreaElement &&
+      focused.classList.contains("whiteboard-todo-input") &&
+      focused.closest<HTMLElement>("[data-whiteboard-id]")?.dataset.whiteboardId === itemId
+    ) {
+      const entryId = focused.dataset.todoEntry ?? "";
+      const value = todoText(item, entryId);
+      if (value !== undefined) {
+        const start = Math.min(focused.selectionStart, value.length);
+        const end = Math.min(focused.selectionEnd, value.length);
+        const existing = inlineLinkAt(value, start, end);
+        setTodoLink(
+          existing
+            ? {
+                itemId,
+                entryId,
+                start: existing.start,
+                end: existing.end,
+                text: existing.markdown ? existing.text : "",
+                url: existing.href,
+                editing: true,
+                removable: existing.markdown,
+              }
+            : { itemId, entryId, start, end, text: value.slice(start, end), url: "", editing: false, removable: false },
+        );
+        return;
+      }
+    }
+    setTodoLink({ itemId, entryId: null, start: 0, end: 0, text: "", url: "", editing: false, removable: false });
+  };
+  const writeTodoText = (item: WhiteboardItem, entryId: string, text: string) =>
+    entryId
+      ? update(item.id, {
+          todos: (item.todos ?? []).map((entry) => (entry.id === entryId ? { ...entry, text } : entry)),
+        })
+      : update(item.id, { text });
+  const applyTodoLink = (link: { text: string; href: string } | null): string | void => {
+    const request = todoLink;
+    const item = request && latest.current.items.find((other) => other.id === request.itemId);
+    if (!request || !item) return setTodoLink(null);
+    const tooLong = "That link doesn't fit: a to-do holds up to 2,000 characters.";
+
+    if (request.entryId === null) {
+      if (!link) return setTodoLink(null);
+      const fresh = insertInlineLink("", 0, 0, link.text, link.href);
+      if (fresh.text.length > 2000) return tooLong;
+      // An untouched card has one empty to-do waiting; use it before adding another.
+      if (!item.text && !(item.todos ?? []).length) {
+        if (!update(item.id, { text: fresh.text })) return tooLong;
+        setPendingTodoFocus({ itemId: item.id, entryId: null, caret: fresh.caret });
+      } else {
+        const entry = newWhiteboardTodo(fresh.text);
+        if (!update(item.id, { todos: [...(item.todos ?? []), entry] })) return "This card can't hold another to-do.";
+        setPendingTodoFocus({ itemId: item.id, entryId: entry.id, caret: fresh.caret });
+      }
+      return setTodoLink(null);
+    }
+
+    const value = todoText(item, request.entryId);
+    if (value === undefined) return setTodoLink(null);
+    let next: { text: string; caret: number };
+    if (link) {
+      next = insertInlineLink(value, request.start, request.end, link.text, link.href);
+    } else {
+      const existing = inlineLinkAt(value, request.start, request.end);
+      if (!existing) return setTodoLink(null);
+      next = removeInlineLink(value, existing);
+    }
+    if (next.text.length > 2000 || !writeTodoText(item, request.entryId, next.text)) return tooLong;
+    setPendingTodoFocus({ itemId: item.id, entryId: request.entryId || null, caret: next.caret });
+    setTodoLink(null);
+  };
+  const cancelTodoLink = () => {
+    const request = todoLink;
+    setTodoLink(null);
+    // Back to the to-do that was being edited, with its selection as it was.
+    if (request && request.entryId !== null) {
+      setPendingTodoFocus({ itemId: request.itemId, entryId: request.entryId || null, caret: request.end });
     }
   };
 
@@ -1261,7 +1525,8 @@ export function Whiteboard({
     event.stopPropagation();
     cleanupDrag.current?.();
     const id = event.pointerId;
-    setDrawing({ from: item.id, end: { x: item.x + item.width, y: item.y + item.height / 2 } });
+    // The dot can be anywhere round the card now, so the line starts under the pointer.
+    setDrawing({ from: item.id, end: canvasPoint(event.clientX, event.clientY) });
     const moving = (e: PointerEvent) => {
       if (e.pointerId === id) setDrawing({ from: item.id, end: canvasPoint(e.clientX, e.clientY) });
     };
@@ -1527,6 +1792,17 @@ export function Whiteboard({
             setPen(false);
             return true;
           }}
+        />
+      )}
+      {todoLink && (
+        <LinkDialog
+          initialText={todoLink.text}
+          initialUrl={todoLink.url}
+          showText
+          editing={todoLink.editing}
+          onCancel={cancelTodoLink}
+          onRemove={todoLink.removable ? () => void applyTodoLink(null) : undefined}
+          onSubmit={applyTodoLink}
         />
       )}
       {error && (
@@ -1904,14 +2180,14 @@ export function Whiteboard({
                             aria-label="Complete whiteboard to-do"
                             onChange={(event) => update(item.id, { done: event.target.checked })}
                           />
-                          <input
-                            type="text"
-                            className={`whiteboard-todo-input${item.done ? " is-done" : ""}`}
-                            aria-label="To-do text"
+                          <WhiteboardTodoText
+                            value={item.text}
+                            done={item.done}
+                            entryId=""
+                            ariaLabel="To-do text"
                             maxLength={2000}
                             placeholder="Something to do…"
-                            value={item.text}
-                            onChange={(event) => update(item.id, { text: event.target.value }, `todo:${item.id}:0`)}
+                            onChange={(text) => update(item.id, { text }, `todo:${item.id}:0`)}
                             onKeyDown={(event) => {
                               if (event.key === "Enter") {
                                 event.preventDefault();
@@ -1940,21 +2216,15 @@ export function Whiteboard({
                                 updateTodoEntry(item, entry.id, { done: event.target.checked })
                               }
                             />
-                            <input
-                              type="text"
-                              data-todo-entry={entry.id}
-                              className={`whiteboard-todo-input${entry.done ? " is-done" : ""}`}
-                              aria-label={`To-do item ${idx + 2} text`}
+                            <WhiteboardTodoText
+                              value={entry.text}
+                              done={entry.done}
+                              entryId={entry.id}
+                              ariaLabel={`To-do item ${idx + 2} text`}
                               maxLength={2000}
                               placeholder="Something to do…"
-                              value={entry.text}
-                              onChange={(event) =>
-                                updateTodoEntry(
-                                  item,
-                                  entry.id,
-                                  { text: event.target.value },
-                                  `todo:${item.id}:${entry.id}`,
-                                )
+                              onChange={(text) =>
+                                updateTodoEntry(item, entry.id, { text }, `todo:${item.id}:${entry.id}`)
                               }
                               onKeyDown={(event) => {
                                 if (event.key === "Enter") {
@@ -1977,14 +2247,27 @@ export function Whiteboard({
                           </div>
                         ))}
                       </div>
-                      <button
-                        type="button"
-                        className="whiteboard-todo-add"
-                        aria-label="Add to-do item"
-                        onClick={() => insertTodoEntry(item, extraTodos.length)}
-                      >
-                        <Plus size={14} /> Add item
-                      </button>
+                      <div className="whiteboard-todo-actions">
+                        <button
+                          type="button"
+                          className="whiteboard-todo-add"
+                          aria-label="Add to-do item"
+                          onClick={() => insertTodoEntry(item, extraTodos.length)}
+                        >
+                          <Plus size={14} /> Add item
+                        </button>
+                        <button
+                          type="button"
+                          className="whiteboard-todo-add whiteboard-todo-link"
+                          aria-label="Add link to to-do"
+                          title="Link the selected words, or add a link"
+                          // Keeps the to-do being edited focused, so its selection is still there on click.
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={() => openTodoLink(item.id)}
+                        >
+                          <Link2 size={13} /> Link
+                        </button>
+                      </div>
                     </div>
                   ) : item.type === "link" ? (
                     <WhiteboardLinkBody
